@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+packages/*/dist/
+apps/*/dist/
+apps/*/release/
+
+# runtime data
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.secret.key
+
+# logs / env / coverage
+*.log
+.env
+.env.*
+coverage/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

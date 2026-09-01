@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (core + server + web + electron)
+        run: make build
+
+      - name: Package Linux (AppImage + .deb)
+        working-directory: apps/electron
+        run: pnpm dist:linux
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+          XDG_CACHE_HOME: ${{ runner.temp }}/electron-cache
+
+      - name: Package Windows (zip)
+        working-directory: apps/electron
+        run: pnpm dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/electron-builder-cache
+          XDG_CACHE_HOME: ${{ runner.temp }}/electron-cache
+
+      - name: Upload artifacts to release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            apps/electron/release/*.AppImage
+            apps/electron/release/*.deb
+            apps/electron/release/*-win.zip

@@ -1,0 +1,9 @@
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.app-root { height: 100vh; overflow: hidden; }
+.mail-list-row { cursor: pointer; }
+.mail-list-row:hover { background: #f0f5ff; }
+.mail-list-row.selected { background: #e6f4ff; }
+.email-body { white-space: pre-wrap; word-break: break-word; }
+.tag-pill { margin: 2px; }

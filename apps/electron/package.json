@@ -1,0 +1,92 @@
+{
+  "name": "mailsense-electron",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Почтовый помощник с ИИ-аналитикой (MailSense)",
+  "author": "MailSense",
+  "homepage": "https://example.com/mailsense",
+  "type": "module",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsup",
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:linux": "electron-builder --linux",
+    "dist:deb": "electron-builder --linux deb",
+    "dist:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.65",
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.5",
+    "drizzle-orm": "^0.36.4",
+    "express": "^4.21.2",
+    "imapflow": "^1.0.172",
+    "jszip": "^3.10.1",
+    "mailparser": "^3.7.2",
+    "mammoth": "^1.8.0",
+    "openai": "^4.79.1",
+    "p-queue": "^8.0.1",
+    "pdfjs-dist": "^4.10.38",
+    "pino": "^9.6.0",
+    "xlsx": "^0.18.5",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@mailsense/core": "workspace:*",
+    "@mailsense/server": "workspace:*",
+    "electron": "^35.0.0",
+    "electron-builder": "^25.1.8",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3"
+  },
+  "build": {
+    "appId": "ru.mailsense.app",
+    "productName": "MailSense",
+    "directories": {
+      "output": "release"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "**/*.node"
+    ],
+    "npmRebuild": false,
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../packages/web/dist",
+        "to": "web"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office",
+      "maintainer": "MailSense <mailsense@example.com>"
+    },
+    "deb": {
+      "afterInstall": "scripts/after-install.sh"
+    },
+    "win": {
+      "target": [
+        "zip"
+      ],
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "vendor/canvas-win32-x64-msvc",
+          "to": "node_modules/@napi-rs/canvas-win32-x64-msvc"
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

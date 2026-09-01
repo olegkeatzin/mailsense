@@ -1,0 +1,25 @@
+{
+  "name": "mailsense",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Почтовый помощник с ИИ-аналитикой (MailSense)",
+  "packageManager": "pnpm@11.23.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "better-sqlite3",
+      "esbuild",
+      "@napi-rs/canvas"
+    ]
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/**' build",
+    "dev:server": "pnpm --filter @mailsense/server dev",
+    "dev:web": "pnpm --filter @mailsense/web dev",
+    "start": "pnpm --filter @mailsense/server start",
+    "test": "pnpm -r test"
+  }
+}
