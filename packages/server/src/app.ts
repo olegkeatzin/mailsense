@@ -205,6 +205,11 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     );
   });
 
+  app.post("/api/emails/bulk/analyze", (req, res) => {
+    const n = analyzeEmails((req.body?.ids as string[]) ?? []);
+    res.json({ queued: n });
+  });
+
   app.get("/api/emails/:id", (req, res) => {
     const view = getEmailView(req.params.id);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
@@ -239,11 +244,6 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
   app.post("/api/emails/analyze-stop", (_req, res) => {
     const cleared = stopAnalysis();
     res.json({ cleared });
-  });
-
-  app.post("/api/emails/bulk/analyze", (req, res) => {
-    const n = analyzeEmails((req.body?.ids as string[]) ?? []);
-    res.json({ queued: n });
   });
 
   app.post("/api/emails/bulk/folder", (req, res) => {
