@@ -48,16 +48,17 @@ export async function analyzeEmailRaw(
     content.push({ type: "image_url", image_url: { url: img } });
   }
 
-  const resp = await client.chat.completions.create(
-    {
-      model: cfg.model,
-      messages: [{ role: "user", content }],
-      response_format: { type: "json_object" },
-      temperature: 0.2,
-      max_tokens: 4000
-    },
-    { signal }
-  );
+  const body = {
+    model: cfg.model,
+    messages: [{ role: "user", content }],
+    response_format: { type: "json_object" as const },
+    temperature: 0.2,
+    max_tokens: 8192,
+    // llama.cpp: отключить thinking у reasoning-моделей (Qwen3 и т.п.),
+    // иначе JSON-ответ обрезается «думаньем».
+    chat_template_kwargs: { enable_thinking: false }
+  };
+  const resp = await client.chat.completions.create(body as any, { signal });
 
   return resp.choices[0]?.message?.content ?? "";
 }

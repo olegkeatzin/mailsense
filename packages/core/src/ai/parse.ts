@@ -6,6 +6,7 @@ export const analysisSchema = z.object({
   priority: z.number().int().min(1).max(5).default(3),
   urgent: z.boolean().default(false),
   event_date: z.string().nullable().default(null),
+  external_number: z.string().nullable().default(null),
   category: z.enum(["work", "personal", "spam"]).default("personal"),
   attachments: z.array(z.object({ name: z.string(), description: z.string() })).default([])
 });

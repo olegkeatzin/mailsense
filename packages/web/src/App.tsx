@@ -23,6 +23,51 @@ import SettingsModal from "./components/SettingsModal";
 
 const { Header, Sider } = Layout;
 
+function AnalysisProgressBadge() {
+  const [p, setP] = useState<{
+    stage: string;
+    attachmentName: string;
+    page: number;
+    totalPages: number;
+    queueLength: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await api.progress();
+        if (alive) setP(r);
+      } catch {
+        /* ignore */
+      }
+    };
+    void tick();
+    const t = setInterval(tick, 1000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, []);
+
+  if (!p || (p.queueLength === 0 && p.stage === "idle")) return null;
+
+  let label = "";
+  if (p.stage === "attachment") {
+    label = "OCR: " + p.attachmentName + (p.totalPages > 1 ? ", стр. " + p.page + "/" + p.totalPages : "");
+  } else if (p.stage === "analysis") {
+    label = "Анализ письма…";
+  } else {
+    label = "Очередь: " + p.queueLength;
+  }
+
+  return (
+    <span style={{ fontSize: 12, color: "#1677ff", whiteSpace: "nowrap", marginRight: 4 }}>
+      {label}
+    </span>
+  );
+}
+
 export default function App() {
   const init = useStore((s) => s.init);
   const folder = useStore((s) => s.folder);
@@ -109,6 +154,7 @@ export default function App() {
           <Typography.Text strong style={{ marginRight: 8, whiteSpace: "nowrap" }}>
             {folder === "INBOX" ? "Входящие" : folder === "SPAM" ? "Спам" : "Обработанные"}
           </Typography.Text>
+          <AnalysisProgressBadge />
           <Tooltip title="Сканировать ящик за период дат">
             <Button icon={<CalendarOutlined />} onClick={() => setFetchOpen(true)}>
               Скан

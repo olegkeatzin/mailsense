@@ -8,17 +8,58 @@ import {
   setAttachmentDescription,
   setEmailFolder,
   setEmailStatus,
+  setExternalNumber,
+  setNumberSource,
   upsertAnalysis
 } from "../repos.js";
 import { prepareAttachment, type PreparedAttachment } from "../attachments/index.js";
 import { analyzeEmailRaw } from "../ai/analyze.js";
+import { ocrImage } from "../ai/ocr.js";
 import { parseAnalysis } from "../ai/parse.js";
-import { analysisQueue } from "../analysis/queue.js";
-import { getAiConfig } from "./settingsService.js";
+import { analysisQueue, ocrQueue } from "../analysis/queue.js";
+import { getAiConfig, getOcrConfig } from "./settingsService.js";
 import type { AnalysisResult } from "../types.js";
 
 const inFlight = new Set<string>();
 let currentAbort: AbortController | null = null;
+
+export interface AnalysisProgress {
+  emailId: string | null;
+  stage: "idle" | "attachment" | "analysis";
+  attachmentName: string;
+  page: number;
+  totalPages: number;
+  queueLength: number;
+}
+
+let progress: AnalysisProgress = {
+  emailId: null,
+  stage: "idle",
+  attachmentName: "",
+  page: 0,
+  totalPages: 0,
+  queueLength: 0
+};
+
+function setProgress(
+  emailId: string,
+  stage: AnalysisProgress["stage"],
+  attachmentName: string,
+  page: number,
+  totalPages: number
+): void {
+  progress = { emailId, stage, attachmentName, page, totalPages, queueLength: queueLength() };
+}
+
+export function getProgress(): AnalysisProgress {
+  return { ...progress, queueLength: queueLength() };
+}
+
+/** Эвристика: похожа ли страница/текст на «шапку» письма с номером. */
+function looksLikeLetterhead(text: string): boolean {
+  if (!text) return false;
+  return /(?:исх\.?|вх\.?|исходящий|входящий|№|номер|внешний номер)/i.test(text) && /\d/.test(text);
+}
 
 export function enqueue(emailId: string): void {
   if (inFlight.has(emailId)) return;
@@ -45,6 +86,7 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
     const ctx = getContext();
 
     const prepared: PreparedAttachment[] = [];
+    const preparedAttIds: string[] = [];
     for (const att of listAttachments(emailId)) {
       if (!att.storagePath || !fs.existsSync(att.storagePath)) continue;
       try {
@@ -52,15 +94,67 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
         prepared.push(
           await prepareAttachment(ctx.config.dataDir, emailId, att.filename, att.mimeType, buf)
         );
+        preparedAttIds.push(att.id);
       } catch (err) {
         logger.warn({ att: att.filename, err: (err as Error).message }, "Ошибка подготовки вложения");
       }
     }
 
-    const attachmentTexts = prepared
-      .filter((p) => p.extractedText)
-      .map((p) => p.extractedText as string);
-    const images = prepared.flatMap((p) => p.images);
+    // Этап 1: OCR визуальных вложений (по страницам, параллельно)
+    const ocrConfig = getOcrConfig();
+    const ocrTexts = new Array<string | null>(prepared.length).fill(null);
+    const pageTextsByAtt: string[][] = new Array(prepared.length).fill(null).map(() => []);
+    for (let i = 0; i < prepared.length; i++) {
+      const p = prepared[i];
+      if (p.images.length === 0) continue;
+      setProgress(emailId, "attachment", p.filename, 0, p.images.length);
+      try {
+        const pageTexts = (await Promise.all(
+          p.images.map((img, idx) =>
+            ocrQueue.add(async () => {
+              setProgress(emailId, "attachment", p.filename, idx + 1, p.images.length);
+              return await ocrImage(ocrConfig, img);
+            })
+          )
+        )) as string[];
+        pageTextsByAtt[i] = pageTexts;
+        ocrTexts[i] = pageTexts.join("\n\n");
+      } catch (err) {
+        logger.warn({ att: p.filename, err: (err as Error).message }, "Ошибка OCR вложения");
+      }
+    }
+
+    // Определяем источник номера (файл + страница) — для превью в UI
+    let numberSourceAttId: string | null = null;
+    let numberSourcePage = 1;
+    outer: for (let i = 0; i < prepared.length; i++) {
+      const pages = pageTextsByAtt[i] ?? [];
+      if (pages.length > 0) {
+        for (let j = 0; j < pages.length; j++) {
+          if (looksLikeLetterhead(pages[j])) {
+            numberSourceAttId = preparedAttIds[i];
+            numberSourcePage = j + 1;
+            break outer;
+          }
+        }
+      } else if (looksLikeLetterhead(prepared[i].extractedText ?? "")) {
+        numberSourceAttId = preparedAttIds[i];
+        numberSourcePage = 1;
+        break;
+      }
+    }
+    if (numberSourceAttId) {
+      setNumberSource(emailId, numberSourceAttId, numberSourcePage);
+    }
+
+    // Этап 2: текстовый анализ (суммаризация) — текст вложений, без картинок
+    setProgress(emailId, "analysis", "", 0, 0);
+    const attachmentTexts = prepared.map((p, i) => {
+      const parts: string[] = [];
+      if (p.extractedText) parts.push(p.extractedText);
+      if (ocrTexts[i]) parts.push(ocrTexts[i] as string);
+      return parts.join("\n\n");
+    });
     const notes = prepared
       .filter((p) => !p.handled)
       .map((p) => p.filename + ": " + (p.note ?? "не обработано"));
@@ -80,8 +174,8 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
         bodyText: email.bodyText,
         attachmentTexts,
         attachmentNotes: notes,
-        images,
-        attachmentNames: listAttachments(emailId).map((a) => a.filename)
+        images: [],
+        attachmentNames: prepared.map((p) => p.filename)
       },
       ac.signal
     );
@@ -114,6 +208,10 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
     for (const d of parsed.attachments) {
       const att = listAttachments(emailId).find((x) => x.filename === d.name);
       if (att) setAttachmentDescription(att.id, d.description);
+    }
+
+    if (parsed.external_number && !email.externalNumber) {
+      setExternalNumber(emailId, parsed.external_number);
     }
 
     if (parsed.category === "spam") {

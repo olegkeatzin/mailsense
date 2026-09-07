@@ -79,6 +79,35 @@ export async function parseRawEmail(source: Buffer): Promise<ParsedEmail> {
   };
 }
 
+function cleanExternalNumber(s: string): string {
+  return s.replace(/[–—]/g, "-").trim();
+}
+
+/**
+ * Извлекает «внешний номер» письма (исходящий/входящий/документный номер)
+ * из темы или текста. Работает по простым шаблонам; может ошибаться —
+ * поэтому номер доступен для ручного исправления в UI.
+ */
+export function extractExternalNumber(text: string): string | null {
+  if (!text) return null;
+  const num = "[0-9][0-9/\-–—]*";
+
+  // «Исх. № 123», «Вх. 456/78», «номер: 789», «ref 12-34»
+  const labeled = text.match(
+    new RegExp(
+      "(?:исх\\.?|вх\\.?|исходящий|входящий|номер|number|ref|reference)\\s*(?:№|N|#)?\\s*[:.\\s-]*\\s*(" + num + ")",
+      "i"
+    )
+  );
+  if (labeled?.[1]) return cleanExternalNumber(labeled[1]);
+
+  // просто «№ 123» или «#456»
+  const bare = text.match(new RegExp("(?:№|N|#)\\s*[:.\\s-]*\\s*(" + num + ")", "i"));
+  if (bare?.[1]) return cleanExternalNumber(bare[1]);
+
+  return null;
+}
+
 export function classifyKind(mimeType: string, filename: string): AttachmentKind {
   const mime = mimeType.toLowerCase();
   const name = filename.toLowerCase();

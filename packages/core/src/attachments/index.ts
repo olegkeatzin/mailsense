@@ -1,7 +1,7 @@
 import type { AttachmentKind } from "../types.js";
 import { classifyKind } from "../mail/parser.js";
 import { saveAttachmentFile } from "./store.js";
-import { pdfToImages, pdfToText } from "./pdf.js";
+import { pdfPageToImage, pdfToImages, pdfToText } from "./pdf.js";
 import { docxToParts } from "./docx.js";
 import { xlsxToText } from "./xlsx.js";
 import { imageToDataUrl, SUPPORTED_IMAGE_MIME } from "./images.js";
@@ -100,6 +100,20 @@ export async function prepareAttachment(
     base.note = "ошибка обработки: " + (err as Error).message;
   }
   return base;
+}
+
+/**
+ * Рендерит превью вложения: для PDF — первую страницу в PNG, для изображения — сам файл.
+ * Для остальных типов возвращает null (превью недоступно).
+ */
+export async function renderPreviewImage(kind: AttachmentKind, content: Buffer, page = 1): Promise<Buffer | null> {
+  if (kind === "pdf") {
+    return await pdfPageToImage(content, page);
+  }
+  if (kind === "image") {
+    return content;
+  }
+  return null;
 }
 
 export { classifyKind, saveAttachmentFile };

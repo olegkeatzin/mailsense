@@ -9,6 +9,9 @@ packages/*/dist/
 apps/*/dist/
 apps/*/release/
 
+# confidential test data (do NOT commit)
+Тестовые письма/
+
 # runtime data
 data/
 *.sqlite

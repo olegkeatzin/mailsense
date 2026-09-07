@@ -295,6 +295,18 @@ function AiTab() {
       <Form.Item name="multimodal" label="Мультимодальная модель (vision)" valuePropName="checked">
         <Switch />
       </Form.Item>
+      <Form.Item name="ocrModel" label="OCR-модель (чтение PDF/изображений)">
+        <AutoComplete
+          options={models.map((m) => ({ value: m }))}
+          placeholder="например glm-ocr (пусто = основная модель)"
+          filterOption={(input, option) =>
+            String(option?.value ?? "").toLowerCase().includes(input.toLowerCase())
+          }
+        />
+      </Form.Item>
+      <Form.Item name="ocrBaseUrl" label="OCR base URL (пусто = основной)">
+        <Input placeholder="пусто = основной URL" />
+      </Form.Item>
       <Space>
         <Button type="primary" htmlType="submit">
           Сохранить

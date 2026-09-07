@@ -105,6 +105,21 @@ CREATE TABLE IF NOT EXISTS deleted_emails (
 CREATE UNIQUE INDEX IF NOT EXISTS deleted_emails_account_uid_idx ON deleted_emails(account_id, uid);
 CREATE INDEX IF NOT EXISTS deleted_emails_message_id_idx ON deleted_emails(message_id);
 `
+  },
+  {
+    version: 4,
+    name: "email_external_number",
+    sql: `
+ALTER TABLE emails ADD COLUMN external_number TEXT;
+`
+  },
+  {
+    version: 5,
+    name: "email_number_source",
+    sql: `
+ALTER TABLE emails ADD COLUMN number_source_attachment_id TEXT;
+ALTER TABLE emails ADD COLUMN number_source_page INTEGER NOT NULL DEFAULT 1;
+`
   }
 ];
 

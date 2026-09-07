@@ -8,6 +8,9 @@ export interface AiConfig {
   /** модель поддерживает изображения (vision) */
   multimodal: boolean;
   timeoutMs: number;
+  /** отдельная OCR-модель (чтение документов); если не задана — fallback на основную */
+  ocrBaseUrl?: string;
+  ocrModel?: string;
 }
 
 export interface DefaultAccountConfig {

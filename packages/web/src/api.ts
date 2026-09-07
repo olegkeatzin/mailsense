@@ -55,6 +55,7 @@ export const api = {
     tag?: string;
     hasEvent?: boolean;
     status?: string;
+    q?: string;
     sortBy?: string;
     sortDir?: string;
   } = {}) => {
@@ -66,6 +67,7 @@ export const api = {
     if (filter.tag) params.set("tag", filter.tag);
     if (filter.hasEvent) params.set("hasEvent", "1");
     if (filter.status) params.set("status", filter.status);
+    if (filter.q) params.set("q", filter.q);
     if (filter.sortBy) params.set("sortBy", filter.sortBy);
     if (filter.sortDir) params.set("sortDir", filter.sortDir);
     const q = params.toString();
@@ -77,12 +79,26 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ folder })
     }),
+  setExternalNumber: (id: string, externalNumber: string | null) =>
+    request<{ ok: boolean; externalNumber: string | null }>("/api/emails/" + id + "/external-number", {
+      method: "PATCH",
+      body: JSON.stringify({ externalNumber })
+    }),
   analyze: (id: string) =>
     request<{ ok: boolean }>("/api/emails/" + id + "/analyze", { method: "POST" }),
   analyzeAll: () => request<{ queued: number }>("/api/emails/analyze-all", { method: "POST" }),
   analyzeRange: (range?: { since?: string; until?: string; accountIds?: string[] }) =>
     request<{ queued: number }>("/api/emails/analyze-range", { method: "POST", body: JSON.stringify(range ?? {}) }),
   stopAnalysis: () => request<{ cleared: number }>("/api/emails/analyze-stop", { method: "POST" }),
+  progress: () =>
+    request<{
+      emailId: string | null;
+      stage: "idle" | "attachment" | "analysis";
+      attachmentName: string;
+      page: number;
+      totalPages: number;
+      queueLength: number;
+    }>("/api/analysis/progress"),
   bulkAnalyze: (ids: string[]) =>
     request<{ queued: number }>("/api/emails/bulk/analyze", { method: "POST", body: JSON.stringify({ ids }) }),
   bulkFolder: (ids: string[], folder: string) =>
@@ -123,4 +139,16 @@ export const api = {
 
 export function attachmentUrl(emailId: string, attId: string, inline = false): string {
   return BASE + "/api/emails/" + emailId + "/attachments/" + attId + "/file" + (inline ? "?inline=1" : "");
+}
+
+export function previewUrl(emailId: string, attId: string, page?: number): string {
+  return (
+    BASE +
+    "/api/emails/" + emailId + "/attachments/" + attId + "/preview" +
+    (page && page > 1 ? "?page=" + page : "")
+  );
+}
+
+export function icsUrl(emailId: string): string {
+  return BASE + "/api/emails/" + emailId + "/ics";
 }

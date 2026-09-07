@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Button, Descriptions, List, Select, Tabs, Tag, Typography } from "antd";
+import { useEffect, useState } from "react";
+import { Button, Descriptions, Input, List, Select, Tabs, Tag, Typography, message } from "antd";
 import {
   DownloadOutlined,
   EyeOutlined,
@@ -7,7 +7,7 @@ import {
   ThunderboltOutlined
 } from "@ant-design/icons";
 import { useStore } from "../store";
-import { attachmentUrl } from "../api";
+import { api, attachmentUrl, previewUrl } from "../api";
 import type { Attachment, EmailView } from "../types";
 import { formatBytes, formatDate, statusColor, statusLabel } from "../utils";
 import AnalysisPanel from "./AnalysisPanel";
@@ -91,6 +91,32 @@ function AttachmentItem({ view, a }: { view: EmailView; a: Attachment }) {
 function MailTab({ view }: { view: EmailView }) {
   const from = view.from ? view.from.name || view.from.address : "(неизвестен)";
   const to = view.to.map((t) => t.address).join(", ");
+  const refreshSelected = useStore((s) => s.refreshSelected);
+  const [number, setNumber] = useState(view.externalNumber ?? "");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setNumber(view.externalNumber ?? "");
+  }, [view.id, view.externalNumber]);
+
+  const saveNumber = async () => {
+    setSaving(true);
+    try {
+      await api.setExternalNumber(view.id, number.trim() || null);
+      await refreshSelected();
+      message.success("Номер сохранён");
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const previewAtt =
+    view.attachments.find((a) => a.id === view.numberSourceAttachmentId) ??
+    view.attachments.find((a) => a.kind === "pdf" || a.kind === "image") ??
+    null;
+  const previewPage = previewAtt && previewAtt.id === view.numberSourceAttachmentId ? view.numberSourcePage : 1;
 
   return (
     <div>
@@ -98,7 +124,24 @@ function MailTab({ view }: { view: EmailView }) {
         <Descriptions.Item label="От">{from}</Descriptions.Item>
         <Descriptions.Item label="Кому">{to || "—"}</Descriptions.Item>
         <Descriptions.Item label="Дата">{formatDate(view.date)}</Descriptions.Item>
+        <Descriptions.Item label="Внешний номер">{view.externalNumber || "—"}</Descriptions.Item>
       </Descriptions>
+
+      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+          Внешний номер:
+        </Typography.Text>
+        <Input
+          size="small"
+          style={{ width: 220 }}
+          value={number}
+          onChange={(e) => setNumber(e.target.value)}
+          placeholder="Не определён"
+        />
+        <Button size="small" loading={saving} onClick={() => void saveNumber()}>
+          Сохранить
+        </Button>
+      </div>
 
       <div style={{ marginTop: 16 }}>
         {view.bodyText ? (
@@ -109,6 +152,28 @@ function MailTab({ view }: { view: EmailView }) {
           <Typography.Text type="secondary">(пустое письмо)</Typography.Text>
         )}
       </div>
+
+      {previewAtt && (previewAtt.kind === "pdf" || previewAtt.kind === "image") ? (
+        <div style={{ marginTop: 16 }}>
+          <Typography.Title level={5}>Документ с номером</Typography.Title>
+          <img
+            src={previewUrl(view.id, previewAtt.id, previewPage)}
+            alt={previewAtt.filename}
+            style={{
+              width: "100%",
+              maxWidth: 960,
+              border: "1px solid #e0e0e0",
+              borderRadius: 4,
+              display: "block",
+              background: "#fff"
+            }}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 4 }}>
+            {previewAtt.filename}
+            {previewAtt.kind === "pdf" && previewPage > 1 ? " · стр. " + previewPage : ""}
+          </Typography.Text>
+        </div>
+      ) : null}
 
       {view.attachments.length > 0 ? (
         <div style={{ marginTop: 24 }}>

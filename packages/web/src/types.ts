@@ -47,6 +47,9 @@ export interface Email {
   from: EmailAddress | null;
   to: EmailAddress[];
   date: string | null;
+  externalNumber: string | null;
+  numberSourceAttachmentId: string | null;
+  numberSourcePage: number;
   bodyText: string;
   bodyHtml: string | null;
   headers: Record<string, unknown>;
@@ -100,4 +103,6 @@ export interface AiConfig {
   model: string;
   multimodal: boolean;
   timeoutMs: number;
+  ocrBaseUrl?: string;
+  ocrModel?: string;
 }

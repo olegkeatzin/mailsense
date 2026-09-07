@@ -12,8 +12,9 @@ import {
   Typography,
   message
 } from "antd";
-import { PlusOutlined } from "@ant-design/icons";
+import { CalendarOutlined, PlusOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
+import { icsUrl } from "../api";
 import { useStore } from "../store";
 import type { Category, EmailView } from "../types";
 import { categoryLabel, formatDate, priorityColor, priorityLabel } from "../utils";
@@ -168,13 +169,23 @@ export default function AnalysisPanel({ view }: { view: EmailView }) {
       <Typography.Title level={5} style={{ marginTop: 16 }}>
         Дата события
       </Typography.Title>
-      <DatePicker
-        value={eventDate ? dayjs(eventDate) : null}
-        onChange={(d) => setEventDate(d ? d.format("YYYY-MM-DD") : "")}
-        placeholder="Выберите дату"
-        format="YYYY-MM-DD"
-        style={{ width: 220 }}
-      />
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <DatePicker
+          value={eventDate ? dayjs(eventDate) : null}
+          onChange={(d) => setEventDate(d ? d.format("YYYY-MM-DD") : "")}
+          placeholder="Выберите дату"
+          format="YYYY-MM-DD"
+          style={{ width: 220 }}
+        />
+        <Button
+          icon={<CalendarOutlined />}
+          href={icsUrl(view.id)}
+          disabled={!a.eventDate}
+          title={a.eventDate ? "Скачать .ics (Outlook / Google / Apple)" : "Сначала укажите и сохраните дату события"}
+        >
+          В календарь
+        </Button>
+      </div>
 
       <div style={{ marginTop: 24 }}>
         <Button type="primary" onClick={() => void save()}>

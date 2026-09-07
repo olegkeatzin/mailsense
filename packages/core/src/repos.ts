@@ -120,6 +120,9 @@ function mapEmail(row: typeof emails.$inferSelect): Email {
     from: jparse<EmailAddress | null>(row.from, null),
     to: jparse<EmailAddress[]>(row.to, []),
     date: row.date,
+    externalNumber: row.externalNumber,
+    numberSourceAttachmentId: row.numberSourceAttachmentId,
+    numberSourcePage: row.numberSourcePage,
     bodyText: row.bodyText,
     bodyHtml: row.bodyHtml,
     headers: jparse<Record<string, unknown>>(row.headers, {}),
@@ -154,6 +157,7 @@ export function insertEmail(e: {
   from: EmailAddress | null;
   to: EmailAddress[];
   date: string | null;
+  externalNumber?: string | null;
   bodyText: string;
   bodyHtml: string | null;
   headers: Record<string, unknown>;
@@ -172,6 +176,9 @@ export function insertEmail(e: {
       from: JSON.stringify(e.from ?? null),
       to: JSON.stringify(e.to ?? []),
       date: e.date,
+      externalNumber: e.externalNumber ?? null,
+      numberSourceAttachmentId: null,
+      numberSourcePage: 1,
       bodyText: e.bodyText,
       bodyHtml: e.bodyHtml,
       headers: JSON.stringify(e.headers ?? {}),
@@ -211,6 +218,7 @@ export interface EmailListFilter {
   tag?: string;
   hasEvent?: boolean;
   status?: AnalysisStatus;
+  q?: string;
   sortBy?: "date" | "priority";
   sortDir?: "asc" | "desc";
 }
@@ -240,6 +248,17 @@ export function listEmailsWithAnalysis(filter: EmailListFilter = {}): EmailListI
   if (filter.status) {
     items = items.filter((e) => e.analysisStatus === filter.status);
   }
+  if (filter.q) {
+    const q = filter.q.toLowerCase();
+    items = items.filter(
+      (e) =>
+        e.subject.toLowerCase().includes(q) ||
+        e.bodyText.toLowerCase().includes(q) ||
+        (e.externalNumber ?? "").toLowerCase().includes(q) ||
+        (e.from?.name ?? "").toLowerCase().includes(q) ||
+        (e.from?.address ?? "").toLowerCase().includes(q)
+    );
+  }
 
   const dir = filter.sortDir === "asc" ? 1 : -1;
   items.sort((a, b) => {
@@ -264,6 +283,18 @@ export function setEmailStatus(id: string, status: AnalysisStatus): void {
 
 export function setEmailFolder(id: string, folder: string): void {
   getDb().update(emails).set({ folder, updatedAt: now() }).where(eq(emails.id, id)).run();
+}
+
+export function setExternalNumber(id: string, externalNumber: string | null): void {
+  getDb().update(emails).set({ externalNumber, updatedAt: now() }).where(eq(emails.id, id)).run();
+}
+
+export function setNumberSource(id: string, attachmentId: string | null, page: number): void {
+  getDb()
+    .update(emails)
+    .set({ numberSourceAttachmentId: attachmentId, numberSourcePage: page, updatedAt: now() })
+    .where(eq(emails.id, id))
+    .run();
 }
 
 export function setEmailsFolder(ids: string[], folder: string): void {

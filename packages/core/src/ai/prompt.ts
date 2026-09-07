@@ -19,6 +19,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   '  "priority": 3,',
   '  "urgent": false,',
   '  "event_date": "2026-01-15" или null,',
+  '  "external_number": "номер документа (например «Исх-123/45») или null",',
   '  "category": "work" | "personal" | "spam"',
   '  "attachments": [{"name": "файл.pdf", "description": "что на нём/в нём важного"}],',
   "}",
@@ -29,6 +30,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   "- priority: целое число 1..5 (5 = максимально важно).",
   "- urgent: true, если письмо требует немедленного ответа или действия.",
   "- event_date: дата встречи/дедлайна/события в ISO-8601 (YYYY-MM-DD), иначе null.",
+  "- external_number: ТОЛЬКО сам номер документа (цифры и буквы номера), БЕЗ даты и БЕЗ слов «исх.», «вх.», «№», «от», без точки на конце. Примеры: из «Исх. № 123/45 от 01.02.2026» верни «123/45»; из «Вх-789» верни «789»; из «55П70-3777» верни «55П70-3777». Если явного номера нет — null.",
   "- category: work (рабочее), personal (личное), spam (спам/реклама).",
   "- attachments: для КАЖДОГО вложения (изображение, PDF, документ) дай краткое описание (1 предложение) того, что на нём изображено или написано. name — точное имя файла из списка «Вложения». Без вложений — пустой массив.",
   "- Анализируй вложения: изображения и страницы PDF рассматривай как часть письма; извлечённый текст документов и таблиц учитывай в summary и tags."
@@ -60,7 +62,9 @@ export interface PromptOptions {
 
 export function buildPrompt(input: PromptInput, opts: PromptOptions = {}): string {
   const attachmentsBlock = input.attachmentTexts
-    .map((t, i) => "Извлечённый текст вложения #" + (i + 1) + ":\n" + t)
+    .map((t, i) => ({ name: input.attachmentNames[i] ?? "вложение #" + (i + 1), text: t }))
+    .filter((x) => x.text && x.text.trim().length > 0)
+    .map((x) => "=== " + x.name + " ===\n" + x.text)
     .join("\n\n");
 
   let notesBlock = "";

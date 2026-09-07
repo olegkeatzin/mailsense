@@ -11,6 +11,7 @@ export interface FilterState {
   tag: string | null;
   hasEvent: boolean;
   status: AnalysisStatus | null;
+  q: string;
   sortBy: SortBy;
   sortDir: SortDir;
 }
@@ -72,6 +73,7 @@ export const useStore = create<State>()((set, get) => ({
   tag: null,
   hasEvent: false,
   status: null,
+  q: "",
   sortBy: "date",
   sortDir: "desc",
 
@@ -106,6 +108,7 @@ export const useStore = create<State>()((set, get) => ({
         tag: s.tag ?? undefined,
         hasEvent: s.hasEvent,
         status: s.status ?? undefined,
+        q: s.q || undefined,
         sortBy: s.sortBy,
         sortDir: s.sortDir
       });
@@ -152,7 +155,7 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   resetFilters: () => {
-    set({ categories: [], minPriority: null, tag: null, hasEvent: false, status: null, sortBy: "date", sortDir: "desc" });
+    set({ categories: [], minPriority: null, tag: null, hasEvent: false, status: null, q: "", sortBy: "date", sortDir: "desc" });
     void get().loadEmails();
   },
 

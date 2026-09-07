@@ -8,6 +8,7 @@ import {
   analyzeEmails,
   analyzeRange,
   cancelAnalysis,
+  classifyKind,
   createAccount,
   deleteEmails,
   decryptPassword,
@@ -16,14 +17,17 @@ import {
   getAccounts,
   getAiConfig,
   getEmailView,
+  getProgress,
   getPromptSettings,
   importEmails,
   listAttachments,
   listEmailsWithAnalysis,
   removeAccount,
+  renderPreviewImage,
   setAiConfig,
   setEmailFolder,
   setEmailsFolder,
+  setExternalNumber,
   setPromptSettings,
   setSettingValue,
   getSettingValue,
@@ -67,6 +71,15 @@ function accountDto(a: {
     authType: a.authType,
     settings: a.settings
   };
+}
+
+/** Экранирует спецсимволы для iCalendar (RFC 5545). */
+function escapeIcs(text: string): string {
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,")
+    .replace(/\r?\n/g, "\\n");
 }
 
 export function createApp(options: { webDist?: string } = {}): express.Express {
@@ -121,6 +134,10 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
       res.json(result);
     })
   );
+
+  app.get("/api/analysis/progress", (_req, res) => {
+    res.json(getProgress());
+  });
 
   // -------- accounts --------
   app.get("/api/accounts", (_req, res) => {
@@ -199,6 +216,7 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
         tag: (q.tag as string) || undefined,
         hasEvent: q.hasEvent === "1",
         status: (q.status as AnalysisStatus) || undefined,
+        q: (q.q as string) || undefined,
         sortBy: (q.sortBy as "date" | "priority") || undefined,
         sortDir: (q.sortDir as "asc" | "desc") || undefined
       })
@@ -220,6 +238,56 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     const folder = (req.body?.folder as string) ?? "INBOX";
     setEmailFolder(req.params.id, folder);
     res.json({ ok: true });
+  });
+
+  app.patch("/api/emails/:id/external-number", (req, res) => {
+    const value = typeof req.body?.externalNumber === "string" ? req.body.externalNumber.trim() || null : null;
+    setExternalNumber(req.params.id, value);
+    res.json({ ok: true, externalNumber: value });
+  });
+
+  app.get("/api/emails/:id/ics", (req, res) => {
+    const view = getEmailView(req.params.id);
+    if (!view) return res.status(404).json({ error: "Письмо не найдено" });
+    const eventDate = view.analysis?.eventDate ?? null;
+    if (!eventDate || !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
+      return res.status(400).json({ error: "У письма нет даты события" });
+    }
+
+    const summary = view.subject || "(без темы)";
+    const parts = [view.analysis?.summary || ""];
+    if (view.externalNumber) parts.push("Внешний номер: " + view.externalNumber);
+    if (view.from) parts.push("От: " + (view.from.name || view.from.address));
+    const description = parts.filter(Boolean).join("\n");
+
+    const dtstart = eventDate.replace(/-/g, "");
+    const end = new Date(eventDate + "T00:00:00Z");
+    end.setUTCDate(end.getUTCDate() + 1);
+    const dtend = end.toISOString().slice(0, 10).replace(/-/g, "");
+
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "PRODID:-//MailSense//MailSense//RU",
+      "CALSCALE:GREGORIAN",
+      "METHOD:PUBLISH",
+      "BEGIN:VEVENT",
+      "UID:" + view.id + "@mailsense",
+      "DTSTAMP:" + new Date().toISOString().replace(/[-:]/g, "").slice(0, 15) + "Z",
+      "DTSTART;VALUE=DATE:" + dtstart,
+      "DTEND;VALUE=DATE:" + dtend,
+      "SUMMARY:" + escapeIcs(summary),
+      "DESCRIPTION:" + escapeIcs(description),
+      "END:VEVENT",
+      "END:VCALENDAR"
+    ].join("\r\n");
+
+    res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename*=UTF-8''" + encodeURIComponent("event-" + dtstart + ".ics")
+    );
+    res.send(ics);
   });
 
   app.post("/api/emails/:id/analyze", (req, res) => {
@@ -318,6 +386,25 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
         res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(att.filename));
       }
       fs.createReadStream(att.storagePath).pipe(res);
+    })
+  );
+
+  app.get(
+    "/api/emails/:id/attachments/:attId/preview",
+    asyncHandler(async (req, res) => {
+      const atts = listAttachments(req.params.id);
+      const att = atts.find((a) => a.id === req.params.attId);
+      if (!att || !att.storagePath || !fs.existsSync(att.storagePath)) {
+        return res.status(404).json({ error: "Вложение не найдено" });
+      }
+      const kind = classifyKind(att.mimeType, att.filename);
+      const page = Number(req.query.page) || 1;
+      const content = fs.readFileSync(att.storagePath);
+      const buf = await renderPreviewImage(kind, content, page);
+      if (!buf) return res.status(415).json({ error: "Предпросмотр недоступен для этого типа" });
+      res.setHeader("Content-Type", kind === "pdf" ? "image/png" : att.mimeType);
+      res.setHeader("Cache-Control", "public, max-age=3600");
+      res.send(buf);
     })
   );
 

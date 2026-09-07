@@ -37,6 +37,7 @@ export default function FilterBar() {
   const minPriority = useStore((s) => s.minPriority);
   const tag = useStore((s) => s.tag);
   const status = useStore((s) => s.status);
+  const q = useStore((s) => s.q);
   const sortBy = useStore((s) => s.sortBy);
   const sortDir = useStore((s) => s.sortDir);
   const setFilter = useStore((s) => s.setFilter);
@@ -67,6 +68,14 @@ export default function FilterBar() {
       >
         Все
       </Checkbox>
+      <Input
+        size="small"
+        style={{ width: 200 }}
+        allowClear
+        placeholder="Поиск по содержанию / номеру…"
+        value={q}
+        onChange={(e) => setFilter({ q: e.target.value })}
+      />
       <Select
         size="small"
         mode="multiple"

@@ -53,3 +53,22 @@ export async function pdfToImages(data: Buffer, maxPages = 6, scale = 1.5): Prom
   }
   return { pages, totalPages, truncated: totalPages > limit };
 }
+
+/** Рендерит ОДНУ конкретную страницу PDF в PNG (1-based). */
+export async function pdfPageToImage(data: Buffer, pageNumber: number, scale = 1.5): Promise<Buffer | null> {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise;
+  try {
+    if (pageNumber < 1 || pageNumber > doc.numPages) return null;
+    const page = await doc.getPage(pageNumber);
+    const viewport = page.getViewport({ scale });
+    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx as any, viewport }).promise;
+    const buf = canvas.toBuffer("image/png");
+    page.cleanup();
+    return buf;
+  } finally {
+    await doc.destroy();
+  }
+}

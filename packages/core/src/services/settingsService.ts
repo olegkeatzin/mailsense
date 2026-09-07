@@ -10,7 +10,9 @@ export function getAiConfig(): AiConfig {
     apiKey: getSetting("ai.apiKey") ?? base.apiKey,
     model: getSetting("ai.model") ?? base.model,
     multimodal: (getSetting("ai.multimodal") ?? String(base.multimodal)) === "true",
-    timeoutMs: base.timeoutMs
+    timeoutMs: base.timeoutMs,
+    ocrBaseUrl: getSetting("ai.ocrBaseUrl") ?? undefined,
+    ocrModel: getSetting("ai.ocrModel") ?? undefined
   };
 }
 
@@ -19,6 +21,19 @@ export function setAiConfig(cfg: Partial<AiConfig>): void {
   if (cfg.apiKey) setSetting("ai.apiKey", cfg.apiKey);
   if (cfg.model) setSetting("ai.model", cfg.model);
   if (cfg.multimodal !== undefined) setSetting("ai.multimodal", String(cfg.multimodal));
+  if (cfg.ocrBaseUrl !== undefined) setSetting("ai.ocrBaseUrl", cfg.ocrBaseUrl);
+  if (cfg.ocrModel !== undefined) setSetting("ai.ocrModel", cfg.ocrModel);
+}
+
+/** Конфиг OCR-модели: отдельная модель или fallback на основную. */
+export function getOcrConfig(): { baseUrl: string; apiKey: string; model: string; timeoutMs: number } {
+  const ai = getAiConfig();
+  return {
+    baseUrl: ai.ocrBaseUrl || ai.baseUrl,
+    apiKey: ai.apiKey,
+    model: ai.ocrModel || ai.model,
+    timeoutMs: ai.timeoutMs
+  };
 }
 
 export function getSettingValue(key: string, fallback = ""): string {
