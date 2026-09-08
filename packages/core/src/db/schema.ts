@@ -41,6 +41,7 @@ export const emails = sqliteTable(
     externalNumber: text("external_number"),
     numberSourceAttachmentId: text("number_source_attachment_id"),
     numberSourcePage: integer("number_source_page").notNull().default(1),
+    sendDate: text("send_date"),
     bodyText: text("body_text").notNull().default(""),
     bodyHtml: text("body_html"),
     headers: text("headers").notNull().default("{}"),

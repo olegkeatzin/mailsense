@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { Button, Checkbox, Input, Select } from "antd";
-import { ClearOutlined } from "@ant-design/icons";
+import { ClearOutlined, FilterOutlined } from "@ant-design/icons";
 import { useStore } from "../store";
 import type { AnalysisStatus, Category } from "../types";
+import FilterModal from "./FilterModal";
 
 const CATEGORY_OPTIONS = [
   { value: "work", label: "Рабочее" },
@@ -33,6 +35,7 @@ const SORT_OPTIONS = [
 ];
 
 export default function FilterBar() {
+  const [filterOpen, setFilterOpen] = useState(false);
   const categories = useStore((s) => s.categories);
   const minPriority = useStore((s) => s.minPriority);
   const tag = useStore((s) => s.tag);
@@ -68,6 +71,9 @@ export default function FilterBar() {
       >
         Все
       </Checkbox>
+      <Button size="small" icon={<FilterOutlined />} onClick={() => setFilterOpen(true)}>
+        Фильтр
+      </Button>
       <Input
         size="small"
         style={{ width: 200 }}
@@ -121,6 +127,7 @@ export default function FilterBar() {
       <Button size="small" icon={<ClearOutlined />} onClick={resetFilters}>
         Сброс
       </Button>
+      <FilterModal open={filterOpen} onClose={() => setFilterOpen(false)} />
     </div>
   );
 }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { Button, Descriptions, Input, List, Select, Tabs, Tag, Typography, message } from "antd";
+import { Button, DatePicker, Descriptions, Input, List, Select, Tabs, Tag, Typography, message } from "antd";
 import {
   DownloadOutlined,
   EyeOutlined,
   FileOutlined,
   ThunderboltOutlined
 } from "@ant-design/icons";
+import dayjs from "dayjs";
 import { useStore } from "../store";
 import { api, attachmentUrl, previewUrl } from "../api";
 import type { Attachment, EmailView } from "../types";
@@ -94,10 +95,13 @@ function MailTab({ view }: { view: EmailView }) {
   const refreshSelected = useStore((s) => s.refreshSelected);
   const [number, setNumber] = useState(view.externalNumber ?? "");
   const [saving, setSaving] = useState(false);
+  const [sendDate, setSendDate] = useState(view.sendDate ?? "");
+  const [savingDate, setSavingDate] = useState(false);
 
   useEffect(() => {
     setNumber(view.externalNumber ?? "");
-  }, [view.id, view.externalNumber]);
+    setSendDate(view.sendDate ?? "");
+  }, [view.id, view.externalNumber, view.sendDate]);
 
   const saveNumber = async () => {
     setSaving(true);
@@ -112,6 +116,19 @@ function MailTab({ view }: { view: EmailView }) {
     }
   };
 
+  const saveSendDate = async () => {
+    setSavingDate(true);
+    try {
+      await api.setSendDate(view.id, sendDate || null);
+      await refreshSelected();
+      message.success("Дата отправки сохранена");
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setSavingDate(false);
+    }
+  };
+
   const previewAtt =
     view.attachments.find((a) => a.id === view.numberSourceAttachmentId) ??
     view.attachments.find((a) => a.kind === "pdf" || a.kind === "image") ??
@@ -123,8 +140,9 @@ function MailTab({ view }: { view: EmailView }) {
       <Descriptions size="small" column={1} bordered>
         <Descriptions.Item label="От">{from}</Descriptions.Item>
         <Descriptions.Item label="Кому">{to || "—"}</Descriptions.Item>
-        <Descriptions.Item label="Дата">{formatDate(view.date)}</Descriptions.Item>
+        <Descriptions.Item label="Дата получения">{formatDate(view.date)}</Descriptions.Item>
         <Descriptions.Item label="Внешний номер">{view.externalNumber || "—"}</Descriptions.Item>
+        <Descriptions.Item label="Дата отправки">{formatDate(view.sendDate)}</Descriptions.Item>
       </Descriptions>
 
       <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
@@ -139,6 +157,23 @@ function MailTab({ view }: { view: EmailView }) {
           placeholder="Не определён"
         />
         <Button size="small" loading={saving} onClick={() => void saveNumber()}>
+          Сохранить
+        </Button>
+      </div>
+
+      <div style={{ marginTop: 8, display: "flex", gap: 8, alignItems: "center" }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+          Дата отправки:
+        </Typography.Text>
+        <DatePicker
+          size="small"
+          value={sendDate ? dayjs(sendDate) : null}
+          onChange={(d) => setSendDate(d ? d.format("YYYY-MM-DD") : "")}
+          placeholder="Не определена"
+          format="YYYY-MM-DD"
+          style={{ width: 180 }}
+        />
+        <Button size="small" loading={savingDate} onClick={() => void saveSendDate()}>
           Сохранить
         </Button>
       </div>

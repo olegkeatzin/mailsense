@@ -28,6 +28,7 @@ import {
   setEmailFolder,
   setEmailsFolder,
   setExternalNumber,
+  setSendDate,
   setPromptSettings,
   setSettingValue,
   getSettingValue,
@@ -217,6 +218,16 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
         hasEvent: q.hasEvent === "1",
         status: (q.status as AnalysisStatus) || undefined,
         q: (q.q as string) || undefined,
+        from: typeof q.from === "string" && q.from ? q.from.split(",").filter(Boolean) : undefined,
+        to: typeof q.to === "string" && q.to ? q.to.split(",").filter(Boolean) : undefined,
+        externalNumber:
+          typeof q.externalNumber === "string" && q.externalNumber
+            ? q.externalNumber.split(",").filter(Boolean)
+            : undefined,
+        dateFrom: (q.dateFrom as string) || undefined,
+        dateTo: (q.dateTo as string) || undefined,
+        sendDateFrom: (q.sendDateFrom as string) || undefined,
+        sendDateTo: (q.sendDateTo as string) || undefined,
         sortBy: (q.sortBy as "date" | "priority") || undefined,
         sortDir: (q.sortDir as "asc" | "desc") || undefined
       })
@@ -244,6 +255,12 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     const value = typeof req.body?.externalNumber === "string" ? req.body.externalNumber.trim() || null : null;
     setExternalNumber(req.params.id, value);
     res.json({ ok: true, externalNumber: value });
+  });
+
+  app.patch("/api/emails/:id/send-date", (req, res) => {
+    const value = typeof req.body?.sendDate === "string" ? req.body.sendDate.trim() || null : null;
+    setSendDate(req.params.id, value);
+    res.json({ ok: true, sendDate: value });
   });
 
   app.get("/api/emails/:id/ics", (req, res) => {

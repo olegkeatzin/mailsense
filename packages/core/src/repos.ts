@@ -123,6 +123,7 @@ function mapEmail(row: typeof emails.$inferSelect): Email {
     externalNumber: row.externalNumber,
     numberSourceAttachmentId: row.numberSourceAttachmentId,
     numberSourcePage: row.numberSourcePage,
+    sendDate: row.sendDate,
     bodyText: row.bodyText,
     bodyHtml: row.bodyHtml,
     headers: jparse<Record<string, unknown>>(row.headers, {}),
@@ -179,6 +180,7 @@ export function insertEmail(e: {
       externalNumber: e.externalNumber ?? null,
       numberSourceAttachmentId: null,
       numberSourcePage: 1,
+      sendDate: null,
       bodyText: e.bodyText,
       bodyHtml: e.bodyHtml,
       headers: JSON.stringify(e.headers ?? {}),
@@ -219,6 +221,13 @@ export interface EmailListFilter {
   hasEvent?: boolean;
   status?: AnalysisStatus;
   q?: string;
+  from?: string[];
+  to?: string[];
+  externalNumber?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+  sendDateFrom?: string;
+  sendDateTo?: string;
   sortBy?: "date" | "priority";
   sortDir?: "asc" | "desc";
 }
@@ -259,6 +268,42 @@ export function listEmailsWithAnalysis(filter: EmailListFilter = {}): EmailListI
         (e.from?.address ?? "").toLowerCase().includes(q)
     );
   }
+  if (filter.from && filter.from.length > 0) {
+    const fs = filter.from.map((f) => f.toLowerCase());
+    items = items.filter((e) =>
+      fs.some(
+        (f) =>
+          (e.from?.name ?? "").toLowerCase().includes(f) ||
+          (e.from?.address ?? "").toLowerCase().includes(f)
+      )
+    );
+  }
+  if (filter.to && filter.to.length > 0) {
+    const ts = filter.to.map((t) => t.toLowerCase());
+    items = items.filter((e) =>
+      e.to.some((a) =>
+        ts.some(
+          (t) => (a.address ?? "").toLowerCase().includes(t) || (a.name ?? "").toLowerCase().includes(t)
+        )
+      )
+    );
+  }
+  if (filter.externalNumber && filter.externalNumber.length > 0) {
+    const ns = filter.externalNumber.map((n) => n.toLowerCase());
+    items = items.filter((e) => ns.some((n) => (e.externalNumber ?? "").toLowerCase().includes(n)));
+  }
+  if (filter.dateFrom) {
+    items = items.filter((e) => (e.date?.slice(0, 10) ?? "") >= filter.dateFrom!);
+  }
+  if (filter.dateTo) {
+    items = items.filter((e) => (e.date?.slice(0, 10) ?? "") <= filter.dateTo!);
+  }
+  if (filter.sendDateFrom) {
+    items = items.filter((e) => (e.sendDate ?? "") >= filter.sendDateFrom!);
+  }
+  if (filter.sendDateTo) {
+    items = items.filter((e) => (e.sendDate ?? "") <= filter.sendDateTo!);
+  }
 
   const dir = filter.sortDir === "asc" ? 1 : -1;
   items.sort((a, b) => {
@@ -295,6 +340,10 @@ export function setNumberSource(id: string, attachmentId: string | null, page: n
     .set({ numberSourceAttachmentId: attachmentId, numberSourcePage: page, updatedAt: now() })
     .where(eq(emails.id, id))
     .run();
+}
+
+export function setSendDate(id: string, sendDate: string | null): void {
+  getDb().update(emails).set({ sendDate, updatedAt: now() }).where(eq(emails.id, id)).run();
 }
 
 export function setEmailsFolder(ids: string[], folder: string): void {

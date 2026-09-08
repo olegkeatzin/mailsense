@@ -56,6 +56,13 @@ export const api = {
     hasEvent?: boolean;
     status?: string;
     q?: string;
+    from?: string[];
+    to?: string[];
+    externalNumber?: string[];
+    dateFrom?: string;
+    dateTo?: string;
+    sendDateFrom?: string;
+    sendDateTo?: string;
     sortBy?: string;
     sortDir?: string;
   } = {}) => {
@@ -68,6 +75,13 @@ export const api = {
     if (filter.hasEvent) params.set("hasEvent", "1");
     if (filter.status) params.set("status", filter.status);
     if (filter.q) params.set("q", filter.q);
+    if (filter.from?.length) params.set("from", filter.from.join(","));
+    if (filter.to?.length) params.set("to", filter.to.join(","));
+    if (filter.externalNumber?.length) params.set("externalNumber", filter.externalNumber.join(","));
+    if (filter.dateFrom) params.set("dateFrom", filter.dateFrom);
+    if (filter.dateTo) params.set("dateTo", filter.dateTo);
+    if (filter.sendDateFrom) params.set("sendDateFrom", filter.sendDateFrom);
+    if (filter.sendDateTo) params.set("sendDateTo", filter.sendDateTo);
     if (filter.sortBy) params.set("sortBy", filter.sortBy);
     if (filter.sortDir) params.set("sortDir", filter.sortDir);
     const q = params.toString();
@@ -83,6 +97,11 @@ export const api = {
     request<{ ok: boolean; externalNumber: string | null }>("/api/emails/" + id + "/external-number", {
       method: "PATCH",
       body: JSON.stringify({ externalNumber })
+    }),
+  setSendDate: (id: string, sendDate: string | null) =>
+    request<{ ok: boolean; sendDate: string | null }>("/api/emails/" + id + "/send-date", {
+      method: "PATCH",
+      body: JSON.stringify({ sendDate })
     }),
   analyze: (id: string) =>
     request<{ ok: boolean }>("/api/emails/" + id + "/analyze", { method: "POST" }),

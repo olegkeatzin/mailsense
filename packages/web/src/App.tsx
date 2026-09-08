@@ -62,7 +62,25 @@ function AnalysisProgressBadge() {
   }
 
   return (
-    <span style={{ fontSize: 12, color: "#1677ff", whiteSpace: "nowrap", marginRight: 4 }}>
+    <span
+      style={{
+        position: "fixed",
+        bottom: 16,
+        right: 16,
+        zIndex: 1000,
+        fontSize: 12,
+        color: "#1677ff",
+        whiteSpace: "nowrap",
+        background: "#fff",
+        border: "1px solid #d6e4ff",
+        borderRadius: 6,
+        padding: "6px 12px",
+        boxShadow: "0 2px 8px rgba(0, 0, 0, 0.12)",
+        maxWidth: 420,
+        overflow: "hidden",
+        textOverflow: "ellipsis"
+      }}
+    >
       {label}
     </span>
   );

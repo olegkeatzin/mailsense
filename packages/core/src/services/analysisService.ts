@@ -10,6 +10,7 @@ import {
   setEmailStatus,
   setExternalNumber,
   setNumberSource,
+  setSendDate,
   upsertAnalysis
 } from "../repos.js";
 import { prepareAttachment, type PreparedAttachment } from "../attachments/index.js";
@@ -55,12 +56,6 @@ export function getProgress(): AnalysisProgress {
   return { ...progress, queueLength: queueLength() };
 }
 
-/** Эвристика: похожа ли страница/текст на «шапку» письма с номером. */
-function looksLikeLetterhead(text: string): boolean {
-  if (!text) return false;
-  return /(?:исх\.?|вх\.?|исходящий|входящий|№|номер|внешний номер)/i.test(text) && /\d/.test(text);
-}
-
 export function enqueue(emailId: string): void {
   if (inFlight.has(emailId)) return;
   inFlight.add(emailId);
@@ -103,7 +98,6 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
     // Этап 1: OCR визуальных вложений (по страницам, параллельно)
     const ocrConfig = getOcrConfig();
     const ocrTexts = new Array<string | null>(prepared.length).fill(null);
-    const pageTextsByAtt: string[][] = new Array(prepared.length).fill(null).map(() => []);
     for (let i = 0; i < prepared.length; i++) {
       const p = prepared[i];
       if (p.images.length === 0) continue;
@@ -117,34 +111,11 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
             })
           )
         )) as string[];
-        pageTextsByAtt[i] = pageTexts;
-        ocrTexts[i] = pageTexts.join("\n\n");
+        // помечаем страницы, чтобы LLM мог указать источник номера («--- стр. N ---»)
+        ocrTexts[i] = pageTexts.map((t, j) => "--- стр. " + (j + 1) + " ---\n" + t).join("\n\n");
       } catch (err) {
         logger.warn({ att: p.filename, err: (err as Error).message }, "Ошибка OCR вложения");
       }
-    }
-
-    // Определяем источник номера (файл + страница) — для превью в UI
-    let numberSourceAttId: string | null = null;
-    let numberSourcePage = 1;
-    outer: for (let i = 0; i < prepared.length; i++) {
-      const pages = pageTextsByAtt[i] ?? [];
-      if (pages.length > 0) {
-        for (let j = 0; j < pages.length; j++) {
-          if (looksLikeLetterhead(pages[j])) {
-            numberSourceAttId = preparedAttIds[i];
-            numberSourcePage = j + 1;
-            break outer;
-          }
-        }
-      } else if (looksLikeLetterhead(prepared[i].extractedText ?? "")) {
-        numberSourceAttId = preparedAttIds[i];
-        numberSourcePage = 1;
-        break;
-      }
-    }
-    if (numberSourceAttId) {
-      setNumberSource(emailId, numberSourceAttId, numberSourcePage);
     }
 
     // Этап 2: текстовый анализ (суммаризация) — текст вложений, без картинок
@@ -212,6 +183,21 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
 
     if (parsed.external_number && !email.externalNumber) {
       setExternalNumber(emailId, parsed.external_number);
+    }
+
+    if (parsed.send_date && !email.sendDate) {
+      setSendDate(emailId, parsed.send_date);
+    }
+
+    if (parsed.external_number_source?.filename) {
+      const srcName = parsed.external_number_source.filename;
+      const atts = listAttachments(emailId);
+      const src =
+        atts.find((a) => a.filename === srcName) ??
+        atts.find((a) => a.filename.includes(srcName) || srcName.includes(a.filename));
+      if (src) {
+        setNumberSource(emailId, src.id, parsed.external_number_source.page ?? 1);
+      }
     }
 
     if (parsed.category === "spam") {

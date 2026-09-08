@@ -120,6 +120,13 @@ ALTER TABLE emails ADD COLUMN external_number TEXT;
 ALTER TABLE emails ADD COLUMN number_source_attachment_id TEXT;
 ALTER TABLE emails ADD COLUMN number_source_page INTEGER NOT NULL DEFAULT 1;
 `
+  },
+  {
+    version: 6,
+    name: "email_send_date",
+    sql: `
+ALTER TABLE emails ADD COLUMN send_date TEXT;
+`
   }
 ];
 

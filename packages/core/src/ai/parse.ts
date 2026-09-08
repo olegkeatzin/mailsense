@@ -7,6 +7,14 @@ export const analysisSchema = z.object({
   urgent: z.boolean().default(false),
   event_date: z.string().nullable().default(null),
   external_number: z.string().nullable().default(null),
+  external_number_source: z
+    .object({
+      filename: z.string(),
+      page: z.number().int().positive().default(1)
+    })
+    .nullable()
+    .default(null),
+  send_date: z.string().nullable().default(null),
   category: z.enum(["work", "personal", "spam"]).default("personal"),
   attachments: z.array(z.object({ name: z.string(), description: z.string() })).default([])
 });

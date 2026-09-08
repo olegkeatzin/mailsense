@@ -12,6 +12,13 @@ export interface FilterState {
   hasEvent: boolean;
   status: AnalysisStatus | null;
   q: string;
+  from: string[];
+  to: string[];
+  externalNumber: string[];
+  dateFrom: string;
+  dateTo: string;
+  sendDateFrom: string;
+  sendDateTo: string;
   sortBy: SortBy;
   sortDir: SortDir;
 }
@@ -74,6 +81,13 @@ export const useStore = create<State>()((set, get) => ({
   hasEvent: false,
   status: null,
   q: "",
+  from: [],
+  to: [],
+  externalNumber: [],
+  dateFrom: "",
+  dateTo: "",
+  sendDateFrom: "",
+  sendDateTo: "",
   sortBy: "date",
   sortDir: "desc",
 
@@ -109,6 +123,13 @@ export const useStore = create<State>()((set, get) => ({
         hasEvent: s.hasEvent,
         status: s.status ?? undefined,
         q: s.q || undefined,
+        from: s.from.length ? s.from : undefined,
+        to: s.to.length ? s.to : undefined,
+        externalNumber: s.externalNumber.length ? s.externalNumber : undefined,
+        dateFrom: s.dateFrom || undefined,
+        dateTo: s.dateTo || undefined,
+        sendDateFrom: s.sendDateFrom || undefined,
+        sendDateTo: s.sendDateTo || undefined,
         sortBy: s.sortBy,
         sortDir: s.sortDir
       });
@@ -155,7 +176,23 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   resetFilters: () => {
-    set({ categories: [], minPriority: null, tag: null, hasEvent: false, status: null, q: "", sortBy: "date", sortDir: "desc" });
+    set({
+      categories: [],
+      minPriority: null,
+      tag: null,
+      hasEvent: false,
+      status: null,
+      q: "",
+      from: [],
+      to: [],
+      externalNumber: [],
+      dateFrom: "",
+      dateTo: "",
+      sendDateFrom: "",
+      sendDateTo: "",
+      sortBy: "date",
+      sortDir: "desc"
+    });
     void get().loadEmails();
   },
 

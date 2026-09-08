@@ -61,6 +61,7 @@ export interface Email {
   externalNumber: string | null;
   numberSourceAttachmentId: string | null;
   numberSourcePage: number;
+  sendDate: string | null;
   bodyText: string;
   bodyHtml: string | null;
   headers: Record<string, unknown>;
