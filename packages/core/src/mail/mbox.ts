@@ -6,6 +6,11 @@ export function isMboxFilename(filename: string): boolean {
   return /\.mbox$/i.test(filename);
 }
 
+/** Определяет mbox по содержимому: начинается с разделителя "From <отправитель> " (не "From:"). */
+export function isMboxData(data: Buffer): boolean {
+  return /^\s*From \S/.test(data.toString("latin1").slice(0, 256));
+}
+
 export function splitMbox(data: Buffer): Buffer[] {
   const text = data.toString("latin1");
   const lines = text.split(/\r?\n/);

@@ -4,6 +4,7 @@ import { useStore } from "../store";
 
 const FOLDERS = [
   { key: "INBOX", label: "Входящие" },
+  { key: "Sent", label: "Отправленные" },
   { key: "PROCESSED", label: "Обработанные" },
   { key: "SPAM", label: "Спам" }
 ];

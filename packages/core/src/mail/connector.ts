@@ -10,9 +10,19 @@ export interface FetchOptions {
   until?: Date;
 }
 
+export interface MailboxInfo {
+  path: string;
+  name: string;
+  specialUse?: string;
+}
+
 export interface MailConnector {
   connect(): Promise<void>;
   fetchNew(folder: string, knownUids: Set<string>, opts?: FetchOptions): Promise<RawMessage[]>;
+  /** Список папок (только IMAP). */
+  listMailboxes?(): Promise<MailboxInfo[]>;
+  /** Сохранить письмо в папку на сервере (только IMAP). */
+  appendRaw?(folder: string, raw: Buffer, flags?: string[]): Promise<void>;
   disconnect(): Promise<void>;
 }
 

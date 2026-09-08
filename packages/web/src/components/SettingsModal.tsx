@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   AutoComplete,
   Button,
+  Divider,
   Form,
   Input,
   InputNumber,
@@ -41,6 +42,7 @@ function AccountTab() {
   const loadAccounts = useStore((s) => s.loadAccounts);
   const [form] = Form.useForm();
   const [testing, setTesting] = useState(false);
+  const [testingSmtp, setTestingSmtp] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
@@ -51,7 +53,13 @@ function AccountTab() {
     tls: v.tls as AccountInput["tls"],
     username: String(v.username ?? ""),
     password: v.password ? String(v.password) : undefined,
-    authType: v.authType as AccountInput["authType"]
+    authType: v.authType as AccountInput["authType"],
+    smtpHost: v.smtpHost ? String(v.smtpHost) : null,
+    smtpPort: v.smtpPort ? Number(v.smtpPort) : null,
+    smtpTls: (v.smtpTls as AccountInput["smtpTls"]) ?? null,
+    smtpUsername: v.smtpUsername ? String(v.smtpUsername) : null,
+    smtpPassword: v.smtpPassword ? String(v.smtpPassword) : null,
+    smtpAuthType: (v.smtpAuthType as AccountInput["smtpAuthType"]) ?? null
   });
 
   const closeEdit = () => {
@@ -63,7 +71,15 @@ function AccountTab() {
   const openAdd = () => {
     setEditingId(null);
     form.resetFields();
-    form.setFieldsValue({ protocol: "imap", port: 993, tls: "ssl", authType: "login" });
+    form.setFieldsValue({
+      protocol: "imap",
+      port: 993,
+      tls: "ssl",
+      authType: "login",
+      smtpPort: 587,
+      smtpTls: "starttls",
+      smtpAuthType: "login"
+    });
     setEditOpen(true);
   };
 
@@ -92,7 +108,13 @@ function AccountTab() {
       tls: a.tls,
       username: a.username,
       authType: a.authType,
-      password: ""
+      password: "",
+      smtpHost: a.smtpHost ?? "",
+      smtpPort: a.smtpPort ?? 587,
+      smtpTls: a.smtpTls ?? "starttls",
+      smtpUsername: a.smtpUsername ?? "",
+      smtpAuthType: a.smtpAuthType ?? "login",
+      smtpPassword: ""
     });
     setEditOpen(true);
   };
@@ -112,6 +134,20 @@ function AccountTab() {
       message.error((e as Error).message);
     } finally {
       setTesting(false);
+    }
+  };
+
+  const testSmtp = async () => {
+    if (!editingId) return;
+    setTestingSmtp(true);
+    try {
+      const r = await api.testSmtp(editingId);
+      if (r.ok) message.success("SMTP: подключение успешно");
+      else message.error(r.error || "Ошибка SMTP");
+    } catch (e) {
+      message.error((e as Error).message);
+    } finally {
+      setTestingSmtp(false);
     }
   };
 
@@ -193,6 +229,31 @@ function AccountTab() {
             <Select options={AUTH_OPTIONS} style={{ width: 130 }} />
           </Form.Item>
         </Space>
+        <Divider plain style={{ fontSize: 13, margin: "12px 0" }}>
+          SMTP (отправка)
+        </Divider>
+        <Space wrap>
+          <Form.Item name="smtpHost" label="SMTP-сервер">
+            <Input placeholder="пусто = сервер IMAP" style={{ width: 180 }} />
+          </Form.Item>
+          <Form.Item name="smtpPort" label="Порт">
+            <InputNumber min={1} max={65535} />
+          </Form.Item>
+          <Form.Item name="smtpTls" label="Шифрование">
+            <Select options={TLS_OPTIONS} style={{ width: 130 }} />
+          </Form.Item>
+        </Space>
+        <Space wrap>
+          <Form.Item name="smtpUsername" label="Логин SMTP">
+            <Input placeholder="пусто = логин IMAP" style={{ width: 220 }} />
+          </Form.Item>
+          <Form.Item name="smtpPassword" label="Пароль SMTP">
+            <Input.Password placeholder="пусто = пароль IMAP" style={{ width: 200 }} />
+          </Form.Item>
+          <Form.Item name="smtpAuthType" label="Аутентификация">
+            <Select options={AUTH_OPTIONS} style={{ width: 130 }} />
+          </Form.Item>
+        </Space>
         <Space>
           <Button type="primary" htmlType="submit">
             {editingId ? "Сохранить" : "Добавить"}
@@ -200,6 +261,11 @@ function AccountTab() {
           <Button loading={testing} onClick={() => void testAccount()}>
             Проверить подключение
           </Button>
+          {editingId && (
+            <Button loading={testingSmtp} onClick={() => void testSmtp()}>
+              Проверить SMTP
+            </Button>
+          )}
           <Button onClick={closeEdit}>Отмена</Button>
         </Space>
       </Form>

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Button, Layout, Space, Tooltip, Typography } from "antd";
+import { Button, Layout, Segmented, Space, Tooltip, Typography } from "antd";
 import {
   MenuOutlined,
   ReloadOutlined,
@@ -7,7 +7,8 @@ import {
   SettingOutlined,
   CalendarOutlined,
   ImportOutlined,
-  StopOutlined
+  StopOutlined,
+  EditOutlined
 } from "@ant-design/icons";
 import { useStore } from "./store";
 import { api } from "./api";
@@ -20,6 +21,7 @@ import FetchModal from "./components/FetchModal";
 import AnalyzeModal from "./components/AnalyzeModal";
 import EmailViewer from "./components/EmailViewer";
 import SettingsModal from "./components/SettingsModal";
+import Composer from "./components/Composer";
 
 const { Header, Sider } = Layout;
 
@@ -98,6 +100,9 @@ export default function App() {
   const analyzeAll = useStore((s) => s.analyzeAll);
   const stopAnalysis = useStore((s) => s.stopAnalysis);
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const openCompose = useStore((s) => s.openCompose);
+  const threadView = useStore((s) => s.threadView);
+  const setThreadView = useStore((s) => s.setThreadView);
 
   const [collapsed, setCollapsed] = useState(false);
   const [listWidth, setListWidth] = useState(360);
@@ -175,8 +180,26 @@ export default function App() {
         >
           <Button type="text" icon={<MenuOutlined />} onClick={() => setCollapsed(!collapsed)} />
           <Typography.Text strong style={{ marginRight: 8, whiteSpace: "nowrap" }}>
-            {folder === "INBOX" ? "Входящие" : folder === "SPAM" ? "Спам" : "Обработанные"}
+            {folder === "INBOX"
+              ? "Входящие"
+              : folder === "Sent"
+                ? "Отправленные"
+                : folder === "SPAM"
+                  ? "Спам"
+                  : "Обработанные"}
           </Typography.Text>
+          <Button type="primary" icon={<EditOutlined />} onClick={() => openCompose("new")}>
+            Написать
+          </Button>
+          <Segmented
+            size="small"
+            options={[
+              { label: "Письма", value: "emails" },
+              { label: "Переписка", value: "threads" }
+            ]}
+            value={threadView ? "threads" : "emails"}
+            onChange={(v) => setThreadView(v === "threads")}
+          />
           <AnalysisProgressBadge />
           <Tooltip title="Сканировать ящик за период дат">
             <Button icon={<CalendarOutlined />} onClick={() => setFetchOpen(true)}>
@@ -214,6 +237,7 @@ export default function App() {
         </div>
       </Layout>
       <SettingsModal />
+      <Composer />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} />
       <FetchModal open={fetchOpen} onClose={() => setFetchOpen(false)} />
       <AnalyzeModal open={analyzeOpen} onClose={() => setAnalyzeOpen(false)} />

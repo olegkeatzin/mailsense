@@ -24,6 +24,11 @@ export interface Account {
   username: string;
   authType: AuthType;
   settings: AccountSettings;
+  smtpHost: string | null;
+  smtpPort: number | null;
+  smtpTls: TlsMode | null;
+  smtpUsername: string | null;
+  smtpAuthType: AuthType | null;
 }
 
 export interface AccountInput {
@@ -35,6 +40,12 @@ export interface AccountInput {
   password?: string;
   authType: AuthType;
   settings?: AccountSettings;
+  smtpHost?: string | null;
+  smtpPort?: number | null;
+  smtpTls?: TlsMode | null;
+  smtpUsername?: string | null;
+  smtpPassword?: string | null;
+  smtpAuthType?: AuthType | null;
 }
 
 export interface Email {
@@ -51,6 +62,11 @@ export interface Email {
   numberSourceAttachmentId: string | null;
   numberSourcePage: number;
   sendDate: string | null;
+  threadId: string | null;
+  cc: EmailAddress[];
+  replyTo: EmailAddress[];
+  inReplyTo: string | null;
+  references: string[];
   bodyText: string;
   bodyHtml: string | null;
   headers: Record<string, unknown>;
@@ -96,6 +112,58 @@ export interface AnalysisResult {
 export interface EmailView extends Email {
   attachments: Attachment[];
   analysis: AnalysisResult | null;
+}
+
+export interface ComposeAttachment {
+  filename: string;
+  mimeType: string;
+  data: string; // base64
+}
+
+export interface ComposeInput {
+  accountId: string;
+  to: EmailAddress[];
+  cc?: EmailAddress[];
+  bcc?: EmailAddress[];
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string | null;
+  attachments?: ComposeAttachment[];
+  inReplyToEmailId?: string | null;
+  inReplyToMessageId?: string | null;
+  references?: string[];
+}
+
+export interface DraftAttachment {
+  filename: string;
+  mimeType: string;
+  size: number;
+  data: string;
+}
+
+export interface Draft {
+  id: string;
+  accountId: string;
+  to: EmailAddress[];
+  cc: EmailAddress[];
+  bcc: EmailAddress[];
+  subject: string;
+  bodyText: string;
+  bodyHtml: string | null;
+  attachments: DraftAttachment[];
+  inReplyToEmailId: string | null;
+  inReplyToMessageId: string | null;
+  references: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ThreadGroup {
+  id: string;
+  subject: string;
+  count: number;
+  lastMessageAt: string | null;
+  emails: Email[];
 }
 
 export interface AiConfig {

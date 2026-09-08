@@ -10,6 +10,7 @@ import {
   cancelAnalysis,
   classifyKind,
   createAccount,
+  deleteDraft,
   deleteEmails,
   decryptPassword,
   fetchEmails,
@@ -20,8 +21,11 @@ import {
   getProgress,
   getPromptSettings,
   importEmails,
+  insertDraft,
   listAttachments,
+  listDrafts,
   listEmailsWithAnalysis,
+  listThreadsGrouped,
   removeAccount,
   renderPreviewImage,
   setAiConfig,
@@ -32,15 +36,19 @@ import {
   setPromptSettings,
   setSettingValue,
   getSettingValue,
+  sendEmail,
   stopAnalysis,
   testAiConnection,
   testConnection,
+  testSmtpConnection,
   updateAccountById,
+  updateDraft,
   upsertAnalysis,
   getAllSettings,
   type AccountInput,
   type AnalysisStatus,
-  type Category
+  type Category,
+  type ComposeInput
 } from "@mailsense/core";
 import { logger } from "@mailsense/core";
 
@@ -61,6 +69,11 @@ function accountDto(a: {
   username: string;
   authType: string;
   settings: unknown;
+  smtpHost: string | null;
+  smtpPort: number | null;
+  smtpTls: string | null;
+  smtpUsername: string | null;
+  smtpAuthType: string | null;
 }) {
   return {
     id: a.id,
@@ -70,7 +83,12 @@ function accountDto(a: {
     tls: a.tls,
     username: a.username,
     authType: a.authType,
-    settings: a.settings
+    settings: a.settings,
+    smtpHost: a.smtpHost,
+    smtpPort: a.smtpPort,
+    smtpTls: a.smtpTls,
+    smtpUsername: a.smtpUsername,
+    smtpAuthType: a.smtpAuthType
   };
 }
 
@@ -384,6 +402,78 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
       setEmailFolder(req.params.emailId, category === "spam" ? "SPAM" : "INBOX");
     }
     res.json(result);
+  });
+
+  app.get("/api/threads", (req, res) => {
+    res.json(
+      listThreadsGrouped(
+        (req.query.accountId as string) || undefined,
+        (req.query.folder as string) || undefined
+      )
+    );
+  });
+
+  // -------- отправка / черновики --------
+  app.post(
+    "/api/emails/send",
+    asyncHandler(async (req, res) => {
+      const compose = req.body as ComposeInput;
+      const result = await sendEmail(compose);
+      res.status(201).json(result);
+    })
+  );
+
+  app.post(
+    "/api/accounts/:id/test-smtp",
+    asyncHandler(async (req, res) => {
+      const result = await testSmtpConnection(req.params.id);
+      res.json(result);
+    })
+  );
+
+  app.get("/api/drafts", (req, res) => {
+    res.json(listDrafts((req.query.accountId as string) || undefined));
+  });
+
+  app.post("/api/drafts", (req, res) => {
+    const d = req.body ?? {};
+    const draft = insertDraft({
+      accountId: d.accountId,
+      to: d.to ?? [],
+      cc: d.cc ?? [],
+      bcc: d.bcc ?? [],
+      subject: d.subject ?? "",
+      bodyText: d.bodyText ?? "",
+      bodyHtml: d.bodyHtml ?? null,
+      attachments: d.attachments ?? [],
+      inReplyToEmailId: d.inReplyToEmailId ?? null,
+      inReplyToMessageId: d.inReplyToMessageId ?? null,
+      references: d.references ?? []
+    });
+    res.status(201).json(draft);
+  });
+
+  app.put("/api/drafts/:id", (req, res) => {
+    const d = req.body ?? {};
+    const draft = updateDraft(req.params.id, {
+      to: d.to,
+      cc: d.cc,
+      bcc: d.bcc,
+      subject: d.subject,
+      bodyText: d.bodyText,
+      bodyHtml: d.bodyHtml,
+      attachments: d.attachments,
+      inReplyToEmailId: d.inReplyToEmailId,
+      inReplyToMessageId: d.inReplyToMessageId,
+      references: d.references
+    });
+    if (!draft) return res.status(404).json({ error: "Черновик не найден" });
+    res.json(draft);
+  });
+
+  app.delete("/api/drafts/:id", (req, res) => {
+    deleteDraft(req.params.id);
+    res.json({ ok: true });
   });
 
   // -------- attachments --------

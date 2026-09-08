@@ -1,6 +1,6 @@
 {
   "name": "@mailsense/core",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -15,6 +15,7 @@
     "test": "jest"
   },
   "dependencies": {
+    "@kenjiuno/msgreader": "^1.28.0",
     "@napi-rs/canvas": "^0.1.65",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.36.4",
@@ -22,6 +23,7 @@
     "jszip": "^3.10.1",
     "mailparser": "^3.7.2",
     "mammoth": "^1.8.0",
+    "nodemailer": "9.0.5",
     "openai": "^4.79.1",
     "p-queue": "^8.0.1",
     "pdfjs-dist": "^4.10.38",

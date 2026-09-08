@@ -11,6 +11,10 @@ export interface ParsedEmail {
   subject: string;
   from: EmailAddress | null;
   to: EmailAddress[];
+  cc: EmailAddress[];
+  replyTo: EmailAddress[];
+  inReplyTo: string | null;
+  references: string[];
   date: string | null;
   bodyText: string;
   bodyHtml: string | null;
@@ -43,6 +47,17 @@ function allAddresses(addr: AddressObject | AddressObject[] | undefined): EmailA
   return list.flatMap((a) => (a.value ?? []).map(toEmailAddress));
 }
 
+/** Снимает угловые скобки с Message-ID (полученные письма могут приходить как "<id>"). */
+export function normalizeMessageId(id: string | null | undefined): string {
+  return (id ?? "").trim().replace(/^</, "").replace(/>$/, "");
+}
+
+function normalizeReferences(refs: string | string[] | undefined): string[] {
+  if (!refs) return [];
+  if (Array.isArray(refs)) return refs.map((r) => String(r).trim()).filter(Boolean);
+  return refs.split(/\s+/).map((r) => r.trim()).filter(Boolean);
+}
+
 function headersToObj(headers: Headers): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {};
   for (const [k, v] of headers) {
@@ -58,13 +73,17 @@ export async function parseRawEmail(source: Buffer): Promise<ParsedEmail> {
 
   const subject = parsed.subject ?? "(без темы)";
   const hdrId = parsed.headers?.get("message-id");
-  const messageId = parsed.messageId ?? (typeof hdrId === "string" ? hdrId : "");
+  const messageId = normalizeMessageId(parsed.messageId ?? (typeof hdrId === "string" ? hdrId : ""));
 
   return {
     messageId,
     subject,
     from: firstAddress(parsed.from),
     to: allAddresses(parsed.to),
+    cc: allAddresses(parsed.cc),
+    replyTo: allAddresses(parsed.replyTo),
+    inReplyTo: normalizeMessageId(typeof parsed.inReplyTo === "string" ? parsed.inReplyTo : null) || null,
+    references: normalizeReferences(parsed.references).map(normalizeMessageId),
     date: parsed.date ? parsed.date.toISOString() : null,
     bodyText: (parsed.text ?? "").trim(),
     bodyHtml: parsed.html || null,

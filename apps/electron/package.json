@@ -1,6 +1,6 @@
 {
   "name": "mailsense-electron",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Почтовый помощник с ИИ-аналитикой (MailSense)",
   "author": "MailSense",

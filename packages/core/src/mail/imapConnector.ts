@@ -1,6 +1,6 @@
 import { ImapFlow } from "imapflow";
 import type { Account } from "../types.js";
-import type { FetchOptions, MailConnector, RawMessage } from "./connector.js";
+import type { FetchOptions, MailConnector, MailboxInfo, RawMessage } from "./connector.js";
 import { logger } from "../logger.js";
 
 export class ImapConnector implements MailConnector {
@@ -51,6 +51,21 @@ export class ImapConnector implements MailConnector {
       lock.release();
     }
     return out;
+  }
+
+  async listMailboxes(): Promise<MailboxInfo[]> {
+    if (!this.client) throw new Error("IMAP: не подключён");
+    const list = await this.client.list();
+    return list.map((m) => ({
+      path: m.path,
+      name: m.name,
+      specialUse: typeof m.specialUse === "string" ? m.specialUse : undefined
+    }));
+  }
+
+  async appendRaw(folder: string, raw: Buffer, flags?: string[]): Promise<void> {
+    if (!this.client) throw new Error("IMAP: не подключён");
+    await this.client.append(folder, raw, flags ?? ["\\Seen"], new Date());
   }
 
   async disconnect(): Promise<void> {

@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { FixedSizeList } from "react-window";
-import { Checkbox, Empty, Spin, Tag } from "antd";
+import { Badge, Checkbox, Empty, Spin, Tag } from "antd";
 import { useStore } from "../store";
-import type { Email } from "../types";
+import type { Email, ThreadGroup } from "../types";
 import {
   categoryColor,
   formatDate,
@@ -115,13 +115,167 @@ function EmailRowItem({ e, selected }: { e: Email; selected: boolean }) {
   );
 }
 
+function normId(id: string | null | undefined): string {
+  return (id ?? "").trim().replace(/^</, "").replace(/>$/, "");
+}
+
+/** Строит дерево переписки по In-Reply-To / References и рендерит его с отступами. */
+function ThreadTree({
+  emails,
+  selectedId,
+  selectedIds,
+  onSelect,
+  toggleSelect
+}: {
+  emails: Email[];
+  selectedId: string | null;
+  selectedIds: string[];
+  onSelect: (id: string) => void;
+  toggleSelect: (id: string) => void;
+}) {
+  const byId = new Map<string, Email>();
+  for (const e of emails) byId.set(normId(e.messageId), e);
+
+  const childrenMap = new Map<string, Email[]>();
+  const roots: Email[] = [];
+  for (const e of emails) {
+    const parentId =
+      normId(e.inReplyTo) || (e.references?.length ? normId(e.references[e.references.length - 1]) : "");
+    const parent = parentId ? byId.get(parentId) : undefined;
+    if (parent) {
+      const arr = childrenMap.get(parent.id) ?? [];
+      arr.push(e);
+      childrenMap.set(parent.id, arr);
+    } else {
+      roots.push(e);
+    }
+  }
+  const byDate = (a: Email, b: Email) => (a.date ?? "").localeCompare(b.date ?? "");
+  roots.sort(byDate);
+  for (const arr of childrenMap.values()) arr.sort(byDate);
+
+  const render = (e: Email, depth: number): ReactNode => {
+    const kids = childrenMap.get(e.id) ?? [];
+    return (
+      <div key={e.id}>
+        <div
+          onClick={() => onSelect(e.id)}
+          style={{
+            cursor: "pointer",
+            marginLeft: depth * 20,
+            borderLeft: "2px solid #e0e0e0",
+            background: depth === 0 ? "#fff" : undefined,
+            display: "flex"
+          }}
+        >
+          <div
+            onClick={(ev) => ev.stopPropagation()}
+            style={{ display: "flex", alignItems: "center", paddingLeft: 8 }}
+          >
+            <Checkbox checked={selectedIds.includes(e.id)} onChange={() => toggleSelect(e.id)} />
+          </div>
+          <div
+            style={{
+              flex: 1,
+              minWidth: 0,
+              borderLeft: selectedId === e.id ? "3px solid #1677ff" : "3px solid transparent",
+              paddingLeft: 6
+            }}
+          >
+            <EmailRowItem e={e} selected={e.id === selectedId} />
+          </div>
+        </div>
+        {kids.map((k) => render(k, depth + 1))}
+      </div>
+    );
+  };
+
+  return <div style={{ background: "#fafafa", paddingBottom: 4 }}>{roots.map((r) => render(r, 0))}</div>;
+}
+
+function ThreadGroupItem({
+  t,
+  expanded,
+  onToggle,
+  selectedId,
+  selectedIds,
+  onSelect,
+  toggleSelect,
+  toggleSelectMany
+}: {
+  t: ThreadGroup;
+  expanded: boolean;
+  onToggle: () => void;
+  selectedId: string | null;
+  selectedIds: string[];
+  onSelect: (id: string) => void;
+  toggleSelect: (id: string) => void;
+  toggleSelectMany: (ids: string[]) => void;
+}) {
+  return (
+    <div>
+      <div
+        onClick={onToggle}
+        style={{
+          padding: "10px 12px",
+          borderBottom: "1px solid #f5f5f5",
+          cursor: "pointer",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          background: "#fff"
+        }}
+      >
+        <Checkbox
+          checked={t.emails.length > 0 && t.emails.every((e) => selectedIds.includes(e.id))}
+          indeterminate={
+            t.emails.some((e) => selectedIds.includes(e.id)) && !t.emails.every((e) => selectedIds.includes(e.id))
+          }
+          onChange={() => toggleSelectMany(t.emails.map((e) => e.id))}
+          onClick={(ev) => ev.stopPropagation()}
+        />
+        <Badge count={t.count} size="small" overflowCount={99} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontWeight: 600,
+              fontSize: 13,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap"
+            }}
+          >
+            {t.subject}
+          </div>
+          <div style={{ fontSize: 12, color: "#888" }}>
+            {formatDate(t.lastMessageAt)} · {t.count} сообщ.
+          </div>
+        </div>
+      </div>
+      {expanded ? (
+        <ThreadTree
+          emails={t.emails}
+          selectedId={selectedId}
+          selectedIds={selectedIds}
+          onSelect={onSelect}
+          toggleSelect={toggleSelect}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 export default function EmailList() {
   const emails = useStore((s) => s.emails);
+  const threads = useStore((s) => s.threads);
+  const threadView = useStore((s) => s.threadView);
   const selectedId = useStore((s) => s.selectedId);
   const select = useStore((s) => s.select);
   const loading = useStore((s) => s.loading);
   const selectedIds = useStore((s) => s.selectedIds);
   const toggleSelect = useStore((s) => s.toggleSelect);
+  const toggleSelectMany = useStore((s) => s.toggleSelectMany);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(600);
@@ -136,13 +290,41 @@ export default function EmailList() {
     return () => ro.disconnect();
   }, []);
 
-  if (loading && emails.length === 0) {
+  if (loading && emails.length === 0 && threads.length === 0) {
     return (
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Spin />
       </div>
     );
   }
+
+  if (threadView) {
+    if (threads.length === 0) {
+      return (
+        <div style={{ flex: 1 }}>
+          <Empty description="Нет переписки" style={{ marginTop: 80 }} />
+        </div>
+      );
+    }
+    return (
+      <div style={{ flex: 1, overflow: "auto" }}>
+        {threads.map((t) => (
+          <ThreadGroupItem
+            key={t.id}
+            t={t}
+            expanded={expanded === t.id}
+            onToggle={() => setExpanded(expanded === t.id ? null : t.id)}
+            selectedId={selectedId}
+            selectedIds={selectedIds}
+            onSelect={(id) => void select(id)}
+            toggleSelect={toggleSelect}
+            toggleSelectMany={toggleSelectMany}
+          />
+        ))}
+      </div>
+    );
+  }
+
   if (emails.length === 0) {
     return (
       <div style={{ flex: 1 }}>

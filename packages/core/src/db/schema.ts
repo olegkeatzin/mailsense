@@ -19,6 +19,12 @@ export const accounts = sqliteTable(
     passwordEncrypted: text("password_encrypted").notNull(),
     authType: text("auth_type").notNull().default("login"),
     settings: text("settings").notNull().default("{}"),
+    smtpHost: text("smtp_host"),
+    smtpPort: integer("smtp_port"),
+    smtpTls: text("smtp_tls"),
+    smtpUsername: text("smtp_username"),
+    smtpPasswordEncrypted: text("smtp_password_encrypted"),
+    smtpAuthType: text("smtp_auth_type").default("login"),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull()
   }
@@ -42,6 +48,11 @@ export const emails = sqliteTable(
     numberSourceAttachmentId: text("number_source_attachment_id"),
     numberSourcePage: integer("number_source_page").notNull().default(1),
     sendDate: text("send_date"),
+    threadId: text("thread_id"),
+    cc: text("cc").notNull().default("[]"),
+    replyTo: text("reply_to").notNull().default("[]"),
+    inReplyTo: text("in_reply_to"),
+    references: text("refs").notNull().default("[]"),
     bodyText: text("body_text").notNull().default(""),
     bodyHtml: text("body_html"),
     headers: text("headers").notNull().default("{}"),
@@ -52,7 +63,8 @@ export const emails = sqliteTable(
   (t) => ({
     msgIdx: uniqueIndex("emails_message_id_idx").on(t.messageId),
     acctIdx: index("emails_account_folder_idx").on(t.accountId, t.folder),
-    statusIdx: index("emails_status_idx").on(t.analysisStatus)
+    statusIdx: index("emails_status_idx").on(t.analysisStatus),
+    threadIdx: index("emails_thread_idx").on(t.threadId)
   })
 );
 
@@ -108,12 +120,56 @@ export const deletedEmails = sqliteTable(
   {
     id: text("id").primaryKey(),
     accountId: text("account_id").notNull(),
+    folder: text("folder").notNull().default("INBOX"),
     uid: text("uid").notNull(),
     messageId: text("message_id").notNull(),
     deletedAt: text("deleted_at").notNull()
   },
   (t) => ({
-    acctUidIdx: uniqueIndex("deleted_emails_account_uid_idx").on(t.accountId, t.uid)
+    acctUidIdx: uniqueIndex("deleted_emails_account_folder_uid_idx").on(t.accountId, t.folder, t.uid)
+  })
+);
+
+export const threads = sqliteTable(
+  "threads",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    normalizedSubject: text("normalized_subject").notNull().default(""),
+    rootMessageId: text("root_message_id"),
+    lastMessageAt: text("last_message_at"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => ({
+    acctIdx: index("threads_account_idx").on(t.accountId)
+  })
+);
+
+export const drafts = sqliteTable(
+  "drafts",
+  {
+    id: text("id").primaryKey(),
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    to: text("to").notNull().default("[]"),
+    cc: text("cc").notNull().default("[]"),
+    bcc: text("bcc").notNull().default("[]"),
+    subject: text("subject").notNull().default(""),
+    bodyText: text("body_text").notNull().default(""),
+    bodyHtml: text("body_html"),
+    attachments: text("attachments").notNull().default("[]"),
+    inReplyToEmailId: text("in_reply_to_email_id"),
+    inReplyToMessageId: text("in_reply_to_message_id"),
+    references: text("refs").notNull().default("[]"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => ({
+    acctIdx: index("drafts_account_idx").on(t.accountId)
   })
 );
 
@@ -122,9 +178,11 @@ export const settings = sqliteTable("settings", {
   value: text("value").notNull()
 });
 
-export const schema = { accounts, emails, attachments, analysisResults, deletedEmails, settings };
+export const schema = { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, settings };
 
 export type DbEmails = typeof emails.$inferSelect;
 export type DbAccounts = typeof accounts.$inferSelect;
 export type DbAttachments = typeof attachments.$inferSelect;
 export type DbAnalysisResults = typeof analysisResults.$inferSelect;
+export type DbThreads = typeof threads.$inferSelect;
+export type DbDrafts = typeof drafts.$inferSelect;

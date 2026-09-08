@@ -15,6 +15,7 @@ import AnalysisPanel from "./AnalysisPanel";
 
 const FOLDER_OPTIONS = [
   { value: "INBOX", label: "Входящие" },
+  { value: "Sent", label: "Отправленные" },
   { value: "PROCESSED", label: "Обработанные" },
   { value: "SPAM", label: "Спам" }
 ];
@@ -224,6 +225,7 @@ export default function EmailViewer() {
   const view = useStore((s) => s.emailView);
   const analyze = useStore((s) => s.analyze);
   const moveSelected = useStore((s) => s.moveSelected);
+  const openCompose = useStore((s) => s.openCompose);
   const [activeTab, setActiveTab] = useState("mail");
 
   if (!view) {
@@ -246,6 +248,15 @@ export default function EmailViewer() {
         </Typography.Title>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           <Tag color={statusColor(view.analysisStatus)}>{statusLabel(view.analysisStatus)}</Tag>
+          <Button size="small" onClick={() => openCompose("reply", view.id)}>
+            Ответить
+          </Button>
+          <Button size="small" onClick={() => openCompose("replyAll", view.id)}>
+            Ответить всем
+          </Button>
+          <Button size="small" onClick={() => openCompose("forward", view.id)}>
+            Переслать
+          </Button>
           <Button icon={<ThunderboltOutlined />} onClick={() => void analyze(view.id)}>
             Анализировать
           </Button>

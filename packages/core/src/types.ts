@@ -32,6 +32,13 @@ export interface Account {
   passwordEncrypted: string;
   authType: AuthType;
   settings: AccountSettings;
+  /** SMTP (отправка); null = не настроен */
+  smtpHost: string | null;
+  smtpPort: number | null;
+  smtpTls: TlsMode | null;
+  smtpUsername: string | null;
+  smtpPasswordEncrypted: string | null;
+  smtpAuthType: AuthType | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -46,6 +53,12 @@ export interface AccountInput {
   password?: string;
   authType: AuthType;
   settings?: AccountSettings;
+  smtpHost?: string | null;
+  smtpPort?: number | null;
+  smtpTls?: TlsMode | null;
+  smtpUsername?: string | null;
+  smtpPassword?: string | null;
+  smtpAuthType?: AuthType | null;
 }
 
 export interface Email {
@@ -62,6 +75,11 @@ export interface Email {
   numberSourceAttachmentId: string | null;
   numberSourcePage: number;
   sendDate: string | null;
+  threadId: string | null;
+  cc: EmailAddress[];
+  replyTo: EmailAddress[];
+  inReplyTo: string | null;
+  references: string[];
   bodyText: string;
   bodyHtml: string | null;
   headers: Record<string, unknown>;
@@ -122,3 +140,60 @@ export interface Settings {
 }
 
 export type Folder = "INBOX" | "PROCESSED" | "SPAM";
+
+// ---------------- Отправка / черновики / треды ----------------
+
+export interface Thread {
+  id: string;
+  accountId: string;
+  normalizedSubject: string;
+  rootMessageId: string | null;
+  lastMessageAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DraftAttachment {
+  filename: string;
+  mimeType: string;
+  size: number;
+  data: string; // base64
+}
+
+export interface Draft {
+  id: string;
+  accountId: string;
+  to: EmailAddress[];
+  cc: EmailAddress[];
+  bcc: EmailAddress[];
+  subject: string;
+  bodyText: string;
+  bodyHtml: string | null;
+  attachments: DraftAttachment[];
+  inReplyToEmailId: string | null;
+  inReplyToMessageId: string | null;
+  references: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Вложение, приходящее из UI (base64). */
+export interface ComposeAttachment {
+  filename: string;
+  mimeType: string;
+  data: string; // base64
+}
+
+export interface ComposeInput {
+  accountId: string;
+  to: EmailAddress[];
+  cc?: EmailAddress[];
+  bcc?: EmailAddress[];
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string | null;
+  attachments?: ComposeAttachment[];
+  inReplyToEmailId?: string | null;
+  inReplyToMessageId?: string | null;
+  references?: string[];
+}

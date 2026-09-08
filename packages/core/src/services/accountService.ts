@@ -22,13 +22,18 @@ export function getAccountById(id: string): Account | null {
 export function createAccount(input: AccountInput): Account {
   const secrets = getContext().secrets;
   if (!input.password) throw new Error("Не указан пароль");
-  return insertAccount(input, secrets.encrypt(input.password));
+  return insertAccount(
+    input,
+    secrets.encrypt(input.password),
+    input.smtpPassword ? secrets.encrypt(input.smtpPassword) : null
+  );
 }
 
 export function updateAccountById(id: string, input: AccountInput): Account | null {
   const secrets = getContext().secrets;
   const enc = input.password ? secrets.encrypt(input.password) : undefined;
-  return updateAccount(id, input, enc);
+  const smtpEnc = input.smtpPassword ? secrets.encrypt(input.smtpPassword) : undefined;
+  return updateAccount(id, input, enc, smtpEnc);
 }
 
 export function removeAccount(id: string): void {
@@ -37,6 +42,14 @@ export function removeAccount(id: string): void {
 
 export function decryptPassword(account: Account): string {
   return getContext().secrets.decrypt(account.passwordEncrypted);
+}
+
+/** Пароль SMTP: отдельный, если задан; иначе fallback на пароль IMAP. */
+export function decryptSmtpPassword(account: Account): string {
+  if (account.smtpPasswordEncrypted) {
+    return getContext().secrets.decrypt(account.smtpPasswordEncrypted);
+  }
+  return decryptPassword(account);
 }
 
 export function buildConnector(account: Account, password: string): MailConnector {
@@ -56,6 +69,12 @@ export async function testConnection(input: AccountInput): Promise<{ ok: boolean
     passwordEncrypted: "",
     authType: input.authType,
     settings: input.settings ?? {},
+    smtpHost: input.smtpHost ?? null,
+    smtpPort: input.smtpPort ?? null,
+    smtpTls: input.smtpTls ?? null,
+    smtpUsername: input.smtpUsername ?? null,
+    smtpPasswordEncrypted: "",
+    smtpAuthType: input.smtpAuthType ?? null,
     createdAt: "",
     updatedAt: ""
   };

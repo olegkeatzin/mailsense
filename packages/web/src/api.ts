@@ -2,8 +2,11 @@ import type {
   Account,
   AccountInput,
   AiConfig,
+  ComposeInput,
+  Draft,
   Email,
-  EmailView
+  EmailView,
+  ThreadGroup
 } from "./types";
 
 const BASE = "";
@@ -41,6 +44,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify(input)
     }),
+  testSmtp: (id: string) =>
+    request<{ ok: boolean; error?: string }>("/api/accounts/" + id + "/test-smtp", { method: "POST" }),
   fetchAccount: (id: string, range?: { since?: string; until?: string }) =>
     request<{ added: number; skipped: number }>("/api/accounts/" + id + "/fetch", {
       method: "POST",
@@ -88,6 +93,16 @@ export const api = {
     return request<Email[]>("/api/emails" + (q ? "?" + q : ""));
   },
   email: (id: string) => request<EmailView>("/api/emails/" + id),
+  threads: (accountId?: string, folder?: string) =>
+    request<ThreadGroup[]>(
+      "/api/threads" +
+        (accountId || folder
+          ? "?" +
+            [accountId ? "accountId=" + encodeURIComponent(accountId) : "", folder ? "folder=" + encodeURIComponent(folder) : ""]
+              .filter(Boolean)
+              .join("&")
+          : "")
+    ),
   setFolder: (id: string, folder: string) =>
     request<{ ok: boolean }>("/api/emails/" + id + "/folder", {
       method: "PATCH",
@@ -131,6 +146,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ accountId, folder, files })
     }),
+
+  sendEmail: (compose: ComposeInput) =>
+    request<{ emailId: string; messageId: string }>("/api/emails/send", {
+      method: "POST",
+      body: JSON.stringify(compose)
+    }),
+  drafts: (accountId?: string) =>
+    request<Draft[]>("/api/drafts" + (accountId ? "?accountId=" + encodeURIComponent(accountId) : "")),
+  createDraft: (draft: Partial<Draft> & { accountId: string }) =>
+    request<Draft>("/api/drafts", { method: "POST", body: JSON.stringify(draft) }),
+  updateDraft: (id: string, patch: Record<string, unknown>) =>
+    request<Draft>("/api/drafts/" + id, { method: "PUT", body: JSON.stringify(patch) }),
+  deleteDraft: (id: string) =>
+    request<{ ok: boolean }>("/api/drafts/" + id, { method: "DELETE" }),
 
   updateAnalysis: (emailId: string, patch: Record<string, unknown>) =>
     request("/api/analysis/" + emailId, { method: "PATCH", body: JSON.stringify(patch) }),

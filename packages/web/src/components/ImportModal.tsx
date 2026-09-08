@@ -5,6 +5,7 @@ import { useStore } from "../store";
 
 const FOLDER_OPTIONS = [
   { value: "INBOX", label: "Входящие" },
+  { value: "Sent", label: "Отправленные" },
   { value: "PROCESSED", label: "Обработанные" },
   { value: "SPAM", label: "Спам" }
 ];
@@ -60,7 +61,7 @@ export default function ImportModal({ open, onClose }: { open: boolean; onClose:
   };
 
   return (
-    <Modal open={open} onCancel={onClose} footer={null} title="Импорт писем (.eml / .mbox)">
+    <Modal open={open} onCancel={onClose} footer={null} title="Импорт писем (.eml / .mbox / .msg — Thunderbird, Outlook)">
       <Space direction="vertical" style={{ width: "100%" }} size="middle">
         <div>
           <Typography.Text>Аккаунт назначения</Typography.Text>

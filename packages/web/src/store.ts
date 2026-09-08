@@ -1,9 +1,10 @@
 import { create } from "zustand";
 import { api } from "./api";
-import type { Account, AiConfig, AnalysisStatus, Email, EmailView } from "./types";
+import type { Account, AiConfig, AnalysisStatus, Email, EmailView, ThreadGroup } from "./types";
 
 export type SortBy = "date" | "priority";
 export type SortDir = "asc" | "desc";
+export type ComposeMode = "new" | "reply" | "replyAll" | "forward";
 
 export interface FilterState {
   categories: string[];
@@ -34,6 +35,13 @@ interface State extends FilterState {
   loading: boolean;
   settingsOpen: boolean;
   aiConfig: AiConfig | null;
+  compose: { open: boolean; mode: ComposeMode; emailId: string | null };
+  openCompose: (mode: ComposeMode, emailId?: string | null) => void;
+  closeCompose: () => void;
+  threadView: boolean;
+  threads: ThreadGroup[];
+  setThreadView: (v: boolean) => void;
+  loadThreads: () => Promise<void>;
 
   init: () => Promise<void>;
   loadAccounts: () => Promise<void>;
@@ -53,6 +61,7 @@ interface State extends FilterState {
   moveSelected: (folder: string) => Promise<void>;
   updateAnalysis: (patch: Record<string, unknown>) => Promise<void>;
   toggleSelect: (id: string) => void;
+  toggleSelectMany: (ids: string[]) => void;
   clearSelection: () => void;
   bulkAnalyze: () => Promise<void>;
   bulkMove: (folder: string) => Promise<void>;
@@ -75,6 +84,9 @@ export const useStore = create<State>()((set, get) => ({
   loading: false,
   settingsOpen: false,
   aiConfig: null,
+  compose: { open: false, mode: "new", emailId: null },
+  threadView: false,
+  threads: [],
   categories: [],
   minPriority: null,
   tag: null,
@@ -163,11 +175,13 @@ export const useStore = create<State>()((set, get) => ({
   setFolder: (folder: string) => {
     set({ folder });
     void get().loadEmails();
+    if (get().threadView) void get().loadThreads();
   },
 
   setAccountFilter: (accountFilter: string | null) => {
     set({ accountFilter });
     void get().loadEmails();
+    if (get().threadView) void get().loadThreads();
   },
 
   setFilter: (patch: Partial<FilterState>) => {
@@ -218,6 +232,19 @@ export const useStore = create<State>()((set, get) => ({
 
   setSettingsOpen: (v: boolean) => set({ settingsOpen: v }),
 
+  openCompose: (mode, emailId = null) => set({ compose: { open: true, mode, emailId } }),
+  closeCompose: () => set({ compose: { open: false, mode: "new", emailId: null } }),
+
+  setThreadView: (v: boolean) => {
+    set({ threadView: v });
+    if (v) void get().loadThreads();
+  },
+  loadThreads: async () => {
+    const s = get();
+    const threads = await api.threads(s.accountFilter ?? undefined, s.folder);
+    set({ threads });
+  },
+
   moveSelected: async (folder: string) => {
     const id = get().selectedId;
     if (!id) return;
@@ -235,6 +262,13 @@ export const useStore = create<State>()((set, get) => ({
   toggleSelect: (id: string) => {
     const cur = get().selectedIds;
     set({ selectedIds: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] });
+  },
+
+  toggleSelectMany: (ids: string[]) => {
+    const cur = get().selectedIds;
+    const allSelected = ids.length > 0 && ids.every((id) => cur.includes(id));
+    const next = allSelected ? cur.filter((id) => !ids.includes(id)) : [...new Set([...cur, ...ids])];
+    set({ selectedIds: next });
   },
 
   clearSelection: () => set({ selectedIds: [] }),

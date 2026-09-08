@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { getDb } from "./db/index.js";
 import { schema } from "./db/schema.js";
+import { normalizeMessageId } from "./mail/parser.js";
 import type {
   Account,
   AccountInput,
@@ -9,12 +10,15 @@ import type {
   AnalysisStatus,
   Attachment,
   Category,
+  Draft,
+  DraftAttachment,
   Email,
   EmailAddress,
-  EmailView
+  EmailView,
+  Thread
 } from "./types.js";
 
-const { accounts, emails, attachments, analysisResults, deletedEmails, settings } = schema;
+const { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, settings } = schema;
 
 function now(): string {
   return new Date().toISOString();
@@ -42,6 +46,12 @@ export function mapAccount(row: typeof accounts.$inferSelect): Account {
     passwordEncrypted: row.passwordEncrypted,
     authType: row.authType as Account["authType"],
     settings: jparse<Account["settings"]>(row.settings, {}),
+    smtpHost: row.smtpHost,
+    smtpPort: row.smtpPort,
+    smtpTls: row.smtpTls as Account["smtpTls"],
+    smtpUsername: row.smtpUsername,
+    smtpPasswordEncrypted: row.smtpPasswordEncrypted,
+    smtpAuthType: row.smtpAuthType as Account["smtpAuthType"],
     createdAt: row.createdAt,
     updatedAt: row.updatedAt
   };
@@ -60,7 +70,11 @@ export function countAccounts(): number {
   return getDb().select().from(accounts).all().length;
 }
 
-export function insertAccount(input: AccountInput, passwordEncrypted: string): Account {
+export function insertAccount(
+  input: AccountInput,
+  passwordEncrypted: string,
+  smtpPasswordEncrypted: string | null = null
+): Account {
   const db = getDb();
   const id = randomUUID();
   const ts = now();
@@ -75,6 +89,12 @@ export function insertAccount(input: AccountInput, passwordEncrypted: string): A
       passwordEncrypted,
       authType: input.authType,
       settings: JSON.stringify(input.settings ?? {}),
+      smtpHost: input.smtpHost ?? null,
+      smtpPort: input.smtpPort ?? null,
+      smtpTls: input.smtpTls ?? null,
+      smtpUsername: input.smtpUsername ?? null,
+      smtpPasswordEncrypted: smtpPasswordEncrypted ?? null,
+      smtpAuthType: input.smtpAuthType ?? null,
       createdAt: ts,
       updatedAt: ts
     })
@@ -82,7 +102,12 @@ export function insertAccount(input: AccountInput, passwordEncrypted: string): A
   return getAccount(id)!;
 }
 
-export function updateAccount(id: string, input: AccountInput, passwordEncrypted?: string): Account | null {
+export function updateAccount(
+  id: string,
+  input: AccountInput,
+  passwordEncrypted?: string,
+  smtpPasswordEncrypted?: string | null
+): Account | null {
   const db = getDb();
   const existing = getAccount(id);
   if (!existing) return null;
@@ -95,6 +120,12 @@ export function updateAccount(id: string, input: AccountInput, passwordEncrypted
       username: input.username,
       authType: input.authType,
       settings: JSON.stringify(input.settings ?? {}),
+      smtpHost: input.smtpHost === undefined ? existing.smtpHost : input.smtpHost,
+      smtpPort: input.smtpPort === undefined ? existing.smtpPort : input.smtpPort,
+      smtpTls: input.smtpTls === undefined ? existing.smtpTls : input.smtpTls,
+      smtpUsername: input.smtpUsername === undefined ? existing.smtpUsername : input.smtpUsername,
+      smtpAuthType: input.smtpAuthType === undefined ? existing.smtpAuthType : input.smtpAuthType,
+      ...(smtpPasswordEncrypted ? { smtpPasswordEncrypted } : {}),
       ...(passwordEncrypted ? { passwordEncrypted } : {}),
       updatedAt: now()
     })
@@ -124,6 +155,11 @@ function mapEmail(row: typeof emails.$inferSelect): Email {
     numberSourceAttachmentId: row.numberSourceAttachmentId,
     numberSourcePage: row.numberSourcePage,
     sendDate: row.sendDate,
+    threadId: row.threadId,
+    cc: jparse<EmailAddress[]>(row.cc, []),
+    replyTo: jparse<EmailAddress[]>(row.replyTo, []),
+    inReplyTo: row.inReplyTo,
+    references: jparse<string[]>(row.references, []),
     bodyText: row.bodyText,
     bodyHtml: row.bodyHtml,
     headers: jparse<Record<string, unknown>>(row.headers, {}),
@@ -140,10 +176,18 @@ export function emailExistsByMessageId(messageId: string): boolean {
   return !!db.select({ id: deletedEmails.id }).from(deletedEmails).where(eq(deletedEmails.messageId, messageId)).get();
 }
 
-export function knownUidsForAccount(accountId: string): Set<string> {
+export function knownUidsForAccount(accountId: string, folder: string): Set<string> {
   const db = getDb();
-  const rows = db.select({ uid: emails.uid }).from(emails).where(eq(emails.accountId, accountId)).all();
-  const deleted = db.select({ uid: deletedEmails.uid }).from(deletedEmails).where(eq(deletedEmails.accountId, accountId)).all();
+  const rows = db
+    .select({ uid: emails.uid })
+    .from(emails)
+    .where(and(eq(emails.accountId, accountId), eq(emails.folder, folder)))
+    .all();
+  const deleted = db
+    .select({ uid: deletedEmails.uid })
+    .from(deletedEmails)
+    .where(and(eq(deletedEmails.accountId, accountId), eq(deletedEmails.folder, folder)))
+    .all();
   const set = new Set(rows.map((r) => r.uid));
   for (const d of deleted) set.add(d.uid);
   return set;
@@ -157,11 +201,17 @@ export function insertEmail(e: {
   subject: string;
   from: EmailAddress | null;
   to: EmailAddress[];
+  cc?: EmailAddress[];
+  replyTo?: EmailAddress[];
+  inReplyTo?: string | null;
+  references?: string[];
   date: string | null;
   externalNumber?: string | null;
+  threadId?: string | null;
   bodyText: string;
   bodyHtml: string | null;
   headers: Record<string, unknown>;
+  analysisStatus?: AnalysisStatus;
 }): Email {
   const db = getDb();
   const id = randomUUID();
@@ -176,15 +226,20 @@ export function insertEmail(e: {
       subject: e.subject,
       from: JSON.stringify(e.from ?? null),
       to: JSON.stringify(e.to ?? []),
+      cc: JSON.stringify(e.cc ?? []),
+      replyTo: JSON.stringify(e.replyTo ?? []),
+      inReplyTo: e.inReplyTo ?? null,
+      references: JSON.stringify(e.references ?? []),
       date: e.date,
       externalNumber: e.externalNumber ?? null,
       numberSourceAttachmentId: null,
       numberSourcePage: 1,
       sendDate: null,
+      threadId: e.threadId ?? null,
       bodyText: e.bodyText,
       bodyHtml: e.bodyHtml,
       headers: JSON.stringify(e.headers ?? {}),
-      analysisStatus: "pending",
+      analysisStatus: e.analysisStatus ?? "pending",
       createdAt: ts,
       updatedAt: ts
     })
@@ -361,6 +416,7 @@ export function deleteEmails(ids: string[]): number {
       .values({
         id: randomUUID(),
         accountId: r.accountId,
+        folder: r.folder,
         uid: r.uid,
         messageId: r.messageId,
         deletedAt: ts
@@ -523,6 +579,191 @@ export function getEmailView(id: string): EmailView | null {
     attachments: listAttachments(id),
     analysis: getAnalysis(id)
   };
+}
+
+// ---------------- Threads ----------------
+
+function mapThread(row: typeof threads.$inferSelect): Thread {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    normalizedSubject: row.normalizedSubject,
+    rootMessageId: row.rootMessageId,
+    lastMessageAt: row.lastMessageAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+export function getThread(id: string): Thread | null {
+  const row = getDb().select().from(threads).where(eq(threads.id, id)).get();
+  return row ? mapThread(row) : null;
+}
+
+export function findThreadByRoot(accountId: string, rootMessageId: string): Thread | null {
+  const row = getDb()
+    .select()
+    .from(threads)
+    .where(and(eq(threads.accountId, accountId), eq(threads.rootMessageId, rootMessageId)))
+    .get();
+  return row ? mapThread(row) : null;
+}
+
+export function createThread(accountId: string, rootMessageId: string | null, normalizedSubject: string): Thread {
+  const db = getDb();
+  const id = randomUUID();
+  const ts = now();
+  db.insert(threads)
+    .values({
+      id,
+      accountId,
+      normalizedSubject,
+      rootMessageId,
+      lastMessageAt: ts,
+      createdAt: ts,
+      updatedAt: ts
+    })
+    .run();
+  return getThread(id)!;
+}
+
+export function touchThread(id: string, lastMessageAt: string): void {
+  getDb().update(threads).set({ lastMessageAt, updatedAt: now() }).where(eq(threads.id, id)).run();
+}
+
+export function listThreads(accountId: string): Thread[] {
+  return getDb()
+    .select()
+    .from(threads)
+    .where(eq(threads.accountId, accountId))
+    .orderBy(desc(threads.updatedAt))
+    .all()
+    .map(mapThread);
+}
+
+export function setEmailThread(emailId: string, threadId: string | null): void {
+  getDb().update(emails).set({ threadId, updatedAt: now() }).where(eq(emails.id, emailId)).run();
+}
+
+/** Найти письмо по Message-ID в рамках аккаунта (для трединга). Устойчив к скобкам. */
+export function findEmailByMessageId(accountId: string, messageId: string): Email | null {
+  if (!messageId) return null;
+  const norm = normalizeMessageId(messageId);
+  const variants = [norm, "<" + norm + ">"];
+  for (const v of variants) {
+    const row = getDb()
+      .select()
+      .from(emails)
+      .where(and(eq(emails.accountId, accountId), eq(emails.messageId, v)))
+      .get();
+    if (row) return mapEmail(row);
+  }
+  return null;
+}
+
+// ---------------- Drafts ----------------
+
+function mapDraft(row: typeof drafts.$inferSelect): Draft {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    to: jparse<EmailAddress[]>(row.to, []),
+    cc: jparse<EmailAddress[]>(row.cc, []),
+    bcc: jparse<EmailAddress[]>(row.bcc, []),
+    subject: row.subject,
+    bodyText: row.bodyText,
+    bodyHtml: row.bodyHtml,
+    attachments: jparse<DraftAttachment[]>(row.attachments, []),
+    inReplyToEmailId: row.inReplyToEmailId,
+    inReplyToMessageId: row.inReplyToMessageId,
+    references: jparse<string[]>(row.references, []),
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+export function listDrafts(accountId?: string): Draft[] {
+  const q = getDb().select().from(drafts).orderBy(desc(drafts.updatedAt));
+  const rows = accountId ? q.where(eq(drafts.accountId, accountId)).all() : q.all();
+  return rows.map(mapDraft);
+}
+
+export function getDraft(id: string): Draft | null {
+  const row = getDb().select().from(drafts).where(eq(drafts.id, id)).get();
+  return row ? mapDraft(row) : null;
+}
+
+export function insertDraft(d: {
+  accountId: string;
+  to: EmailAddress[];
+  cc?: EmailAddress[];
+  bcc?: EmailAddress[];
+  subject: string;
+  bodyText: string;
+  bodyHtml?: string | null;
+  attachments?: DraftAttachment[];
+  inReplyToEmailId?: string | null;
+  inReplyToMessageId?: string | null;
+  references?: string[];
+}): Draft {
+  const db = getDb();
+  const id = randomUUID();
+  const ts = now();
+  db.insert(drafts)
+    .values({
+      id,
+      accountId: d.accountId,
+      to: JSON.stringify(d.to ?? []),
+      cc: JSON.stringify(d.cc ?? []),
+      bcc: JSON.stringify(d.bcc ?? []),
+      subject: d.subject,
+      bodyText: d.bodyText,
+      bodyHtml: d.bodyHtml ?? null,
+      attachments: JSON.stringify(d.attachments ?? []),
+      inReplyToEmailId: d.inReplyToEmailId ?? null,
+      inReplyToMessageId: d.inReplyToMessageId ?? null,
+      references: JSON.stringify(d.references ?? []),
+      createdAt: ts,
+      updatedAt: ts
+    })
+    .run();
+  return getDraft(id)!;
+}
+
+export function updateDraft(
+  id: string,
+  d: Partial<{
+    to: EmailAddress[];
+    cc: EmailAddress[];
+    bcc: EmailAddress[];
+    subject: string;
+    bodyText: string;
+    bodyHtml: string | null;
+    attachments: DraftAttachment[];
+    inReplyToEmailId: string | null;
+    inReplyToMessageId: string | null;
+    references: string[];
+  }>
+): Draft | null {
+  const existing = getDraft(id);
+  if (!existing) return null;
+  const set: Record<string, unknown> = { updatedAt: now() };
+  if (d.to !== undefined) set.to = JSON.stringify(d.to);
+  if (d.cc !== undefined) set.cc = JSON.stringify(d.cc);
+  if (d.bcc !== undefined) set.bcc = JSON.stringify(d.bcc);
+  if (d.subject !== undefined) set.subject = d.subject;
+  if (d.bodyText !== undefined) set.bodyText = d.bodyText;
+  if (d.bodyHtml !== undefined) set.bodyHtml = d.bodyHtml;
+  if (d.attachments !== undefined) set.attachments = JSON.stringify(d.attachments);
+  if (d.inReplyToEmailId !== undefined) set.inReplyToEmailId = d.inReplyToEmailId;
+  if (d.inReplyToMessageId !== undefined) set.inReplyToMessageId = d.inReplyToMessageId;
+  if (d.references !== undefined) set.references = JSON.stringify(d.references);
+  getDb().update(drafts).set(set).where(eq(drafts.id, id)).run();
+  return getDraft(id);
+}
+
+export function deleteDraft(id: string): void {
+  getDb().delete(drafts).where(eq(drafts.id, id)).run();
 }
 
 // ---------------- Settings ----------------

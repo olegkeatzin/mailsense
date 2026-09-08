@@ -127,6 +127,75 @@ ALTER TABLE emails ADD COLUMN number_source_page INTEGER NOT NULL DEFAULT 1;
     sql: `
 ALTER TABLE emails ADD COLUMN send_date TEXT;
 `
+  },
+  {
+    version: 7,
+    name: "smtp_threads_drafts",
+    sql: `
+ALTER TABLE accounts ADD COLUMN smtp_host TEXT;
+ALTER TABLE accounts ADD COLUMN smtp_port INTEGER;
+ALTER TABLE accounts ADD COLUMN smtp_tls TEXT;
+ALTER TABLE accounts ADD COLUMN smtp_username TEXT;
+ALTER TABLE accounts ADD COLUMN smtp_password_encrypted TEXT;
+ALTER TABLE accounts ADD COLUMN smtp_auth_type TEXT DEFAULT 'login';
+
+ALTER TABLE emails ADD COLUMN thread_id TEXT;
+ALTER TABLE emails ADD COLUMN cc TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE emails ADD COLUMN reply_to TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE emails ADD COLUMN in_reply_to TEXT;
+ALTER TABLE emails ADD COLUMN refs TEXT NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS emails_thread_idx ON emails(thread_id);
+
+CREATE TABLE IF NOT EXISTS threads (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  normalized_subject TEXT NOT NULL DEFAULT '',
+  root_message_id TEXT,
+  last_message_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS threads_account_idx ON threads(account_id);
+
+CREATE TABLE IF NOT EXISTS drafts (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  "to" TEXT NOT NULL DEFAULT '[]',
+  cc TEXT NOT NULL DEFAULT '[]',
+  bcc TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  body_text TEXT NOT NULL DEFAULT '',
+  body_html TEXT,
+  attachments TEXT NOT NULL DEFAULT '[]',
+  in_reply_to_email_id TEXT,
+  in_reply_to_message_id TEXT,
+  refs TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS drafts_account_idx ON drafts(account_id);
+`
+  },
+  {
+    version: 8,
+    name: "deleted_emails_folder",
+    sql: `
+DROP INDEX IF EXISTS deleted_emails_account_uid_idx;
+CREATE TABLE deleted_emails_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  folder TEXT NOT NULL DEFAULT 'INBOX',
+  uid TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  deleted_at TEXT NOT NULL
+);
+INSERT INTO deleted_emails_new (id, account_id, folder, uid, message_id, deleted_at)
+  SELECT id, account_id, 'INBOX', uid, message_id, deleted_at FROM deleted_emails;
+DROP TABLE deleted_emails;
+ALTER TABLE deleted_emails_new RENAME TO deleted_emails;
+CREATE UNIQUE INDEX IF NOT EXISTS deleted_emails_account_folder_uid_idx ON deleted_emails(account_id, folder, uid);
+CREATE INDEX IF NOT EXISTS deleted_emails_message_id_idx ON deleted_emails(message_id);
+`
   }
 ];
 
