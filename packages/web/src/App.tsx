@@ -30,6 +30,8 @@ function AnalysisProgressBadge() {
     page: number;
     totalPages: number;
     queueLength: number;
+    done: number;
+    total: number;
   } | null>(null);
 
   useEffect(() => {
@@ -59,6 +61,9 @@ function AnalysisProgressBadge() {
     label = "Анализ письма…";
   } else {
     label = "Очередь: " + p.queueLength;
+  }
+  if (p.total > 0) {
+    label += " · " + p.done + "/" + p.total;
   }
 
   return (

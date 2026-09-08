@@ -6,9 +6,9 @@
 
 | Файл | ОС | Как запустить |
 |---|---|---|
-| mailsense-electron_0.1.0_amd64.deb | Linux x64 (Debian/Ubuntu) | sudo apt install ./mailsense-electron_0.1.0_amd64.deb — появится «MailSense» в меню |
-| MailSense-0.1.0.AppImage | Linux x64 (без sudo) | chmod +x … && ./MailSense-0.1.0.AppImage --no-sandbox |
-| MailSense-0.1.0-win.zip | Windows x64 | распаковать архив и запустить MailSense.exe |
+| mailsense-electron_0.1.1_amd64.deb | Linux x64 (Debian/Ubuntu) | sudo apt install ./mailsense-electron_0.1.1_amd64.deb — появится «MailSense» в меню |
+| MailSense-0.1.1.AppImage | Linux x64 (без sudo) | chmod +x … && ./MailSense-0.1.1.AppImage --no-sandbox |
+| MailSense-0.1.1-win.zip | Windows x64 | распаковать архив и запустить MailSense.exe |
 
 > Windows: вместо инсталлятора здесь zip-архив (папка win-unpacked/ — то же самое без архива).
 > NSIS-установщик (.exe setup) собрать в этой среде нельзя — для него нужен wine или сборка на Windows.
@@ -23,10 +23,11 @@
 | MAILSENSE_MAIL_PORT | 993 | порт IMAP |
 | MAILSENSE_MAIL_USER / _PASS | — | логин/пароль аккаунта |
 | MAILSENSE_AI_BASE_URL | http://localhost:8080/v1 | OpenAI-совместимый endpoint |
-| MAILSENSE_AI_MODEL | (пусто) | мультимодальная модель |
+| MAILSENSE_AI_MODEL | (пусто) | имя summary-модели |
 | MAILSENSE_PORT | 8123 | порт встроенного сервера |
 
 Аккаунт по умолчанию не создаётся (seeding выключен) — добавьте почту и ИИ-эндпоинт через настройки.
+OCR-модель, её base URL и параллельность (summary/OCR) задаются в окне «Настройки → ИИ».
 
 ## Куда сохраняются данные
 

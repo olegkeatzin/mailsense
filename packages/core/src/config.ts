@@ -11,6 +11,10 @@ export interface AiConfig {
   /** отдельная OCR-модель (чтение документов); если не задана — fallback на основную */
   ocrBaseUrl?: string;
   ocrModel?: string;
+  /** параллельность запросов к основной (summary) модели */
+  concurrency?: number;
+  /** параллельность запросов к OCR-модели */
+  ocrConcurrency?: number;
 }
 
 export interface DefaultAccountConfig {

@@ -18,7 +18,7 @@ import { analyzeEmailRaw } from "../ai/analyze.js";
 import { ocrImage } from "../ai/ocr.js";
 import { parseAnalysis } from "../ai/parse.js";
 import { analysisQueue, ocrQueue } from "../analysis/queue.js";
-import { getAiConfig, getOcrConfig } from "./settingsService.js";
+import { getAiConfig, getAnalysisConcurrency, getOcrConfig, getOcrConcurrency } from "./settingsService.js";
 import type { AnalysisResult } from "../types.js";
 
 const inFlight = new Set<string>();
@@ -31,6 +31,8 @@ export interface AnalysisProgress {
   page: number;
   totalPages: number;
   queueLength: number;
+  done: number;
+  total: number;
 }
 
 let progress: AnalysisProgress = {
@@ -39,8 +41,28 @@ let progress: AnalysisProgress = {
   attachmentName: "",
   page: 0,
   totalPages: 0,
-  queueLength: 0
+  queueLength: 0,
+  done: 0,
+  total: 0
 };
+
+let totalQueued = 0;
+let totalDone = 0;
+
+function resetProgress(): void {
+  totalQueued = 0;
+  totalDone = 0;
+  progress = {
+    emailId: null,
+    stage: "idle",
+    attachmentName: "",
+    page: 0,
+    totalPages: 0,
+    queueLength: 0,
+    done: 0,
+    total: 0
+  };
+}
 
 function setProgress(
   emailId: string,
@@ -49,23 +71,44 @@ function setProgress(
   page: number,
   totalPages: number
 ): void {
-  progress = { emailId, stage, attachmentName, page, totalPages, queueLength: queueLength() };
+  progress = {
+    emailId,
+    stage,
+    attachmentName,
+    page,
+    totalPages,
+    queueLength: queueLength(),
+    done: totalDone,
+    total: totalQueued
+  };
 }
 
 export function getProgress(): AnalysisProgress {
-  return { ...progress, queueLength: queueLength() };
+  return { ...progress, queueLength: queueLength(), done: totalDone, total: totalQueued };
+}
+
+/** Применяет настройки параллельности к очередям. */
+function configureQueues(): void {
+  analysisQueue.concurrency = getAnalysisConcurrency();
+  ocrQueue.concurrency = getOcrConcurrency();
 }
 
 export function enqueue(emailId: string): void {
+  configureQueues();
   if (inFlight.has(emailId)) return;
   inFlight.add(emailId);
   setEmailStatus(emailId, "queued");
+  totalQueued++;
   analysisQueue
     .add(() => runAnalysis(emailId))
     .catch(() => {
       /* обработано внутри runAnalysis */
     })
-    .finally(() => inFlight.delete(emailId));
+    .finally(() => {
+      inFlight.delete(emailId);
+      totalDone++;
+      if (queueLength() === 0) resetProgress();
+    });
 }
 
 export async function runAnalysis(emailId: string): Promise<AnalysisResult | null> {

@@ -117,6 +117,8 @@ export const api = {
       page: number;
       totalPages: number;
       queueLength: number;
+      done: number;
+      total: number;
     }>("/api/analysis/progress"),
   bulkAnalyze: (ids: string[]) =>
     request<{ queued: number }>("/api/emails/bulk/analyze", { method: "POST", body: JSON.stringify({ ids }) }),

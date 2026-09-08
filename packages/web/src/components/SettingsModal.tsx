@@ -307,6 +307,12 @@ function AiTab() {
       <Form.Item name="ocrBaseUrl" label="OCR base URL (пусто = основной)">
         <Input placeholder="пусто = основной URL" />
       </Form.Item>
+      <Form.Item name="concurrency" label="Параллельность summary-модели (запросов одновременно)">
+        <InputNumber min={1} max={16} style={{ width: 120 }} />
+      </Form.Item>
+      <Form.Item name="ocrConcurrency" label="Параллельность OCR-модели (запросов одновременно)">
+        <InputNumber min={1} max={16} style={{ width: 120 }} />
+      </Form.Item>
       <Space>
         <Button type="primary" htmlType="submit">
           Сохранить

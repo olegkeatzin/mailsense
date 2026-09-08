@@ -106,4 +106,6 @@ export interface AiConfig {
   timeoutMs: number;
   ocrBaseUrl?: string;
   ocrModel?: string;
+  concurrency?: number;
+  ocrConcurrency?: number;
 }

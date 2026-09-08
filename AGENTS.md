@@ -6,8 +6,9 @@
 ## Что это
 
 MailSense — десктопный «почтовый помощник с ИИ-аналитикой» (Electron + React). Подключается к IMAP/POP3,
-забирает письма и вложения в SQLite, прогоняет их через мультимодальную ИИ-модель и показывает
-структурированную выжимку (суть, теги, приоритет, дата события, категория) в трёхпанельном UI.
+забирает письма и вложения в SQLite, прогоняет их через staged-пайплайн из двух ИИ-моделей
+(OCR + summary) и показывает структурированную выжимку (суть, теги, приоритет, дата события,
+внешний номер, дата отправки, категория) в трёхпанельном UI.
 
 Стек: pnpm workspace · TypeScript · React 18 + Ant Design + Zustand · Express · better-sqlite3 + drizzle-orm ·
 imapflow (IMAP) + собственный POP3-клиент · openai (llama.cpp) · electron-builder.
@@ -41,8 +42,11 @@ Makefile           # цели сборки
 - Путь данных: коннектор (IMAP/POP3) → `mailparser` → SQLite + файлы вложений на диске → очередь `p-queue` →
   ИИ-адаптер (OpenAI-совместимый) → валидация JSON (zod) → `analysis_results`.
 - Статусы анализа: `pending` → `queued` → `processing` → `ready` | `error`.
-- Вложения: изображения → vision (base64); PDF → рендер страниц в PNG (pdfjs-dist + @napi-rs/canvas) → vision;
-  DOCX → текст (mammoth) + вложенные картинки; XLSX → структурированный текст (xlsx).
+- Вложения: изображения → OCR-модель (base64); PDF → рендер страниц в PNG (pdfjs-dist + @napi-rs/canvas) →
+  OCR-модель постранично; DOCX → текст (mammoth) + вложенные картинки; XLSX → структурированный текст (xlsx).
+- Staged-пайплайн: сначала OCR-модель (`glm-ocr`) читает страницы вложений параллельно (`ocrQueue`),
+  затем summary-модель делает финальную выжимку text-only (`analysisQueue`). Параллельность каждой
+  настраивается в «Настройки → ИИ» (`concurrency` / `ocrConcurrency`).
 
 ## Команды (по пакетам)
 
@@ -98,7 +102,8 @@ node scripts/test_pop3.mjs                 # интеграционный тес
 
 - Почта (docker-mailserver): `test@mail.test` / `Test1234!`; IMAP 993 (TLS), POP3 995/110 (SSL/STLS/plain),
   self-signed. Хост `127.0.0.1` (локально) или `192.168.21.83` (LAN).
-- ИИ (llama.cpp): `http://10.70.203.245:3006/v1`, модель `qwen3.8-27b` (text+image, мультимодальная).
+- ИИ (llama.cpp): `http://10.70.203.245:3010/v1`; OCR-модель `glm-ocr`, summary-модель `qwen-3.5-9b`
+  (у summary отключено мышление через `chat_template_kwargs:{enable_thinking:false}`, иначе JSON обрезается).
 - E2E UI — через Playwright MCP (открыть `http://127.0.0.1:8123`).
 
 ## Конфигурация (env)

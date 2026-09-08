@@ -12,7 +12,9 @@ export function getAiConfig(): AiConfig {
     multimodal: (getSetting("ai.multimodal") ?? String(base.multimodal)) === "true",
     timeoutMs: base.timeoutMs,
     ocrBaseUrl: getSetting("ai.ocrBaseUrl") ?? undefined,
-    ocrModel: getSetting("ai.ocrModel") ?? undefined
+    ocrModel: getSetting("ai.ocrModel") ?? undefined,
+    concurrency: Number(getSetting("ai.concurrency") ?? "1"),
+    ocrConcurrency: Number(getSetting("ai.ocrConcurrency") ?? "3")
   };
 }
 
@@ -23,6 +25,18 @@ export function setAiConfig(cfg: Partial<AiConfig>): void {
   if (cfg.multimodal !== undefined) setSetting("ai.multimodal", String(cfg.multimodal));
   if (cfg.ocrBaseUrl !== undefined) setSetting("ai.ocrBaseUrl", cfg.ocrBaseUrl);
   if (cfg.ocrModel !== undefined) setSetting("ai.ocrModel", cfg.ocrModel);
+  if (cfg.concurrency !== undefined) setSetting("ai.concurrency", String(cfg.concurrency));
+  if (cfg.ocrConcurrency !== undefined) setSetting("ai.ocrConcurrency", String(cfg.ocrConcurrency));
+}
+
+/** Параллельность запросов к основной (summary) модели. */
+export function getAnalysisConcurrency(): number {
+  return Math.max(1, Number(getSetting("ai.concurrency") ?? "1") || 1);
+}
+
+/** Параллельность запросов к OCR-модели. */
+export function getOcrConcurrency(): number {
+  return Math.max(1, Number(getSetting("ai.ocrConcurrency") ?? "3") || 3);
 }
 
 /** Конфиг OCR-модели: отдельная модель или fallback на основную. */
