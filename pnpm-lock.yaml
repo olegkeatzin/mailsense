@@ -10,6 +10,9 @@ importers:
 
   apps/electron:
     dependencies:
+      '@kenjiuno/msgreader':
+        specifier: ^1.28.0
+        version: 1.28.0
       '@napi-rs/canvas':
         specifier: ^0.1.65
         version: 0.1.100
@@ -37,6 +40,9 @@ importers:
       mammoth:
         specifier: ^1.8.0
         version: 1.12.1
+      nodemailer:
+        specifier: 9.0.5
+        version: 9.0.5
       openai:
         specifier: ^4.79.1
         version: 4.104.0(encoding@0.1.13)(zod@3.25.76)

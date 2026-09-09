@@ -1,16 +1,10 @@
-import { app, BrowserWindow, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, safeStorage, shell } from "electron";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "@mailsense/server";
 import { NodeSecretStore, type SecretStore } from "@mailsense/core";
 
-// AppImage монтируется через FUSE без setuid → SUID-песочница Chromium недоступна.
-// Отключаем её только в AppImage-контексте; рендерер остаётся изолированным
-// (contextIsolation: true, nodeIntegration: false).
-if (process.env.APPIMAGE) {
-  app.commandLine.appendSwitch("no-sandbox");
-}
-
+// Песочница Chromium: .deb использует SUID chrome-sandbox (after-install.sh ставит setuid).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 /** safeStorage с фолбэком на файловый AES-ключ (headless/тест). */
@@ -45,25 +39,55 @@ async function bootstrap() {
   return startServer({ dataDir, webDist, secretStore });
 }
 
-app.whenReady().then(async () => {
-  const server = await bootstrap();
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    title: "MailSense — Почтовый помощник",
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false
+let server: Awaited<ReturnType<typeof bootstrap>> | null = null;
+let mainWindow: BrowserWindow | null = null;
+
+// Один экземпляр: иначе второй запуск конфликтует по порту 8123 и «зависает» без окна.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
-  win.loadURL(server.url);
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    void shell.openExternal(url);
-    return { action: "deny" };
+
+  app.whenReady().then(async () => {
+    try {
+      server = await bootstrap();
+    } catch (err) {
+      dialog.showErrorBox("MailSense", "Не удалось запустить сервер:\n" + (err as Error).message);
+      app.quit();
+      return;
+    }
+
+    mainWindow = new BrowserWindow({
+      width: 1280,
+      height: 840,
+      title: "MailSense — Почтовый помощник",
+      webPreferences: {
+        preload: path.join(__dirname, "preload.cjs"),
+        contextIsolation: true,
+        nodeIntegration: false
+      }
+    });
+    mainWindow.loadURL(server.url);
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      void shell.openExternal(url);
+      return { action: "deny" };
+    });
+    mainWindow.on("closed", () => {
+      mainWindow = null;
+    });
   });
-});
+}
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
+  if (process.platform !== "darwin") {
+    // Закрываем HTTP-сервер, иначе он держит event loop и процесс «висит» после закрытия окна.
+    server?.httpServer.close();
+    app.quit();
+  }
 });

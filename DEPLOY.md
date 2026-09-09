@@ -7,7 +7,6 @@
 | Файл | ОС | Как запустить |
 |---|---|---|
 | mailsense-electron_0.1.1_amd64.deb | Linux x64 (Debian/Ubuntu) | sudo apt install ./mailsense-electron_0.1.1_amd64.deb — появится «MailSense» в меню |
-| MailSense-0.1.1.AppImage | Linux x64 (без sudo) | chmod +x … && ./MailSense-0.1.1.AppImage --no-sandbox |
 | MailSense-0.1.1-win.zip | Windows x64 | распаковать архив и запустить MailSense.exe |
 
 > Windows: вместо инсталлятора здесь zip-архив (папка win-unpacked/ — то же самое без архива).
@@ -39,7 +38,7 @@ OCR-модель, её base URL и параллельность (summary/OCR) з
 ```bash
 pnpm install
 make build                                # core + server + web + electron
-cd apps/electron && pnpm dist:linux      # AppImage + .deb
+cd apps/electron && pnpm dist:linux      # .deb
 cd apps/electron && pnpm dist:win        # zip (Windows)
 ```
 

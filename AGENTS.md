@@ -20,7 +20,7 @@ make install          # или: pnpm install
 make build            # core + server + web + electron
 make run              # headless-сервер: http://127.0.0.1:8123
 make test             # юнит-тесты
-make package-linux    # AppImage
+make package-linux    # .deb
 make package-win      # Windows zip
 ```
 
@@ -85,13 +85,15 @@ node scripts/test_pop3.mjs                 # интеграционный тес
 - **core+server бандлятся в `main.js`** (tsup, ESM) — см. `apps/electron/tsup.config.ts`. Нативные
   (`better-sqlite3`, `@napi-rs/canvas`) и `pdfjs-dist` остаются external. `main.ts` — ESM (`import.meta.url`),
   `preload.cjs` — CJS.
+- ⚠️ **CJS-пакеты с динамическим `require()` нельзя бандлить в ESM `main.js`** — при старте падает
+  `Dynamic require of "..." is not supported`. Пример: `@kenjiuno/msgreader` (тянет `iconv-lite` → `safer-buffer`).
+  Такие пакеты добавляй в `dependencies` у `apps/electron/package.json` (останутся external), а не только в `@mailsense/core`.
 - `electron-builder` конфиг — в `apps/electron/package.json` (поле `build`): `asarUnpack: ["**/*.node"]`,
   `npmRebuild: false` (N-API не требует пересборки), web-дист через `extraResources`.
 - **Windows NSIS-инсталлятор требует wine** (недоступен без sudo). Поэтому `win.target: ["zip"]` +
   `signAndEditExecutable: false`. На машине с wine/Windows можно вернуть `nsis`.
-- **Linux: `.deb` — предпочтительно** (chrome-sandbox получает setuid через postinst → песочница работает без флагов).
-  AppImage монтируется через FUSE `nosuid` → SUID-песочница недоступна, нужен `--no-sandbox` (зашит для AppImage-контекста в main.ts).
-- Артефакты: `apps/electron/release/` → `*.deb` + `*.AppImage` (Linux), `*-win.zip` (Windows).
+- **Linux: `.deb`** (chrome-sandbox получает setuid через postinst → песочница работает без флагов).
+- Артефакты: `apps/electron/release/` → `*.deb` (Linux), `*-win.zip` (Windows).
 
 ## TLS и self-signed
 

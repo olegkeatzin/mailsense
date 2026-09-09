@@ -15,7 +15,7 @@ help: ## Список команд
 	@echo "  make run            запустить headless-сервер http://127.0.0.1:8123"
 	@echo "  make dev-server     dev-сервер API (tsx watch, порт 8123)"
 	@echo "  make dev-web        dev-сервер SPA (Vite, порт 5173)"
-	@echo "  make package-linux  собрать AppImage + .deb (apps/electron/release/)"
+	@echo "  make package-linux  собрать .deb (apps/electron/release/)"
 	@echo "  make package-deb    собрать .deb (Linux)"
 	@echo "  make package-win    собрать Windows zip (apps/electron/release/)"
 	@echo "  make package        собрать оба пакета"
@@ -53,7 +53,7 @@ dev-web: ## Dev-сервер SPA (Vite, проксирует /api на 8123)
 typecheck: ## Проверка типов SPA
 	$(PNPM) --filter @mailsense/web typecheck
 
-package-linux: build ## Собрать AppImage + .deb (Linux)
+package-linux: build ## Собрать .deb (Linux)
 	cd apps/electron && $(PNPM) dist:linux
 
 package-deb: build ## Собрать .deb (Linux)

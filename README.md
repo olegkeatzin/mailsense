@@ -50,12 +50,11 @@ make run                   # headless-сервер: http://127.0.0.1:8123
 ## Сборка дистрибутивов
 
 ```bash
-make package-linux         # AppImage + .deb → apps/electron/release/
+make package-linux         # .deb → apps/electron/release/
 make package-win           # Windows zip   → apps/electron/release/
 ```
 
-- **Linux**: .deb — предпочтительно (chrome-sandbox получает setuid через postinst).
-  AppImage требует --no-sandbox (зашит в main.ts).
+- **Linux**: .deb (chrome-sandbox получает setuid через postinst).
 - **Windows**: zip-архив. NSIS-установщик (.exe setup) собирается на Windows или через wine.
 
 ## Конфигурация (переменные окружения)
@@ -89,7 +88,7 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
-Workflow собирает AppImage + .deb (Linux) и win.zip (Windows) и прикрепляет их к релизу.
+Workflow собирает .deb (Linux) и win.zip (Windows) и прикрепляет их к релизу.
 
 ## Примечания по реализации
 

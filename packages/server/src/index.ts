@@ -29,7 +29,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
   const port = options.port ?? init.config.port;
   const host = options.host ?? init.config.host;
 
-  return new Promise<RunningServer>((resolve) => {
+  return new Promise<RunningServer>((resolve, reject) => {
     const httpServer = app.listen(port, host, () => {
       resolve({
         config: init.config,
@@ -38,6 +38,7 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
         app
       });
     });
+    httpServer.on("error", reject);
   });
 }
 
