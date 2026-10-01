@@ -1,11 +1,17 @@
 import { Pop3Client } from "../packages/core/dist/index.js";
 
 async function main() {
+  // Пароль стенда — только из окружения (см. AGENTS.md).
+  const pass = process.env.STAND_PASS;
+  if (!pass) {
+    console.error("Задайте STAND_PASS — пароль тестового ящика стенда");
+    process.exit(1);
+  }
   for (const [port, tls] of [[995, "ssl"], [110, "starttls"], [110, "none"]]) {
     try {
       const c = new Pop3Client({
-        host: "127.0.0.1", port, tls,
-        username: "test@mail.test", password: "Test1234!",
+        host: process.env.STAND_HOST || "127.0.0.1", port, tls,
+        username: process.env.STAND_USER || "test@mail.test", password: pass,
         rejectUnauthorized: false
       });
       await c.connect();

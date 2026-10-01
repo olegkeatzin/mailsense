@@ -15,12 +15,25 @@ const HOST = process.env.STAND_SMTP_HOST || "127.0.0.1";
 const PORT = Number(process.env.STAND_SMTP_PORT || "25"); // 25 = plain AUTH (как в стенде)
 const SECURE = PORT === 465;
 
+// Пароли стенда берём ТОЛЬКО из окружения — в публичный репозиторий они не попадают.
+// Пример: STAND_PARTNER_PASS=... STAND_CLIENT_PASS=... node scripts/send-test-scenario.mjs
+function envPass(role) {
+  const pass = process.env["STAND_" + role.toUpperCase() + "_PASS"] || process.env.STAND_PASS;
+  if (!pass) {
+    console.error(
+      "Не задан пароль для «" + role + "»: укажите STAND_" + role.toUpperCase() + "_PASS (или общий STAND_PASS)"
+    );
+    process.exit(1);
+  }
+  return pass;
+}
+
 const USERS = {
-  partner: { user: "partner@mail.test", pass: "Partner123!", name: "ООО «Партнёр»" },
-  client: { user: "client@mail.test", pass: "Client123!", name: "АО «Клиент»" },
-  director: { user: "ivanov_ii@mail.test", pass: "IvanovMail456!", name: "Иванов И.И. (ген. директор)" },
-  executor: { user: "petrova_ma@mail.test", pass: "PetrovaMail456!", name: "Петрова М.А. (исполнитель)" },
-  app: { user: "test@mail.test", pass: "Test1234!", name: "Пользователь приложения" }
+  partner: { user: process.env.STAND_PARTNER_USER || "partner@mail.test", pass: envPass("partner"), name: "ООО «Партнёр»" },
+  client: { user: process.env.STAND_CLIENT_USER || "client@mail.test", pass: envPass("client"), name: "АО «Клиент»" },
+  director: { user: process.env.STAND_DIRECTOR_USER || "ivanov_ii@mail.test", pass: envPass("director"), name: "Иванов И.И. (ген. директор)" },
+  executor: { user: process.env.STAND_EXECUTOR_USER || "petrova_ma@mail.test", pass: envPass("executor"), name: "Петрова М.А. (исполнитель)" },
+  app: { user: process.env.STAND_APP_USER || "test@mail.test", pass: envPass("app"), name: "Пользователь приложения" }
 };
 
 function transport(u) {

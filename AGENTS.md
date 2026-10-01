@@ -102,7 +102,7 @@ node scripts/test_pop3.mjs                 # интеграционный тес
 
 ## Тестовый стенд (см. `/home/user/Рабочий стол/test mail/README.md`)
 
-- Почта (docker-mailserver): `test@mail.test` / `Test1234!`; IMAP 993 (TLS), POP3 995/110 (SSL/STLS/plain),
+- Почта (docker-mailserver): `test@mail.test` / пароль стенда (env `STAND_PASS`); IMAP 993 (TLS), POP3 995/110 (SSL/STLS/plain),
   self-signed. Хост `127.0.0.1` (локально) или `192.168.21.83` (LAN).
 - ИИ (llama.cpp): `http://10.70.203.245:3010/v1`; OCR-модель `glm-ocr`, summary-модель `qwen-3.5-9b`
   (у summary отключено мышление через `chat_template_kwargs:{enable_thinking:false}`, иначе JSON обрезается).
@@ -119,7 +119,7 @@ node scripts/test_pop3.mjs                 # интеграционный тес
 ## Частые подводные камни
 
 - Seeding тестового аккаунта выключен по умолчанию. Для локального стенда задай env:
-  `MAILSENSE_SEED_ACCOUNT=true MAILSENSE_MAIL_USER=test@mail.test MAILSENSE_MAIL_PASS=Test1234!`
+  `MAILSENSE_SEED_ACCOUNT=true MAILSENSE_MAIL_USER=test@mail.test MAILSENSE_MAIL_PASS=<пароль стенда>`
   (или добавь аккаунт через окно настроек).
 - Пароли: в Electron — `safeStorage`, иначе фолбэк AES-256-GCM (ключ в `data/secret.key`).
 - POP3: после `RETR`/`UIDL` сначала идёт строка статуса `+OK …` — её нужно читать отдельно от тела (см. `pop3Client.ts`).
@@ -182,6 +182,6 @@ node scripts/test_pop3.mjs                 # интеграционный тес
   `ldap.*` (`url`, `baseDn`, `loginFormat`, `upnSuffix`, `netbiosDomain`, `userFilter`, `attributes`, `sizeLimit`,
   `rejectUnauthorized`), UI — «Настройки → Каталог (LDAP)». Автокомплит адресов — `GET /api/contacts/search`
   (кэш таблицы `contacts` + онлайн-дополнение). ⚠️ `upnSuffix` может содержать ведущий `@` — не удваивать
-  (`buildBindIdentifier`). Стенд: `stand.test`, `ldaps://127.0.0.1:636`, bind `test`/`Test1234!` (плейн 389 Samba не пускает).
+  (`buildBindIdentifier`). Стенд: `stand.test`, `ldaps://127.0.0.1:636`, bind `test`/пароль стенда (плейн 389 Samba не пускает).
   ⚠️ `ldapts` объявлен в `dependencies` и у `@mailsense/core`, и у `apps/electron` (external для tsup) — иначе
   electron-builder не положит его в asar.
