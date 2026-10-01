@@ -11,10 +11,15 @@ import {
   classifyKind,
   createAccount,
   deleteDraft,
+  deleteTemplate,
+  directoryLogin,
+  directoryLogout,
+  directoryStatus,
   deleteEmails,
   decryptPassword,
   fetchEmails,
   getAccountById,
+  getTemplate,
   getAccounts,
   getAiConfig,
   getEmailView,
@@ -22,15 +27,21 @@ import {
   getPromptSettings,
   importEmails,
   insertDraft,
+  insertTemplate,
   listAttachments,
   listDrafts,
+  listTemplates,
   listEmailsWithAnalysis,
   listThreadsGrouped,
+  rebuildThreads,
   removeAccount,
+  refreshDirectory,
   renderPreviewImage,
+  searchDirectory,
   setAiConfig,
   setEmailFolder,
   setEmailsFolder,
+  setLdapSettings,
   setExternalNumber,
   setSendDate,
   setPromptSettings,
@@ -43,12 +54,16 @@ import {
   testSmtpConnection,
   updateAccountById,
   updateDraft,
+  updateTemplate,
   upsertAnalysis,
   getAllSettings,
   type AccountInput,
   type AnalysisStatus,
   type Category,
-  type ComposeInput
+  type ComposeInput,
+  type EmailListFilter,
+  type ComposeMode,
+  buildComposeTemplate
 } from "@mailsense/core";
 import { logger } from "@mailsense/core";
 
@@ -89,6 +104,38 @@ function accountDto(a: {
     smtpTls: a.smtpTls,
     smtpUsername: a.smtpUsername,
     smtpAuthType: a.smtpAuthType
+  };
+}
+
+/**
+ * Разбирает query-фильтр списка писем. Используется и для /api/emails,
+ * и для /api/threads — иначе поиск/фильтры в режиме «Переписка» игнорируются.
+ */
+function parseEmailFilter(q: express.Request["query"]): EmailListFilter {
+  return {
+    folder: (q.folder as string) || undefined,
+    accountId: (q.accountId as string) || undefined,
+    categories:
+      typeof q.categories === "string" && q.categories
+        ? (q.categories.split(",").filter(Boolean) as Category[])
+        : undefined,
+    minPriority: q.minPriority ? Number(q.minPriority) : undefined,
+    tag: (q.tag as string) || undefined,
+    hasEvent: q.hasEvent === "1",
+    status: (q.status as AnalysisStatus) || undefined,
+    q: (q.q as string) || undefined,
+    from: typeof q.from === "string" && q.from ? q.from.split(",").filter(Boolean) : undefined,
+    to: typeof q.to === "string" && q.to ? q.to.split(",").filter(Boolean) : undefined,
+    externalNumber:
+      typeof q.externalNumber === "string" && q.externalNumber
+        ? q.externalNumber.split(",").filter(Boolean)
+        : undefined,
+    dateFrom: (q.dateFrom as string) || undefined,
+    dateTo: (q.dateTo as string) || undefined,
+    sendDateFrom: (q.sendDateFrom as string) || undefined,
+    sendDateTo: (q.sendDateTo as string) || undefined,
+    sortBy: (q.sortBy as "date" | "priority") || undefined,
+    sortDir: (q.sortDir as "asc" | "desc") || undefined
   };
 }
 
@@ -192,9 +239,12 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
   app.post(
     "/api/accounts/:id/fetch",
     asyncHandler(async (req, res) => {
+      // Ручной скан пользователя: удалённые письма можно скачать заново
+      // (авто-скан по-прежнему уважает надгробия — см. scheduler.ts).
       const result = await fetchEmails(req.params.id, {
         since: (req.body?.since as string) || undefined,
-        until: (req.body?.until as string) || undefined
+        until: (req.body?.until as string) || undefined,
+        includeDeleted: true
       });
       res.json(result);
     })
@@ -222,39 +272,21 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
 
   // -------- emails --------
   app.get("/api/emails", (req, res) => {
-    const q = req.query;
-    res.json(
-      listEmailsWithAnalysis({
-        folder: (q.folder as string) || undefined,
-        accountId: (q.accountId as string) || undefined,
-        categories:
-          typeof q.categories === "string" && q.categories
-            ? (q.categories.split(",").filter(Boolean) as Category[])
-            : undefined,
-        minPriority: q.minPriority ? Number(q.minPriority) : undefined,
-        tag: (q.tag as string) || undefined,
-        hasEvent: q.hasEvent === "1",
-        status: (q.status as AnalysisStatus) || undefined,
-        q: (q.q as string) || undefined,
-        from: typeof q.from === "string" && q.from ? q.from.split(",").filter(Boolean) : undefined,
-        to: typeof q.to === "string" && q.to ? q.to.split(",").filter(Boolean) : undefined,
-        externalNumber:
-          typeof q.externalNumber === "string" && q.externalNumber
-            ? q.externalNumber.split(",").filter(Boolean)
-            : undefined,
-        dateFrom: (q.dateFrom as string) || undefined,
-        dateTo: (q.dateTo as string) || undefined,
-        sendDateFrom: (q.sendDateFrom as string) || undefined,
-        sendDateTo: (q.sendDateTo as string) || undefined,
-        sortBy: (q.sortBy as "date" | "priority") || undefined,
-        sortDir: (q.sortDir as "asc" | "desc") || undefined
-      })
-    );
+    res.json(listEmailsWithAnalysis(parseEmailFilter(req.query)));
   });
 
   app.post("/api/emails/bulk/analyze", (req, res) => {
     const n = analyzeEmails((req.body?.ids as string[]) ?? []);
     res.json({ queued: n });
+  });
+
+  // Шаблон письма для ответа/пересылки/нового: получатели, тема, цитата, подпись.
+  app.get("/api/compose-template", (req, res) => {
+    const accountId = (req.query.accountId as string) || "";
+    if (!accountId) return res.status(400).json({ error: "Укажите accountId" });
+    const mode = ((req.query.mode as string) || "new") as ComposeMode;
+    const emailId = (req.query.emailId as string) || null;
+    res.json(buildComposeTemplate({ accountId, mode, emailId }));
   });
 
   app.get("/api/emails/:id", (req, res) => {
@@ -405,12 +437,14 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
   });
 
   app.get("/api/threads", (req, res) => {
-    res.json(
-      listThreadsGrouped(
-        (req.query.accountId as string) || undefined,
-        (req.query.folder as string) || undefined
-      )
-    );
+    // Тот же фильтр, что и у списка писем: поиск/категории/даты работают и в переписке.
+    res.json(listThreadsGrouped(parseEmailFilter(req.query)));
+  });
+
+  // Полная пересборка переписок (на случай, если данные были собраны старой версией).
+  app.post("/api/threads/rebuild", (req, res) => {
+    const accountId = (req.body?.accountId as string) || undefined;
+    res.json({ rethreaded: rebuildThreads(accountId) });
   });
 
   // -------- отправка / черновики --------
@@ -473,6 +507,79 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
 
   app.delete("/api/drafts/:id", (req, res) => {
     deleteDraft(req.params.id);
+    res.json({ ok: true });
+  });
+
+  // -------- directory (LDAP/AD: адресная книга) --------
+  app.get("/api/directory/status", (_req, res) => {
+    res.json(directoryStatus());
+  });
+
+  app.put("/api/directory/settings", (req, res) => {
+    res.json(setLdapSettings(req.body ?? {}));
+  });
+
+  app.post(
+    "/api/directory/login",
+    asyncHandler(async (req, res) => {
+      const b = req.body ?? {};
+      res.json(await directoryLogin(String(b.login ?? ""), String(b.password ?? "")));
+    })
+  );
+
+  app.post("/api/directory/logout", (_req, res) => {
+    res.json(directoryLogout());
+  });
+
+  app.post(
+    "/api/directory/refresh",
+    asyncHandler(async (_req, res) => {
+      res.json({ synced: await refreshDirectory() });
+    })
+  );
+
+  app.get(
+    "/api/contacts/search",
+    asyncHandler(async (req, res) => {
+      const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 25));
+      res.json(await searchDirectory(String(req.query.q ?? ""), limit));
+    })
+  );
+
+  // -------- templates (шаблоны писем) --------
+  app.get("/api/templates", (req, res) => {
+    res.json(listTemplates((req.query.accountId as string) || undefined));
+  });
+
+  app.post("/api/templates", (req, res) => {
+    const t = req.body ?? {};
+    if (!t.name) return res.status(400).json({ error: "Укажите название шаблона" });
+    res.status(201).json(
+      insertTemplate({
+        accountId: t.accountId ?? null,
+        name: String(t.name),
+        subject: t.subject ?? "",
+        bodyText: t.bodyText ?? "",
+        bodyHtml: t.bodyHtml ?? null
+      })
+    );
+  });
+
+  app.put("/api/templates/:id", (req, res) => {
+    const t = req.body ?? {};
+    const tpl = updateTemplate(req.params.id, {
+      accountId: t.accountId,
+      name: t.name,
+      subject: t.subject,
+      bodyText: t.bodyText,
+      bodyHtml: t.bodyHtml
+    });
+    if (!tpl) return res.status(404).json({ error: "Шаблон не найден" });
+    res.json(tpl);
+  });
+
+  app.delete("/api/templates/:id", (req, res) => {
+    deleteTemplate(req.params.id);
     res.json({ ok: true });
   });
 

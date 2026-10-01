@@ -173,12 +173,47 @@ export const drafts = sqliteTable(
   })
 );
 
+export const templates = sqliteTable(
+  "templates",
+  {
+    id: text("id").primaryKey(),
+    // null = шаблон доступен для всех аккаунтов
+    accountId: text("account_id"),
+    name: text("name").notNull(),
+    subject: text("subject").notNull().default(""),
+    bodyText: text("body_text").notNull().default(""),
+    bodyHtml: text("body_html"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => ({
+    acctIdx: index("templates_account_idx").on(t.accountId)
+  })
+);
+
+export const contacts = sqliteTable(
+  "contacts",
+  {
+    dn: text("dn").primaryKey(),
+    login: text("login").notNull().default(""),
+    displayName: text("display_name").notNull().default(""),
+    mail: text("mail").notNull().default(""),
+    title: text("title").notNull().default(""),
+    department: text("department").notNull().default(""),
+    phone: text("phone").notNull().default(""),
+    updatedAt: text("updated_at").notNull()
+  },
+  (t) => ({
+    mailIdx: index("contacts_mail_idx").on(t.mail)
+  })
+);
+
 export const settings = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull()
 });
 
-export const schema = { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, settings };
+export const schema = { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, templates, contacts, settings };
 
 export type DbEmails = typeof emails.$inferSelect;
 export type DbAccounts = typeof accounts.$inferSelect;

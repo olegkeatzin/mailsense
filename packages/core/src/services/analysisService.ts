@@ -6,6 +6,7 @@ import {
   listAttachments,
   listEmails,
   setAttachmentDescription,
+  setAttachmentText,
   setEmailFolder,
   setEmailStatus,
   setExternalNumber,
@@ -14,6 +15,7 @@ import {
   upsertAnalysis
 } from "../repos.js";
 import { prepareAttachment, type PreparedAttachment } from "../attachments/index.js";
+import { matchAttachmentDescriptions } from "../attachments/describe.js";
 import { analyzeEmailRaw } from "../ai/analyze.js";
 import { ocrImage } from "../ai/ocr.js";
 import { parseAnalysis } from "../ai/parse.js";
@@ -169,6 +171,14 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
       if (ocrTexts[i]) parts.push(ocrTexts[i] as string);
       return parts.join("\n\n");
     });
+
+    // Распознанный текст (OCR для картинок/сканов + извлечённый для документов)
+    // сохраняем в БД. Раньше он жил только в промпте и в UI вложение показывало
+    // либо только «Описание ИИ», либо только текст.
+    prepared.forEach((_, i) => {
+      const text = attachmentTexts[i];
+      if (text && text.trim()) setAttachmentText(preparedAttIds[i], text);
+    });
     const notes = prepared
       .filter((p) => !p.handled)
       .map((p) => p.filename + ": " + (p.note ?? "не обработано"));
@@ -219,9 +229,10 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
       attachments: parsed.attachments
     });
 
-    for (const d of parsed.attachments) {
-      const att = listAttachments(emailId).find((x) => x.filename === d.name);
-      if (att) setAttachmentDescription(att.id, d.description);
+    // Описания вложений из ответа модели сопоставляем устойчиво к имени файла,
+    // иначе часть вложений оставалась без «краткого содержания».
+    for (const [attId, description] of matchAttachmentDescriptions(listAttachments(emailId), parsed.attachments)) {
+      setAttachmentDescription(attId, description);
     }
 
     if (parsed.external_number && !email.externalNumber) {

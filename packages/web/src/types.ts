@@ -12,6 +12,16 @@ export interface EmailAddress {
 export interface AccountSettings {
   rejectUnauthorized?: boolean;
   pollIntervalSeconds?: number;
+  displayName?: string;
+  signature?: string;
+  /** Подпись с форматированием (HTML из WYSIWYG-редактора). */
+  signatureHtml?: string | null;
+  signatureEnabled?: boolean;
+  signaturePosition?: "above" | "below";
+  signatureDelimiter?: boolean;
+  replyQuote?: boolean;
+  replyAttribution?: "ru" | "en";
+  forwardAttachments?: boolean;
   [key: string]: unknown;
 }
 
@@ -134,11 +144,73 @@ export interface ComposeInput {
   references?: string[];
 }
 
+export interface ComposeTemplateAttachment {
+  filename: string;
+  mimeType: string;
+  data: string; // base64
+}
+
+export interface ComposeTemplate {
+  accountId: string;
+  mode: "new" | "reply" | "replyAll" | "forward";
+  to: EmailAddress[];
+  cc: EmailAddress[];
+  bcc: EmailAddress[];
+  subject: string;
+  bodyText: string;
+  bodyHtml: string;
+  inReplyToEmailId: string | null;
+  inReplyToMessageId: string | null;
+  references: string[];
+  attachments: ComposeTemplateAttachment[];
+}
+
 export interface DraftAttachment {
   filename: string;
   mimeType: string;
   size: number;
   data: string;
+}
+
+export interface LdapSettings {
+  enabled?: boolean;
+  url?: string;
+  baseDn?: string;
+  loginFormat?: "upn" | "sam" | "domain" | "dn";
+  upnSuffix?: string;
+  netbiosDomain?: string;
+  userFilter?: string;
+  attributes?: string[];
+  sizeLimit?: number;
+  rejectUnauthorized?: boolean;
+}
+
+export interface DirectoryContact {
+  dn: string;
+  login: string;
+  displayName: string;
+  mail: string;
+  title: string;
+  department: string;
+  phone: string;
+}
+
+export interface DirectoryStatus {
+  loggedIn: boolean;
+  login: string | null;
+  settings: LdapSettings;
+  contacts: number;
+}
+
+export interface Template {
+  id: string;
+  accountId: string | null;
+  name: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Draft {

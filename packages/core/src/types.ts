@@ -19,6 +19,23 @@ export interface AccountSettings {
   rejectUnauthorized?: boolean;
   pollIntervalSeconds?: number;
   folders?: string[];
+  /** Имя отправителя в заголовке From. */
+  displayName?: string;
+  /** Текст подписи (plain, фолбэк для text/plain). */
+  signature?: string;
+  /** Подпись с форматированием (HTML из WYSIWYG-редактора). */
+  signatureHtml?: string | null;
+  signatureEnabled?: boolean;
+  /** Положение подписи относительно цитаты. */
+  signaturePosition?: "above" | "below";
+  /** Добавлять стандартный разделитель подписи "-- ". */
+  signatureDelimiter?: boolean;
+  /** Цитировать оригинал в ответе. */
+  replyQuote?: boolean;
+  /** Язык строки атрибуции («… пишет:» / «On … wrote:»). */
+  replyAttribution?: "ru" | "en";
+  /** Прикреплять вложения оригинала при пересылке. */
+  forwardAttachments?: boolean;
   [key: string]: unknown;
 }
 
@@ -173,6 +190,47 @@ export interface Draft {
   inReplyToEmailId: string | null;
   inReplyToMessageId: string | null;
   references: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Настройки подключения к LDAP/AD (каталог для адресной книги). */
+export interface LdapSettings {
+  enabled?: boolean;
+  /** ldaps://dc.asup.local:636 или ldap://192.168.1.40:389 */
+  url?: string;
+  baseDn?: string;
+  /** Как из логина собрать bind-строку: UPN / sAMAccountName / DOMAIN\\user / готовый DN. */
+  loginFormat?: "upn" | "sam" | "domain" | "dn";
+  upnSuffix?: string;
+  netbiosDomain?: string;
+  /** Базовый фильтр отбора пользователей (по умолчанию — person/user с почтой и не отключённые). */
+  userFilter?: string;
+  attributes?: string[];
+  sizeLimit?: number;
+  rejectUnauthorized?: boolean;
+}
+
+/** Контакт каталога (для автокомплита адресов). */
+export interface DirectoryContact {
+  dn: string;
+  login: string;
+  displayName: string;
+  mail: string;
+  title: string;
+  department: string;
+  phone: string;
+  updatedAt?: string;
+}
+
+/** Шаблон письма (заготовка темы/тела). accountId=null — общий для всех аккаунтов. */
+export interface Template {
+  id: string;
+  accountId: string | null;
+  name: string;
+  subject: string;
+  bodyText: string;
+  bodyHtml: string | null;
   createdAt: string;
   updatedAt: string;
 }

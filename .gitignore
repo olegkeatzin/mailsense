@@ -21,6 +21,7 @@ data/
 
 # logs / env / coverage
 *.log
+.tmp/
 .env
 .env.*
 coverage/

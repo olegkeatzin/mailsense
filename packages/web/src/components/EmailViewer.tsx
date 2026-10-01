@@ -90,9 +90,16 @@ function AttachmentItem({ view, a }: { view: EmailView; a: Attachment }) {
   );
 }
 
+function fmtAddress(a: { name?: string; address: string }): string {
+  const name = (a.name ?? "").trim();
+  return name ? name + " <" + a.address + ">" : a.address;
+}
+
 function MailTab({ view }: { view: EmailView }) {
-  const from = view.from ? view.from.name || view.from.address : "(неизвестен)";
-  const to = view.to.map((t) => t.address).join(", ");
+  const from = view.from ? fmtAddress(view.from) : "(неизвестен)";
+  const to = view.to.map(fmtAddress).join(", ");
+  const cc = (view.cc ?? []).map(fmtAddress).join(", ");
+  const replyTo = (view.replyTo ?? []).map(fmtAddress).join(", ");
   const refreshSelected = useStore((s) => s.refreshSelected);
   const [number, setNumber] = useState(view.externalNumber ?? "");
   const [saving, setSaving] = useState(false);
@@ -130,8 +137,13 @@ function MailTab({ view }: { view: EmailView }) {
     }
   };
 
+  // Предпросмотр: вложение-источник номера, если оно отображаемое; иначе —
+  // первое изображение/PDF письма (фолбек, когда номера у письма нет).
+  const numberAttachment = view.attachments.find((a) => a.id === view.numberSourceAttachmentId);
   const previewAtt =
-    view.attachments.find((a) => a.id === view.numberSourceAttachmentId) ??
+    (numberAttachment && (numberAttachment.kind === "pdf" || numberAttachment.kind === "image")
+      ? numberAttachment
+      : undefined) ??
     view.attachments.find((a) => a.kind === "pdf" || a.kind === "image") ??
     null;
   const previewPage = previewAtt && previewAtt.id === view.numberSourceAttachmentId ? view.numberSourcePage : 1;
@@ -139,8 +151,12 @@ function MailTab({ view }: { view: EmailView }) {
   return (
     <div>
       <Descriptions size="small" column={1} bordered>
-        <Descriptions.Item label="От">{from}</Descriptions.Item>
+        <Descriptions.Item label="От">
+          <Typography.Text copyable={{ text: view.from?.address ?? "" }}>{from}</Typography.Text>
+        </Descriptions.Item>
         <Descriptions.Item label="Кому">{to || "—"}</Descriptions.Item>
+        {cc ? <Descriptions.Item label="Копия">{cc}</Descriptions.Item> : null}
+        {replyTo ? <Descriptions.Item label="Ответ на">{replyTo}</Descriptions.Item> : null}
         <Descriptions.Item label="Дата получения">{formatDate(view.date)}</Descriptions.Item>
         <Descriptions.Item label="Внешний номер">{view.externalNumber || "—"}</Descriptions.Item>
         <Descriptions.Item label="Дата отправки">{formatDate(view.sendDate)}</Descriptions.Item>
@@ -191,7 +207,7 @@ function MailTab({ view }: { view: EmailView }) {
 
       {previewAtt && (previewAtt.kind === "pdf" || previewAtt.kind === "image") ? (
         <div style={{ marginTop: 16 }}>
-          <Typography.Title level={5}>Документ с номером</Typography.Title>
+          <Typography.Title level={5}>Предпросмотр</Typography.Title>
           <img
             src={previewUrl(view.id, previewAtt.id, previewPage)}
             alt={previewAtt.filename}

@@ -3,9 +3,14 @@ import type {
   AccountInput,
   AiConfig,
   ComposeInput,
+  ComposeTemplate,
   Draft,
   Email,
+  DirectoryContact,
+  DirectoryStatus,
   EmailView,
+  LdapSettings,
+  Template,
   ThreadGroup
 } from "./types";
 
@@ -30,6 +35,51 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface EmailFilter {
+  folder?: string;
+  accountId?: string;
+  categories?: string[];
+  minPriority?: number;
+  tag?: string;
+  hasEvent?: boolean;
+  status?: string;
+  q?: string;
+  from?: string[];
+  to?: string[];
+  externalNumber?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+  sendDateFrom?: string;
+  sendDateTo?: string;
+  sortBy?: string;
+  sortDir?: string;
+}
+
+/** Общий query-фильтр для /api/emails и /api/threads. */
+function emailQuery(filter: EmailFilter = {}): string {
+  const params = new URLSearchParams();
+  if (filter.folder) params.set("folder", filter.folder);
+  if (filter.accountId) params.set("accountId", filter.accountId);
+  if (filter.categories?.length) params.set("categories", filter.categories.join(","));
+  if (filter.minPriority) params.set("minPriority", String(filter.minPriority));
+  if (filter.tag) params.set("tag", filter.tag);
+  if (filter.hasEvent) params.set("hasEvent", "1");
+  if (filter.status) params.set("status", filter.status);
+  if (filter.q) params.set("q", filter.q);
+  if (filter.from?.length) params.set("from", filter.from.join(","));
+  if (filter.to?.length) params.set("to", filter.to.join(","));
+  if (filter.externalNumber?.length) params.set("externalNumber", filter.externalNumber.join(","));
+  if (filter.dateFrom) params.set("dateFrom", filter.dateFrom);
+  if (filter.dateTo) params.set("dateTo", filter.dateTo);
+  if (filter.sendDateFrom) params.set("sendDateFrom", filter.sendDateFrom);
+  if (filter.sendDateTo) params.set("sendDateTo", filter.sendDateTo);
+  if (filter.sortBy) params.set("sortBy", filter.sortBy);
+  if (filter.sortDir) params.set("sortDir", filter.sortDir);
+  return params.toString();
+}
+
+const withQuery = (q: string) => (q ? "?" + q : "");
+
 export const api = {
   health: () => request<{ ok: boolean }>("/api/health"),
 
@@ -52,57 +102,15 @@ export const api = {
       body: JSON.stringify(range ?? {})
     }),
 
-  emails: (filter: {
-    folder?: string;
-    accountId?: string;
-    categories?: string[];
-    minPriority?: number;
-    tag?: string;
-    hasEvent?: boolean;
-    status?: string;
-    q?: string;
-    from?: string[];
-    to?: string[];
-    externalNumber?: string[];
-    dateFrom?: string;
-    dateTo?: string;
-    sendDateFrom?: string;
-    sendDateTo?: string;
-    sortBy?: string;
-    sortDir?: string;
-  } = {}) => {
-    const params = new URLSearchParams();
-    if (filter.folder) params.set("folder", filter.folder);
-    if (filter.accountId) params.set("accountId", filter.accountId);
-    if (filter.categories?.length) params.set("categories", filter.categories.join(","));
-    if (filter.minPriority) params.set("minPriority", String(filter.minPriority));
-    if (filter.tag) params.set("tag", filter.tag);
-    if (filter.hasEvent) params.set("hasEvent", "1");
-    if (filter.status) params.set("status", filter.status);
-    if (filter.q) params.set("q", filter.q);
-    if (filter.from?.length) params.set("from", filter.from.join(","));
-    if (filter.to?.length) params.set("to", filter.to.join(","));
-    if (filter.externalNumber?.length) params.set("externalNumber", filter.externalNumber.join(","));
-    if (filter.dateFrom) params.set("dateFrom", filter.dateFrom);
-    if (filter.dateTo) params.set("dateTo", filter.dateTo);
-    if (filter.sendDateFrom) params.set("sendDateFrom", filter.sendDateFrom);
-    if (filter.sendDateTo) params.set("sendDateTo", filter.sendDateTo);
-    if (filter.sortBy) params.set("sortBy", filter.sortBy);
-    if (filter.sortDir) params.set("sortDir", filter.sortDir);
-    const q = params.toString();
-    return request<Email[]>("/api/emails" + (q ? "?" + q : ""));
-  },
+  emails: (filter: EmailFilter = {}) => request<Email[]>("/api/emails" + withQuery(emailQuery(filter))),
   email: (id: string) => request<EmailView>("/api/emails/" + id),
-  threads: (accountId?: string, folder?: string) =>
-    request<ThreadGroup[]>(
-      "/api/threads" +
-        (accountId || folder
-          ? "?" +
-            [accountId ? "accountId=" + encodeURIComponent(accountId) : "", folder ? "folder=" + encodeURIComponent(folder) : ""]
-              .filter(Boolean)
-              .join("&")
-          : "")
-    ),
+  composeTemplate: (accountId: string, mode: string, emailId?: string | null) => {
+    const params = new URLSearchParams({ accountId, mode });
+    if (emailId) params.set("emailId", emailId);
+    return request<ComposeTemplate>("/api/compose-template?" + params.toString());
+  },
+  threads: (filter: EmailFilter = {}) =>
+    request<ThreadGroup[]>("/api/threads" + withQuery(emailQuery(filter))),
   setFolder: (id: string, folder: string) =>
     request<{ ok: boolean }>("/api/emails/" + id + "/folder", {
       method: "PATCH",
@@ -160,6 +168,25 @@ export const api = {
     request<Draft>("/api/drafts/" + id, { method: "PUT", body: JSON.stringify(patch) }),
   deleteDraft: (id: string) =>
     request<{ ok: boolean }>("/api/drafts/" + id, { method: "DELETE" }),
+
+  templates: (accountId?: string) =>
+    request<Template[]>("/api/templates" + (accountId ? "?accountId=" + encodeURIComponent(accountId) : "")),
+  createTemplate: (tpl: Partial<Template> & { name: string }) =>
+    request<Template>("/api/templates", { method: "POST", body: JSON.stringify(tpl) }),
+  updateTemplate: (id: string, patch: Partial<Template>) =>
+    request<Template>("/api/templates/" + id, { method: "PUT", body: JSON.stringify(patch) }),
+  deleteTemplate: (id: string) =>
+    request<{ ok: boolean }>("/api/templates/" + id, { method: "DELETE" }),
+
+  directoryStatus: () => request<DirectoryStatus>("/api/directory/status"),
+  saveLdapSettings: (patch: Partial<LdapSettings>) =>
+    request<LdapSettings>("/api/directory/settings", { method: "PUT", body: JSON.stringify(patch) }),
+  directoryLogin: (login: string, password: string) =>
+    request<DirectoryStatus>("/api/directory/login", { method: "POST", body: JSON.stringify({ login, password }) }),
+  directoryLogout: () => request<DirectoryStatus>("/api/directory/logout", { method: "POST" }),
+  directoryRefresh: () => request<{ synced: number }>("/api/directory/refresh", { method: "POST" }),
+  searchContacts: (q: string, limit = 25) =>
+    request<DirectoryContact[]>("/api/contacts/search?q=" + encodeURIComponent(q) + "&limit=" + limit),
 
   updateAnalysis: (emailId: string, patch: Record<string, unknown>) =>
     request("/api/analysis/" + emailId, { method: "PATCH", body: JSON.stringify(patch) }),

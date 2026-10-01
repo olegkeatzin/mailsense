@@ -123,3 +123,65 @@ node scripts/test_pop3.mjs                 # интеграционный тес
   (или добавь аккаунт через окно настроек).
 - Пароли: в Electron — `safeStorage`, иначе фолбэк AES-256-GCM (ключ в `data/secret.key`).
 - POP3: после `RETR`/`UIDL` сначала идёт строка статуса `+OK …` — её нужно читать отдельно от тела (см. `pop3Client.ts`).
+
+## Почта: диапазон дат, авто-скан, переписки
+
+- **Диапазон дат в IMAP.** Не передавай в `imapflow.fetch()` объект `{since, before}`: библиотека компилирует
+  `BEFORE`/`SINCE` в расширение `WITHIN` (`OLDER`/`YOUNGER`), которое Dovecot отвергает
+  (`BAD Invalid search interval parameter`) — и скан молча возвращает 0 писем. В `imapConnector.ts` сначала
+  получается СПИСОК UID (`SEARCH SENTSINCE/SENTBEFORE` при диапазоне, иначе `SEARCH ALL`), из него вычитаются
+  `knownUids`, и только после этого качаются тела (`fetch(uidList, {source:true, uid:true}, {uid:true})`,
+  пачками по 500). Нельзя снова скачивать весь ящик через `fetch("1:*")` и фильтровать уже полученные письма —
+  на большом ящике скан без периода выглядит «зависшим». Фолбэк на `1:*` — только если SEARCH упал.
+  Плюс `mailService` фильтрует по `Date` на клиенте (в локальной зоне) — как страховка и для POP3.
+- **POP3** серверного поиска по датам не имеет: скачиваются все неизвестные UID, диапазон применяется клиентски.
+- **Удаление и повторный скан.** Удалённые письма пишутся в `deleted_emails` (надгробия): авто-скан
+  (`includeDeleted=false`) не воскрешает их, а ручной скан по `POST /api/accounts/:id/fetch` передаёт
+  `includeDeleted=true` — тогда UID/Message-ID надгробий не считаются известными и письма скачиваются заново
+  (`clearDeletedEmail` снимает надгробие). Иначе «удалил → скан» навсегда ничего не возвращает.
+- **Вложения: текст и описание.** OCR/извлечённый текст сохраняется в `attachments.extracted_text`
+  (`setAttachmentText` из `analysisService`), а описания модели — в `ai_description`. Сопоставление описаний
+  с вложениями идёт через `matchAttachmentDescriptions` (регистр/путь/пробелы/расширение), а не строгим
+  сравнением `filename` — иначе часть вложений остаётся без «краткого содержания».
+- **Авто-скан НЕ сканирует весь ящик.** Планировщик берёт `account.settings.lastFetchAt` и забирает письма
+  начиная с него (минус сутки запаса). Пока синхронизации не было, авто-скан молчит — первичный скан запускает
+  пользователь кнопкой «Скан» (при необходимости с диапазоном дат). Отключение — настройка `auto_fetch=false`
+  («Настройки → Общие»). Параллельные сканы одного аккаунта сериализуются в `mailService` (иначе
+  «Connection not available» / socket timeout).
+- **Переписки** (`services/threadService.ts`): приоритет — In-Reply-To/References; если родителя нет в БД,
+  ответы склеиваются по нормализованной теме (`Re:`/`Fwd:`/`Ответ:` срезаются, в т.ч. внутри строки);
+  письма без признаков ответа с одинаковой темой НЕ склеиваются (рассылки). Родитель, пришедший позже детей,
+  «усыновляет» их. При апгрейде беседы один раз пересобираются целиком — гейт `settings.maintenance.version`
+  (см. `services/maintenance.ts`). Ручная пересборка: `POST /api/threads/rebuild` (тело `{accountId?}`).
+- **Статус «Готово»** ставится только после успешного анализа. Ответы внутри переписки больше НЕ помечаются
+  готовыми без анализа: при `auto_analyze=false` они остаются «Ожидает».
+- **Письма: ответ/пересылка, подпись.** Шаблон для композера собирает `GET /api/compose-template`
+  (`services/composeService.ts`): получатели (Reply-To → From), тема без дублей `Re:`/`Fwd:`, цепочка
+  `References` = references оригинала + Message-ID родителя (`buildReferences`), строка атрибуции,
+  цитата (`>` в text/plain, `<blockquote>` в HTML) и подпись. Подпись и отображаемое имя — в
+  `account.settings` (`displayName`, `signature`, `signatureHtml`, `signatureEnabled`,
+  `signaturePosition`, `signatureDelimiter`, `replyQuote`, `replyAttribution`, `forwardAttachments`) и правятся в
+  «Настройки → Аккаунты → Отправка и подпись». Пересылка прикладывает вложения оригинала.
+  `signatureHtml` — подпись из WYSIWYG-редактора (приоритет), `signature` — plain-зеркало для text/plain.
+  ⚠️ Редактор TipTap отдаёт HTML; text/plain собирается `htmlToPlainText` (blockquote → `>`), а не
+  `editor.getText()` — иначе цитата теряет `>`.
+  ⚠️ Адреса в «Кому/Копия» разбирает `parseEmails` (Composer.tsx) НЕ через split: имя вида
+  «Иванов, И.И. <a@b>" не должно рваться по запятой, поэтому ищутся готовые адреса
+  (`"Имя" <a@b>` / `Имя <a@b>` / `a@b`), а разделители просто игнорируются. В `AddressSelect`
+  `tokenSeparators={[";"]}` — запятая намеренно НЕ разделитель (иначе имя рвётся при вводе).
+- **Единый WYSIWYG-редактор.** `components/RichTextEditor.tsx` (TipTap StarterKit + Placeholder) — один
+  редактор на композер, шаблоны и подпись: панель с заголовками, списками, цитатой, ссылкой и «Tx».
+  Не плодить второй экземпляр TipTap — переиспользовать этот компонент.
+- **Шаблоны писем.** «Настройки → Шаблоны»: список + кнопка «Добавить шаблон», форма — в **попапе**
+  (встроенной формы под списком больше нет). Сохраняются `bodyHtml` (WYSIWYG) и `bodyText` (plain-фолбэк).
+  ⚠️ Модалка настроек НЕ размонтирует вкладки, поэтому в `SettingsModal` они пересоздаются по `reloadKey`
+  при каждом открытии — иначе список шаблонов (и статус каталога) остаются устаревшими и сохранённый
+  из композера шаблон «не появляется» в настройках.
+- **Каталог LDAP/AD (адресная книга).** Вход опционален (`services/directoryService.ts`, `directory/ldap.ts`, `ldapts`):
+  bind от учётки пользователя, пароль — зашифрованно (`settings`: `ldap.login`/`ldap.passwordEncrypted`). Настройки —
+  `ldap.*` (`url`, `baseDn`, `loginFormat`, `upnSuffix`, `netbiosDomain`, `userFilter`, `attributes`, `sizeLimit`,
+  `rejectUnauthorized`), UI — «Настройки → Каталог (LDAP)». Автокомплит адресов — `GET /api/contacts/search`
+  (кэш таблицы `contacts` + онлайн-дополнение). ⚠️ `upnSuffix` может содержать ведущий `@` — не удваивать
+  (`buildBindIdentifier`). Стенд: `stand.test`, `ldaps://127.0.0.1:636`, bind `test`/`Test1234!` (плейн 389 Samba не пускает).
+  ⚠️ `ldapts` объявлен в `dependencies` и у `@mailsense/core`, и у `apps/electron` (external для tsup) — иначе
+  electron-builder не положит его в asar.

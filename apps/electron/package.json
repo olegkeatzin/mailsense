@@ -1,6 +1,6 @@
 {
   "name": "mailsense-electron",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Почтовый помощник с ИИ-аналитикой (MailSense)",
   "author": "MailSense",
@@ -13,7 +13,9 @@
     "dist": "electron-builder",
     "dist:linux": "electron-builder --linux",
     "dist:deb": "electron-builder --linux deb",
-    "dist:win": "electron-builder --win"
+    "dist:win": "electron-builder --win",
+    "dist:win-nsis": "electron-builder --win nsis",
+    "dist:win-portable": "electron-builder --win portable"
   },
   "dependencies": {
     "@kenjiuno/msgreader": "^1.28.0",
@@ -24,6 +26,7 @@
     "express": "^4.21.2",
     "imapflow": "^1.0.172",
     "jszip": "^3.10.1",
+    "ldapts": "^9.2.0",
     "mailparser": "^3.7.2",
     "mammoth": "^1.8.0",
     "nodemailer": "9.0.5",

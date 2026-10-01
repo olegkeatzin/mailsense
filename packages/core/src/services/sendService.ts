@@ -39,6 +39,12 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
 
   const smtpPassword = decryptSmtpPassword(account);
 
+  // Отображаемое имя из настроек аккаунта (Thunderbird-подобно): "Иванов И.И." <user@host>.
+  const displayName = typeof account.settings.displayName === "string" ? account.settings.displayName.trim() : "";
+  const fromHeader = displayName
+    ? '"' + displayName.replace(/"/g, '\\"') + '" <' + account.username + ">"
+    : account.username;
+
   const storedMessageId = randomUUID() + "@mailsense.local";
   const headerMessageId = wrapMessageId(storedMessageId);
   const inReplyTo = compose.inReplyToMessageId ? wrapMessageId(compose.inReplyToMessageId) : undefined;
@@ -48,7 +54,7 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
       : undefined;
 
   const { raw } = await sendSmtp(account, smtpPassword, {
-    from: account.username,
+    from: fromHeader,
     to: compose.to.map(addressTo),
     cc: compose.cc?.map(addressTo),
     bcc: compose.bcc?.map(addressTo),

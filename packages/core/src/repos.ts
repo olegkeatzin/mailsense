@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "./db/index.js";
 import { schema } from "./db/schema.js";
 import { normalizeMessageId } from "./mail/parser.js";
@@ -10,15 +10,17 @@ import type {
   AnalysisStatus,
   Attachment,
   Category,
+  DirectoryContact,
   Draft,
   DraftAttachment,
+  Template,
   Email,
   EmailAddress,
   EmailView,
   Thread
 } from "./types.js";
 
-const { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, settings } = schema;
+const { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, templates, contacts, settings } = schema;
 
 function now(): string {
   return new Date().toISOString();
@@ -138,6 +140,26 @@ export function deleteAccount(id: string): void {
   getDb().delete(accounts).where(eq(accounts.id, id)).run();
 }
 
+/** Точечно обновляет поле в settings-аккаунта (JSON), не затирая остальные. */
+export function patchAccountSettings(id: string, patch: Record<string, unknown>): void {
+  const existing = getAccount(id);
+  if (!existing) return;
+  const settings = { ...existing.settings, ...patch };
+  getDb()
+    .update(accounts)
+    .set({ settings: JSON.stringify(settings), updatedAt: now() })
+    .where(eq(accounts.id, id))
+    .run();
+}
+
+export function listAccountIds(): string[] {
+  return getDb()
+    .select({ id: accounts.id })
+    .from(accounts)
+    .all()
+    .map((r) => r.id);
+}
+
 // ---------------- Emails ----------------
 
 function mapEmail(row: typeof emails.$inferSelect): Email {
@@ -169,28 +191,53 @@ function mapEmail(row: typeof emails.$inferSelect): Email {
   };
 }
 
-export function emailExistsByMessageId(messageId: string): boolean {
+/**
+ * Есть ли письмо с таким Message-ID. Надгробия удалённых писем учитываются,
+ * когда includeDeleted=false (авто-скан не воскрешает удалённое). Ручной скан
+ * (`includeDeleted=true`) игнорирует их, чтобы письмо можно было скачать заново.
+ */
+export function emailExistsByMessageId(messageId: string, includeDeleted = false): boolean {
   if (!messageId) return false;
   const db = getDb();
   if (db.select({ id: emails.id }).from(emails).where(eq(emails.messageId, messageId)).get()) return true;
+  if (includeDeleted) return false;
   return !!db.select({ id: deletedEmails.id }).from(deletedEmails).where(eq(deletedEmails.messageId, messageId)).get();
 }
 
-export function knownUidsForAccount(accountId: string, folder: string): Set<string> {
+/**
+ * Уже известные UID папки. Надгробия удалённых писем добавляются по умолчанию,
+ * чтобы авто-скан не тянул их повторно; ручной скан (`includeDeleted=true`)
+ * считает их неизвестными и забирает заново.
+ */
+export function knownUidsForAccount(accountId: string, folder: string, includeDeleted = false): Set<string> {
   const db = getDb();
   const rows = db
     .select({ uid: emails.uid })
     .from(emails)
     .where(and(eq(emails.accountId, accountId), eq(emails.folder, folder)))
     .all();
+  const set = new Set(rows.map((r) => r.uid));
+  if (includeDeleted) return set;
   const deleted = db
     .select({ uid: deletedEmails.uid })
     .from(deletedEmails)
     .where(and(eq(deletedEmails.accountId, accountId), eq(deletedEmails.folder, folder)))
     .all();
-  const set = new Set(rows.map((r) => r.uid));
   for (const d of deleted) set.add(d.uid);
   return set;
+}
+
+/** Убирает надгробия письма — после того как оно снова сохранено из ящика. */
+export function clearDeletedEmail(accountId: string, folder: string, uid: string, messageId: string): void {
+  const db = getDb();
+  db.delete(deletedEmails)
+    .where(
+      and(
+        eq(deletedEmails.accountId, accountId),
+        sql`(${deletedEmails.uid} = ${uid} OR ${deletedEmails.messageId} = ${messageId})`
+      )
+    )
+    .run();
 }
 
 export function insertEmail(e: {
@@ -373,6 +420,19 @@ export function listEmailsWithAnalysis(filter: EmailListFilter = {}): EmailListI
   return items;
 }
 
+/** Все письма указанных бесед, без учёта папки — для сквозной ленты переписки. */
+export function listEmailsWithAnalysisByThreadIds(threadIds: string[]): EmailListItem[] {
+  if (!threadIds.length) return [];
+  return getDb()
+    .select()
+    .from(emails)
+    .where(inArray(emails.threadId, threadIds))
+    .all()
+    .map(mapEmail)
+    .map((e) => ({ ...e, analysis: getAnalysis(e.id) }))
+    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+}
+
 export function setEmailStatus(id: string, status: AnalysisStatus): void {
   getDb()
     .update(emails)
@@ -491,6 +551,11 @@ export function listAttachments(emailId: string): Attachment[] {
 
 export function setAttachmentDescription(id: string, description: string): void {
   getDb().update(attachments).set({ aiDescription: description }).where(eq(attachments.id, id)).run();
+}
+
+/** Сохраняет распознанный текст вложения (OCR/извлечённый), чтобы он был виден в UI. */
+export function setAttachmentText(id: string, text: string): void {
+  getDb().update(attachments).set({ extractedText: text }).where(eq(attachments.id, id)).run();
 }
 
 // ---------------- Analysis results ----------------
@@ -628,7 +693,87 @@ export function createThread(accountId: string, rootMessageId: string | null, no
 }
 
 export function touchThread(id: string, lastMessageAt: string): void {
-  getDb().update(threads).set({ lastMessageAt, updatedAt: now() }).where(eq(threads.id, id)).run();
+  const existing = getThread(id);
+  if (!existing) return;
+  const next =
+    lastMessageAt && (!existing.lastMessageAt || lastMessageAt > existing.lastMessageAt)
+      ? lastMessageAt
+      : existing.lastMessageAt;
+  getDb().update(threads).set({ lastMessageAt: next, updatedAt: now() }).where(eq(threads.id, id)).run();
+}
+
+export function updateThreadRoot(id: string, rootMessageId: string | null): void {
+  getDb().update(threads).set({ rootMessageId, updatedAt: now() }).where(eq(threads.id, id)).run();
+}
+
+/** Самая свежая беседа аккаунта с такой нормализованной темой (для склейки ответов без родителя в БД). */
+export function findThreadByNormalizedSubject(accountId: string, normalizedSubject: string): Thread | null {
+  if (!normalizedSubject) return null;
+  const row = getDb()
+    .select()
+    .from(threads)
+    .where(and(eq(threads.accountId, accountId), eq(threads.normalizedSubject, normalizedSubject)))
+    .orderBy(desc(threads.updatedAt))
+    .get();
+  return row ? mapThread(row) : null;
+}
+
+/** Переносит все письма из одной беседы в другую. */
+export function reassignEmailsThread(fromThreadId: string, toThreadId: string): number {
+  if (!fromThreadId || fromThreadId === toThreadId) return 0;
+  return getDb()
+    .update(emails)
+    .set({ threadId: toThreadId, updatedAt: now() })
+    .where(eq(emails.threadId, fromThreadId))
+    .run().changes;
+}
+
+export function deleteThread(id: string): void {
+  getDb().delete(threads).where(eq(threads.id, id)).run();
+}
+
+/** Полный сброс бесед аккаунта (перед пересборкой). */
+export function clearThreadsForAccount(accountId: string): void {
+  const db = getDb();
+  db.update(emails).set({ threadId: null, updatedAt: now() }).where(eq(emails.accountId, accountId)).run();
+  db.delete(threads).where(eq(threads.accountId, accountId)).run();
+}
+
+/** Письма, ссылающиеся на указанный Message-ID (In-Reply-To / References). */
+export function findEmailsReferencing(accountId: string, messageId: string): Email[] {
+  const norm = normalizeMessageId(messageId);
+  if (!norm) return [];
+  const like = "%" + norm + "%";
+  const rows = getDb()
+    .select()
+    .from(emails)
+    .where(
+      and(
+        eq(emails.accountId, accountId),
+        sql`(${emails.inReplyTo} = ${norm} OR ${emails.references} LIKE ${like})`
+      )
+    )
+    .all();
+  return rows.map(mapEmail);
+}
+
+/** Письма, помеченные «Готово», но без результата анализа (кроме «Отправленных»). */
+export function resetReadyWithoutAnalysis(): number {
+  const db = getDb();
+  const rows = db
+    .select({ id: emails.id, folder: emails.folder })
+    .from(emails)
+    .where(eq(emails.analysisStatus, "ready"))
+    .all();
+  let n = 0;
+  for (const r of rows) {
+    if (r.folder === "Sent") continue;
+    if (!getAnalysis(r.id)) {
+      setEmailStatus(r.id, "pending");
+      n++;
+    }
+  }
+  return n;
 }
 
 export function listThreads(accountId: string): Thread[] {
@@ -764,6 +909,152 @@ export function updateDraft(
 
 export function deleteDraft(id: string): void {
   getDb().delete(drafts).where(eq(drafts.id, id)).run();
+}
+
+// ---------------- Templates ----------------
+
+function mapTemplate(row: typeof templates.$inferSelect): Template {
+  return {
+    id: row.id,
+    accountId: row.accountId,
+    name: row.name,
+    subject: row.subject,
+    bodyText: row.bodyText,
+    bodyHtml: row.bodyHtml,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+/** Шаблоны: общие (accountId=null) + шаблоны конкретного аккаунта. */
+export function listTemplates(accountId?: string): Template[] {
+  const db = getDb();
+  const rows = accountId
+    ? db
+        .select()
+        .from(templates)
+        .where(or(eq(templates.accountId, accountId), isNull(templates.accountId)))
+        .all()
+    : db.select().from(templates).all();
+  return rows.map(mapTemplate).sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+
+export function getTemplate(id: string): Template | null {
+  const row = getDb().select().from(templates).where(eq(templates.id, id)).get();
+  return row ? mapTemplate(row) : null;
+}
+
+export function insertTemplate(t: {
+  accountId?: string | null;
+  name: string;
+  subject?: string;
+  bodyText?: string;
+  bodyHtml?: string | null;
+}): Template {
+  const db = getDb();
+  const id = randomUUID();
+  const ts = now();
+  db.insert(templates)
+    .values({
+      id,
+      accountId: t.accountId ?? null,
+      name: t.name,
+      subject: t.subject ?? "",
+      bodyText: t.bodyText ?? "",
+      bodyHtml: t.bodyHtml ?? null,
+      createdAt: ts,
+      updatedAt: ts
+    })
+    .run();
+  return getTemplate(id)!;
+}
+
+export function updateTemplate(
+  id: string,
+  patch: Partial<{ accountId: string | null; name: string; subject: string; bodyText: string; bodyHtml: string | null }>
+): Template | null {
+  const existing = getTemplate(id);
+  if (!existing) return null;
+  const set: Record<string, unknown> = { updatedAt: now() };
+  if (patch.accountId !== undefined) set.accountId = patch.accountId;
+  if (patch.name !== undefined) set.name = patch.name;
+  if (patch.subject !== undefined) set.subject = patch.subject;
+  if (patch.bodyText !== undefined) set.bodyText = patch.bodyText;
+  if (patch.bodyHtml !== undefined) set.bodyHtml = patch.bodyHtml;
+  getDb().update(templates).set(set).where(eq(templates.id, id)).run();
+  return getTemplate(id);
+}
+
+export function deleteTemplate(id: string): void {
+  getDb().delete(templates).where(eq(templates.id, id)).run();
+}
+
+// ---------------- Contacts (каталог LDAP) ----------------
+
+function mapContact(row: typeof contacts.$inferSelect): DirectoryContact {
+  return {
+    dn: row.dn,
+    login: row.login,
+    displayName: row.displayName,
+    mail: row.mail,
+    title: row.title,
+    department: row.department,
+    phone: row.phone,
+    updatedAt: row.updatedAt
+  };
+}
+
+/** Пакетный upsert контактов каталога (по DN). */
+export function upsertContacts(list: DirectoryContact[]): void {
+  if (!list.length) return;
+  const db = getDb();
+  const ts = now();
+  db.transaction((tx) => {
+    for (const c of list) {
+      const values = {
+        login: c.login ?? "",
+        displayName: c.displayName ?? "",
+        mail: c.mail ?? "",
+        title: c.title ?? "",
+        department: c.department ?? "",
+        phone: c.phone ?? "",
+        updatedAt: ts
+      };
+      tx.insert(contacts)
+        .values({ dn: c.dn, ...values })
+        .onConflictDoUpdate({ target: contacts.dn, set: values })
+        .run();
+    }
+  });
+}
+
+/** Поиск по кэшу каталога: имя/почта/логин/отдел. */
+export function searchContactsCache(q: string, limit = 25): DirectoryContact[] {
+  const needle = "%" + (q ?? "").trim().toLowerCase() + "%";
+  return getDb()
+    .select()
+    .from(contacts)
+    .where(
+      q
+        ? or(
+            sql`lower(${contacts.displayName}) LIKE ${needle}`,
+            sql`lower(${contacts.mail}) LIKE ${needle}`,
+            sql`lower(${contacts.login}) LIKE ${needle}`,
+            sql`lower(${contacts.department}) LIKE ${needle}`
+          )
+        : sql`1=1`
+    )
+    .limit(limit)
+    .all()
+    .map(mapContact);
+}
+
+export function listContacts(limit = 500): DirectoryContact[] {
+  return getDb().select().from(contacts).limit(limit).all().map(mapContact);
+}
+
+export function countContacts(): number {
+  return getDb().select().from(contacts).all().length;
 }
 
 // ---------------- Settings ----------------

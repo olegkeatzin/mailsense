@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
-import type { Account, AiConfig, AnalysisStatus, Email, EmailView, ThreadGroup } from "./types";
+import type { Account, AiConfig, AnalysisStatus, Draft, Email, EmailView, ThreadGroup } from "./types";
 
 export type SortBy = "date" | "priority";
 export type SortDir = "asc" | "desc";
@@ -35,9 +35,13 @@ interface State extends FilterState {
   loading: boolean;
   settingsOpen: boolean;
   aiConfig: AiConfig | null;
-  compose: { open: boolean; mode: ComposeMode; emailId: string | null };
+  compose: { open: boolean; mode: ComposeMode; emailId: string | null; draft: Draft | null };
   openCompose: (mode: ComposeMode, emailId?: string | null) => void;
+  /** Открыть композер с уже сохранённым черновиком. */
+  openDraftCompose: (draft: Draft) => void;
   closeCompose: () => void;
+  draftsOpen: boolean;
+  setDraftsOpen: (v: boolean) => void;
   threadView: boolean;
   threads: ThreadGroup[];
   setThreadView: (v: boolean) => void;
@@ -73,6 +77,29 @@ interface State extends FilterState {
   fetchAccountRange: (id: string, since?: string, until?: string) => Promise<void>;
 }
 
+/** Единый фильтр для списка писем и переписок (иначе поиск в тредах терялся). */
+function filterParams(s: State) {
+  return {
+    folder: s.folder,
+    accountId: s.accountFilter ?? undefined,
+    categories: s.categories.length ? s.categories : undefined,
+    minPriority: s.minPriority ?? undefined,
+    tag: s.tag ?? undefined,
+    hasEvent: s.hasEvent,
+    status: s.status ?? undefined,
+    q: s.q || undefined,
+    from: s.from.length ? s.from : undefined,
+    to: s.to.length ? s.to : undefined,
+    externalNumber: s.externalNumber.length ? s.externalNumber : undefined,
+    dateFrom: s.dateFrom || undefined,
+    dateTo: s.dateTo || undefined,
+    sendDateFrom: s.sendDateFrom || undefined,
+    sendDateTo: s.sendDateTo || undefined,
+    sortBy: s.sortBy,
+    sortDir: s.sortDir
+  };
+}
+
 export const useStore = create<State>()((set, get) => ({
   accounts: [],
   emails: [],
@@ -84,7 +111,8 @@ export const useStore = create<State>()((set, get) => ({
   loading: false,
   settingsOpen: false,
   aiConfig: null,
-  compose: { open: false, mode: "new", emailId: null },
+  compose: { open: false, mode: "new", emailId: null, draft: null },
+  draftsOpen: false,
   threadView: false,
   threads: [],
   categories: [],
@@ -125,27 +153,15 @@ export const useStore = create<State>()((set, get) => ({
   loadEmails: async () => {
     set({ loading: true });
     try {
-      const s = get();
-      const emails = await api.emails({
-        folder: s.folder,
-        accountId: s.accountFilter ?? undefined,
-        categories: s.categories.length ? s.categories : undefined,
-        minPriority: s.minPriority ?? undefined,
-        tag: s.tag ?? undefined,
-        hasEvent: s.hasEvent,
-        status: s.status ?? undefined,
-        q: s.q || undefined,
-        from: s.from.length ? s.from : undefined,
-        to: s.to.length ? s.to : undefined,
-        externalNumber: s.externalNumber.length ? s.externalNumber : undefined,
-        dateFrom: s.dateFrom || undefined,
-        dateTo: s.dateTo || undefined,
-        sendDateFrom: s.sendDateFrom || undefined,
-        sendDateTo: s.sendDateTo || undefined,
-        sortBy: s.sortBy,
-        sortDir: s.sortDir
-      });
+      const emails = await api.emails(filterParams(get()));
       set({ emails });
+      if (get().threadView) {
+        try {
+          await get().loadThreads();
+        } catch {
+          /* ignore */
+        }
+      }
     } finally {
       set({ loading: false });
     }
@@ -232,16 +248,17 @@ export const useStore = create<State>()((set, get) => ({
 
   setSettingsOpen: (v: boolean) => set({ settingsOpen: v }),
 
-  openCompose: (mode, emailId = null) => set({ compose: { open: true, mode, emailId } }),
-  closeCompose: () => set({ compose: { open: false, mode: "new", emailId: null } }),
+  openCompose: (mode, emailId = null) => set({ compose: { open: true, mode, emailId, draft: null } }),
+  openDraftCompose: (draft) => set({ compose: { open: true, mode: "new", emailId: null, draft } }),
+  closeCompose: () => set({ compose: { open: false, mode: "new", emailId: null, draft: null } }),
+  setDraftsOpen: (v: boolean) => set({ draftsOpen: v }),
 
   setThreadView: (v: boolean) => {
     set({ threadView: v });
     if (v) void get().loadThreads();
   },
   loadThreads: async () => {
-    const s = get();
-    const threads = await api.threads(s.accountFilter ?? undefined, s.folder);
+    const threads = await api.threads(filterParams(get()));
     set({ threads });
   },
 

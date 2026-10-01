@@ -196,6 +196,41 @@ ALTER TABLE deleted_emails_new RENAME TO deleted_emails;
 CREATE UNIQUE INDEX IF NOT EXISTS deleted_emails_account_folder_uid_idx ON deleted_emails(account_id, folder, uid);
 CREATE INDEX IF NOT EXISTS deleted_emails_message_id_idx ON deleted_emails(message_id);
 `
+  },
+  {
+    version: 9,
+    name: "email_templates",
+    sql: `
+CREATE TABLE IF NOT EXISTS templates (
+  id TEXT PRIMARY KEY,
+  account_id TEXT,
+  name TEXT NOT NULL,
+  subject TEXT NOT NULL DEFAULT '',
+  body_text TEXT NOT NULL DEFAULT '',
+  body_html TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS templates_account_idx ON templates(account_id);
+`
+  },
+  {
+    version: 10,
+    name: "directory_contacts",
+    sql: `
+CREATE TABLE IF NOT EXISTS contacts (
+  dn TEXT PRIMARY KEY,
+  login TEXT NOT NULL DEFAULT '',
+  display_name TEXT NOT NULL DEFAULT '',
+  mail TEXT NOT NULL DEFAULT '',
+  title TEXT NOT NULL DEFAULT '',
+  department TEXT NOT NULL DEFAULT '',
+  phone TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS contacts_mail_idx ON contacts(mail);
+CREATE INDEX IF NOT EXISTS contacts_name_idx ON contacts(display_name);
+`
   }
 ];
 

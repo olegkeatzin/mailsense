@@ -12,7 +12,9 @@ import {
 } from "../utils";
 
 function EmailRowItem({ e, selected }: { e: Email; selected: boolean }) {
-  const sender = e.from ? e.from.name || e.from.address : "(неизвестен)";
+  const senderName = e.from?.name?.trim() || "";
+  const senderAddress = e.from?.address?.trim() || senderName || "(неизвестен)";
+  const senderTitle = senderName ? senderName + " <" + senderAddress + ">" : senderAddress;
   const snippet = (e.bodyText || "").replace(/\s+/g, " ").slice(0, 90);
   const a = e.analysis;
 
@@ -26,15 +28,23 @@ function EmailRowItem({ e, selected }: { e: Email; selected: boolean }) {
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span
+          title={senderTitle}
           style={{
-            fontWeight: 600,
+            minWidth: 0,
             fontSize: 13,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap"
           }}
         >
-          {sender}
+          {senderName ? (
+            <>
+              <span style={{ fontWeight: 600 }}>{senderName}</span>{" "}
+              <span style={{ color: "#8c8c8c", fontWeight: 400, fontSize: 12 }}>&lt;{senderAddress}&gt;</span>
+            </>
+          ) : (
+            <span style={{ fontWeight: 600 }}>{senderAddress}</span>
+          )}
         </span>
         <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{formatDate(e.date)}</span>
       </div>

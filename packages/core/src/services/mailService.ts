@@ -2,13 +2,13 @@ import { randomUUID } from "node:crypto";
 import { getContext } from "../context.js";
 import { logger } from "../logger.js";
 import {
+  clearDeletedEmail,
   emailExistsByMessageId,
-  findEmailByMessageId,
   getAccount,
   insertAttachment,
   insertEmail,
   knownUidsForAccount,
-  setEmailStatus
+  patchAccountSettings
 } from "../repos.js";
 import { parseRawEmail, type ParsedEmail } from "../mail/parser.js";
 import { parseMsg } from "../mail/msg.js";
@@ -29,6 +29,11 @@ export interface FetchResult {
 export interface FetchEmailsOptions {
   since?: string; // ISO "YYYY-MM-DD"
   until?: string; // ISO "YYYY-MM-DD"
+  /**
+   * Игнорировать надгробия удалённых писем (ручной скан): письмо, удалённое
+   * в приложении, но оставшееся на сервере, будет скачано заново.
+   */
+  includeDeleted?: boolean;
 }
 
 export interface ImportFile {
@@ -42,11 +47,12 @@ async function persistParsedEmail(
   folder: string,
   uid: string,
   parsed: ParsedEmail,
-  dataDir: string
+  dataDir: string,
+  includeDeleted = false
 ): Promise<boolean> {
   // Письма без Message-ID получают синтетический уникальный ID (иначе UNIQUE-констрейнт их роняет).
   const messageId = parsed.messageId || `${accountId}:${folder}:${uid}:${parsed.subject}`;
-  if (emailExistsByMessageId(messageId)) return false;
+  if (emailExistsByMessageId(messageId, includeDeleted)) return false;
 
   const email = insertEmail({
     accountId,
@@ -72,15 +78,6 @@ async function persistParsedEmail(
     logger.warn({ emailId: email.id, err: (err as Error).message }, "Не удалось привязать беседу");
   }
 
-  // Ответы/пересылки внутри существующей переписки не анализируем заново —
-  // они помечаются готовыми и не попадают в очередь OCR/сводки.
-  const isContinuation = [email.inReplyTo, ...email.references].some(
-    (mid) => !!mid && !!findEmailByMessageId(accountId, mid)
-  );
-  if (isContinuation) {
-    setEmailStatus(email.id, "ready");
-  }
-
   for (const att of parsed.attachments) {
     const prep = await prepareAttachment(dataDir, email.id, att.filename, att.mimeType, att.content);
     insertAttachment({
@@ -96,17 +93,31 @@ async function persistParsedEmail(
     });
   }
 
-  if (!isContinuation && getSettingValue("auto_analyze", "true") === "true") {
+  // Письмо снова сохранено из ящика — надгробие удаления больше не нужно,
+  // иначе оно будет вечно блокировать повторный скан.
+  if (includeDeleted) clearDeletedEmail(accountId, folder, uid, messageId);
+
+  // Все письма (включая ответы внутри переписки) проходят обычный путь анализа.
+  // Раньше ответы помечались «Готово» без анализа — это давало ложный статус в UI.
+  if (getSettingValue("auto_analyze", "true") === "true") {
     enqueue(email.id);
   }
   return true;
 }
 
+/** Фильтр по дате получения в локальном часовом поясе (сравниваем моменты времени, а не строки UTC). */
 function inDateRange(date: string | null, since?: string, until?: string): boolean {
   if (!date) return true;
-  const d = date.slice(0, 10); // YYYY-MM-DD
-  if (since && d < since) return false;
-  if (until && d > until) return false;
+  const t = Date.parse(date);
+  if (Number.isNaN(t)) return true;
+  if (since) {
+    const start = new Date(since + "T00:00:00").getTime();
+    if (!Number.isNaN(start) && t < start) return false;
+  }
+  if (until) {
+    const end = new Date(until + "T23:59:59.999").getTime();
+    if (!Number.isNaN(end) && t > end) return false;
+  }
   return true;
 }
 
@@ -126,7 +137,7 @@ async function detectSentFolder(connector: MailConnector, account: Account): Pro
   return byName?.path ?? null;
 }
 
-export async function fetchEmails(accountId: string, opts: FetchEmailsOptions = {}): Promise<FetchResult> {
+async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): Promise<FetchResult> {
   const ctx = getContext();
   const account = getAccount(accountId);
   if (!account) throw new Error("Аккаунт не найден");
@@ -140,8 +151,13 @@ export async function fetchEmails(accountId: string, opts: FetchEmailsOptions = 
   let added = 0;
   let skipped = 0;
 
+  const includeDeleted = opts.includeDeleted === true;
+
   const processFolder = async (imapFolder: string, storeFolder: string): Promise<void> => {
-    const knownUids = knownUidsForAccount(accountId, storeFolder);
+    // Ручной скан не считает удалённые письма известными — иначе их не вернуть.
+    const knownUids = knownUidsForAccount(accountId, storeFolder, includeDeleted);
+    // POP3-коннектор серверного поиска по датам не имеет — отдаём как есть,
+    // а диапазон применяем клиентски по разобранной дате письма.
     const messages = await connector.fetchNew(imapFolder, knownUids, { since, until });
     for (const raw of messages) {
       try {
@@ -150,7 +166,9 @@ export async function fetchEmails(accountId: string, opts: FetchEmailsOptions = 
           skipped++;
           continue;
         }
-        if (await persistParsedEmail(accountId, storeFolder, raw.uid, parsed, ctx.config.dataDir)) {
+        if (
+          await persistParsedEmail(accountId, storeFolder, raw.uid, parsed, ctx.config.dataDir, includeDeleted)
+        ) {
           added++;
         } else {
           skipped++;
@@ -179,7 +197,30 @@ export async function fetchEmails(accountId: string, opts: FetchEmailsOptions = 
     await connector.disconnect();
   }
 
+  // Отметка времени последней синхронизации: планировщик использует её,
+  // чтобы не сканировать весь ящик при каждом запуске (см. scheduler.ts).
+  patchAccountSettings(accountId, { lastFetchAt: new Date().toISOString() });
+
   return { added, skipped };
+}
+
+// Один аккаунт обслуживается одним соединением за раз: параллельные сканы
+// (планировщик + кнопка «Скан») приводили к «Connection not available» и таймаутам.
+const inFlightFetches = new Map<string, Promise<FetchResult>>();
+
+export function isFetching(accountId: string): boolean {
+  return inFlightFetches.has(accountId);
+}
+
+export function fetchEmails(accountId: string, opts: FetchEmailsOptions = {}): Promise<FetchResult> {
+  const prev = inFlightFetches.get(accountId);
+  const run: Promise<FetchResult> = (prev ? prev.catch(() => undefined) : Promise.resolve()).then(() =>
+    doFetchEmails(accountId, opts)
+  );
+  inFlightFetches.set(accountId, run);
+  return run.finally(() => {
+    if (inFlightFetches.get(accountId) === run) inFlightFetches.delete(accountId);
+  });
 }
 
 export async function importEmails(

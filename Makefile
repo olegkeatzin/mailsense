@@ -5,7 +5,7 @@
 SHELL := /bin/bash
 PNPM  := pnpm
 
-.PHONY: help install core server web electron build test run dev-server dev-web typecheck package-linux package-deb package-win package clean
+.PHONY: help install core server web electron build test run dev-server dev-web typecheck package-linux package-deb package-win package-win-exe package-win-nsis package clean
 
 help: ## Список команд
 	@echo "MailSense — цели:"
@@ -61,6 +61,12 @@ package-deb: build ## Собрать .deb (Linux)
 
 package-win: build ## Собрать Windows zip
 	cd apps/electron && $(PNPM) dist:win
+
+package-win-exe: build ## Собрать Windows portable .exe (один файл, без установки)
+	cd apps/electron && $(PNPM) dist:win-portable
+
+package-win-nsis: build ## Собрать Windows NSIS-инсталлятор (.exe setup)
+	cd apps/electron && $(PNPM) dist:win-nsis
 
 package: package-linux package-win ## Собрать оба пакета
 

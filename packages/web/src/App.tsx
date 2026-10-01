@@ -8,7 +8,8 @@ import {
   CalendarOutlined,
   ImportOutlined,
   StopOutlined,
-  EditOutlined
+  EditOutlined,
+  FileTextOutlined
 } from "@ant-design/icons";
 import { useStore } from "./store";
 import { api } from "./api";
@@ -22,8 +23,20 @@ import AnalyzeModal from "./components/AnalyzeModal";
 import EmailViewer from "./components/EmailViewer";
 import SettingsModal from "./components/SettingsModal";
 import Composer from "./components/Composer";
+import DraftsModal from "./components/DraftsModal";
 
 const { Header, Sider } = Layout;
+
+function DraftsButton() {
+  const setDraftsOpen = useStore((s) => s.setDraftsOpen);
+  return (
+    <Tooltip title="Сохранённые черновики">
+      <Button icon={<FileTextOutlined />} onClick={() => setDraftsOpen(true)}>
+        Черновики
+      </Button>
+    </Tooltip>
+  );
+}
 
 function AnalysisProgressBadge() {
   const [p, setP] = useState<{
@@ -191,6 +204,7 @@ export default function App() {
           <Button type="primary" icon={<EditOutlined />} onClick={() => openCompose("new")}>
             Написать
           </Button>
+          <DraftsButton />
           <Segmented
             size="small"
             options={[
@@ -238,6 +252,7 @@ export default function App() {
       </Layout>
       <SettingsModal />
       <Composer />
+      <DraftsModal />
       <ImportModal open={importOpen} onClose={() => setImportOpen(false)} />
       <FetchModal open={fetchOpen} onClose={() => setFetchOpen(false)} />
       <AnalyzeModal open={analyzeOpen} onClose={() => setAnalyzeOpen(false)} />
