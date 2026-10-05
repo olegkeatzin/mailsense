@@ -1,0 +1,71 @@
+# Развёртывание серверной части одной командой:
+#   docker compose up -d --build
+#
+# Документооборот хранится в PostgreSQL (сервис postgres ниже).
+# В томе mailsense-data остаются почтовая база SQLite, вложения, ключ шифрования и логи.
+# Порт сервера публикуется на хост; порт базы наружу не выставляется.
+services:
+  # Хранилище документооборота. Локальная почта клиента остаётся на SQLite —
+  # это разные предметные области с разным жизненным циклом.
+  postgres:
+    image: postgres:16-alpine
+    container_name: mailsense-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-mailsense}
+      - POSTGRES_USER=${POSTGRES_USER:-mailsense}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
+    volumes:
+      - mailsense-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mailsense} -d ${POSTGRES_DB:-mailsense}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Порт наружу не публикуем: база нужна только серверу документооборота.
+
+  mailsense:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: mailsense:latest
+    container_name: mailsense
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8123:8123"
+    volumes:
+      - mailsense-data:/data
+    environment:
+      # Документооборот живёт в PostgreSQL; в /data остаются почтовая база,
+      # вложения, ключ шифрования и логи.
+      - DOCFLOW_DATABASE_URL=postgres://${POSTGRES_USER:-mailsense}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-mailsense}
+      # Вход в серверную часть: кому выдать роль администратора при первом входе.
+      # Без этого списка администратора в системе не будет ни у кого.
+      - MAILSENSE_ADMIN_LOGINS=${MAILSENSE_ADMIN_LOGINS:-}
+      # Пароль аварийного локального администратора (вход при недоступности AD).
+      - MAILSENSE_ADMIN_LOGIN=${MAILSENSE_ADMIN_LOGIN:-}
+      - MAILSENSE_ADMIN_PASSWORD=${MAILSENSE_ADMIN_PASSWORD:-}
+      # ИИ-контур (внутренний, облачные провайдеры запрещены)
+      - MAILSENSE_AI_BASE_URL=${MAILSENSE_AI_BASE_URL:-}
+      - MAILSENSE_AI_MODEL=${MAILSENSE_AI_MODEL:-}
+      - MAILSENSE_AI_OCR_MODEL=${MAILSENSE_AI_OCR_MODEL:-}
+      # Засев тестового почтового ящика (по умолчанию выключен)
+      - MAILSENSE_SEED_ACCOUNT=${MAILSENSE_SEED_ACCOUNT:-false}
+      - MAILSENSE_MAIL_USER=${MAILSENSE_MAIL_USER:-}
+      - MAILSENSE_MAIL_PASS=${MAILSENSE_MAIL_PASS:-}
+      - MAILSENSE_MAIL_HOST=${MAILSENSE_MAIL_HOST:-}
+      - MAILSENSE_MAIL_PORT=${MAILSENSE_MAIL_PORT:-}
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8123/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mailsense-data:
+    name: mailsense-data
+  mailsense-pg:
+    name: mailsense-pg

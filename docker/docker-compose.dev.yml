@@ -1,0 +1,29 @@
+# PostgreSQL для разработки и тестов: порт публикуется на хост (55432),
+# данные лежат в отдельном томе. Для развёртывания используйте docker-compose.yml —
+# там порт базы наружу не выставляется, а пароль берётся из .env.
+#
+#   make pg        # поднять
+#   docker compose -f docker/docker-compose.dev.yml down    # остановить
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mailsense-db-dev
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=mailsense
+      - POSTGRES_USER=mailsense
+      # Только для локальной разработки: база слушает localhost и не хранит боевых данных.
+      - POSTGRES_PASSWORD=testpass
+    ports:
+      - "55432:5432"
+    volumes:
+      - mailsense-pg-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mailsense -d mailsense"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mailsense-pg-dev:
+    name: mailsense-pg-dev

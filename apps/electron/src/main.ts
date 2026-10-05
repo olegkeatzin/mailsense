@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +38,55 @@ process.on("unhandledRejection", (reason) =>
   startupLog("unhandledRejection: " + ((reason as Error)?.stack ?? String(reason)))
 );
 
+// ---------------------------------------------------------------------------
+// Режим тонкого клиента.
+//
+// Если задан адрес сервера — локальный backend НЕ поднимается, окно грузит
+// удалённый сервер (там же живут БД, почта и журнал СЭД). Если адрес не задан,
+// поведение прежнее: своё встроенное ядро и локальная база.
+//
+// Источники адреса по приоритету: аргумент --server=<url>, переменная окружения
+// MAILSENSE_SERVER_URL, файл <userData>/server.json.
+// ---------------------------------------------------------------------------
+
+const SERVER_CONFIG_FILE = "server.json";
+
+interface ServerConfig {
+  serverUrl: string | null;
+}
+
+function readServerConfig(): ServerConfig {
+  try {
+    const p = path.join(app.getPath("userData"), SERVER_CONFIG_FILE);
+    if (!fs.existsSync(p)) return { serverUrl: null };
+    const parsed = JSON.parse(fs.readFileSync(p, "utf8")) as { serverUrl?: string };
+    const url = (parsed.serverUrl ?? "").trim();
+    return { serverUrl: url || null };
+  } catch {
+    return { serverUrl: null };
+  }
+}
+
+function writeServerConfig(serverUrl: string | null): void {
+  const p = path.join(app.getPath("userData"), SERVER_CONFIG_FILE);
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, JSON.stringify({ serverUrl }, null, 2), "utf8");
+}
+
+/** Допускаем только http/https — иначе loadURL упадёт невнятно. */
+function normalizeServerUrl(raw: string): string {
+  const url = (raw ?? "").trim().replace(/\/+$/, "");
+  if (!url) throw new Error("Укажите адрес сервера");
+  if (!/^https?:\/\//i.test(url)) throw new Error("Адрес должен начинаться с http:// или https://");
+  return url;
+}
+
+function cliServerUrl(): string | null {
+  const arg = process.argv.find((a) => a.startsWith("--server="));
+  if (arg) return arg.slice("--server=".length).trim() || null;
+  return (process.env.MAILSENSE_SERVER_URL ?? "").trim() || null;
+}
+
 /** safeStorage с фолбэком на файловый AES-ключ (headless/тест). */
 class SafeStorageSecretStore implements SecretStore {
   private fallback: NodeSecretStore;
@@ -61,14 +110,27 @@ class SafeStorageSecretStore implements SecretStore {
   }
 }
 
+/**
+ * Локальный backend поднимается ВСЕГДА: почта живёт на этой машине, в своей базе.
+ * Удалённый сервер — это только документооборот (журнал, пользователи, резолюции),
+ * и его адрес локальный backend проксирует.
+ */
 async function bootstrap() {
   const dataDir = app.getPath("userData");
   const secretStore = new SafeStorageSecretStore(dataDir);
   const webDist = app.isPackaged
     ? path.join(process.resourcesPath, "web")
     : path.join(app.getAppPath(), "../../packages/web/dist");
-  startupLog("bootstrap dataDir=" + dataDir + " webDist=" + webDist + " webDistExists=" + fs.existsSync(webDist));
-  const started = await startServer({ dataDir, webDist, secretStore });
+  const docflowServerUrl = cliServerUrl() ?? readServerConfig().serverUrl;
+  startupLog(
+    "bootstrap dataDir=" + dataDir + " webDist=" + webDist + " docflow=" + (docflowServerUrl ?? "(локально)")
+  );
+  const started = await startServer({
+    dataDir,
+    webDist,
+    secretStore,
+    overrides: { docflowServerUrl: docflowServerUrl ? normalizeServerUrl(docflowServerUrl) : null }
+  });
   startupLog("server started " + started.url);
   return started;
 }
@@ -88,6 +150,28 @@ if (!gotTheLock) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
     }
+  });
+
+  // IPC для настройки адреса сервера документооборота («Настройки → Документооборот»).
+  // Почта при этом остаётся локальной — меняется только источник журнала.
+  ipcMain.handle("server-config:get", () => ({
+    ...readServerConfig(),
+    localServerUrl: server?.url ?? null
+  }));
+  ipcMain.handle("server-config:set", (_e, url: unknown) => {
+    const normalized = normalizeServerUrl(String(url ?? ""));
+    writeServerConfig(normalized);
+    startupLog("адрес сервера документооборота сохранён: " + normalized);
+    return { serverUrl: normalized };
+  });
+  ipcMain.handle("server-config:clear", () => {
+    writeServerConfig(null);
+    startupLog("адрес сервера документооборота сброшен — журнал локальный");
+    return { serverUrl: null };
+  });
+  ipcMain.handle("app:relaunch", () => {
+    app.relaunch();
+    app.exit(0);
   });
 
   app
@@ -119,6 +203,7 @@ if (!gotTheLock) {
       mainWindow.webContents.on("render-process-gone", (_e, details) =>
         startupLog("render-process-gone " + JSON.stringify(details))
       );
+      // Окно всегда грузит ЛОКАЛЬНЫЙ backend: он отдаёт почту и проксирует документооборот.
       mainWindow.loadURL(server.url).catch((err) => startupLog("loadURL failed: " + (err as Error).message));
       mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         void shell.openExternal(url);

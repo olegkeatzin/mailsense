@@ -39,7 +39,9 @@
   },
   "devDependencies": {
     "@mailsense/core": "workspace:*",
+    "@mailsense/docflow": "workspace:*",
     "@mailsense/server": "workspace:*",
+    "@types/node": "^22.10.5",
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
     "tsup": "^8.3.5",

@@ -1,17 +1,19 @@
 # AGENTS.md
 
 Справочник для агентов и разработчиков, работающих с MailSense.
-Читай целиком перед изменениями — здесь собраны неочевидные ограничения, из-за которых легко сломать сборку.
+
+Этот файл — **вход и карта**. Подробности по темам лежат в `docs/` — читай нужный файл, а не всё подряд.
 
 ## Что это
 
-MailSense — десктопный «почтовый помощник с ИИ-аналитикой» (Electron + React). Подключается к IMAP/POP3,
-забирает письма и вложения в SQLite, прогоняет их через staged-пайплайн из двух ИИ-моделей
-(OCR + summary) и показывает структурированную выжимку (суть, теги, приоритет, дата события,
-внешний номер, дата отправки, категория) в трёхпанельном UI.
+MailSense — десктопный «почтовый помощник с ИИ-аналитикой» (Electron + React), к которому добавлена
+**система электронного документооборота**. Подключается к IMAP/POP3, забирает письма и вложения
+в SQLite, прогоняет через staged-пайплайн из двух ИИ-моделей (OCR + summary) и показывает выжимку
+(суть, теги, приоритет, дата события, внешний номер, дата отправки, категория).
 
-Стек: pnpm workspace · TypeScript · React 18 + Ant Design + Zustand · Express · better-sqlite3 + drizzle-orm ·
-imapflow (IMAP) + собственный POP3-клиент · openai (llama.cpp) · electron-builder.
+Стек: pnpm workspace · TypeScript · React 18 + Ant Design + Zustand · Express · better-sqlite3 + drizzle-orm
+(локальная почта) · PostgreSQL + drizzle-orm (серверный документооборот) · imapflow + собственный
+POP3-клиент · openai (llama.cpp) · electron-builder.
 
 ## Быстрый старт
 
@@ -24,164 +26,91 @@ make package-linux    # .deb
 make package-win      # Windows zip
 ```
 
+⚠️ В ограниченной песочнице `make build` падает на esbuild — собирайте через `tsc`, см. `docs/build.md`.
+
+## Карта документации
+
+| Файл | Когда читать |
+|---|---|
+| `docs/build.md` | сборка, нативные модули, pnpm, Electron, песочница, перезапуск сервера |
+| `docs/mail.md` | почта: сканы, треды, отправка, вложения, каталог, **Message-ID** |
+| `docs/docflow.md` | СЭД: журнал, нумерация, резолюции, права, аудит, ответ руководителя |
+| `docs/testing.md` | тесты, стенд, E2E по ролям, проверка UI |
+| `docs/deploy.md` | env, настройки, два режима работы, docker |
+| `docs/lessons.md` | журнал находок: что уже ломали и какой из этого вывод |
+
 ## Структура (pnpm workspace)
 
 ```
-packages/core      # домен: БД, почта, вложения, ИИ, очередь, сервисы (без Electron/UI)
+packages/core      # почта: БД (mailsense.sqlite), вложения, ИИ, каталог LDAP, сервисы
+packages/docflow   # серверная часть: пользователи, роли, сессии, аудит, журнал, резолюции (PostgreSQL)
 packages/server    # Express REST API + раздача SPA + standalone-запуск
 packages/web       # React SPA (Vite): App.tsx + components/
 apps/electron      # Electron-оболочка: main.ts (ESM), preload.ts, electron-builder
-scripts/           # test_pop3.mjs — интеграционный тест POP3
-Makefile           # цели сборки
+docker/            # Dockerfile + docker-compose
+scripts/           # сквозные сценарии: test_pop3, test_journal, test_resolutions, test_roles_e2e
+docs/              # документация по темам (см. карту выше)
 ```
 
-## Архитектура
+**Зависимость строго односторонняя:** `docflow → core`. Core про документооборот не знает вообще;
+когда нужна обратная связь, core объявляет **интерфейс**, а реализацию регистрирует владелец
+(`setLdapSettingsStore`, `setMailSyncHook`). Если тянет импортировать docflow в core — тип или
+функция объявлены не там.
 
-- **Рендерер общается по HTTP REST** (не через IPC). Один и тот же бэкенд (`startServer`) работает
-  headless (Node, для тестов) и внутри Electron (в `app.whenReady`). Это нужно и для тестов, и для упаковки.
-- Путь данных: коннектор (IMAP/POP3) → `mailparser` → SQLite + файлы вложений на диске → очередь `p-queue` →
-  ИИ-адаптер (OpenAI-совместимый) → валидация JSON (zod) → `analysis_results`.
-- Статусы анализа: `pending` → `queued` → `processing` → `ready` | `error`.
-- Вложения: изображения → OCR-модель (base64); PDF → рендер страниц в PNG (pdfjs-dist + @napi-rs/canvas) →
-  OCR-модель постранично; DOCX → текст (mammoth) + вложенные картинки; XLSX → структурированный текст (xlsx).
-- Staged-пайплайн: сначала OCR-модель (`glm-ocr`) читает страницы вложений параллельно (`ocrQueue`),
-  затем summary-модель делает финальную выжимку text-only (`analysisQueue`). Параллельность каждой
-  настраивается в «Настройки → ИИ» (`concurrency` / `ocrConcurrency`).
+## Правило: полное покрытие тестами и проверка UI
 
-## Команды (по пакетам)
+**Это условие приёмки, а не пожелание.** Изменение не считается сделанным, пока оно не покрыто тестами,
+а правка интерфейса — ещё и не проверена в браузере через Playwright за **обе роли** с пустой консолью.
 
-```bash
-pnpm --filter @mailsense/core build        # tsup → dist (ESM, --dts)
-pnpm --filter @mailsense/server build
-pnpm --filter @mailsense/web build         # vite build
-pnpm --filter @mailsense/web typecheck     # tsc --noEmit
-pnpm --filter mailsense-electron build     # tsup: main.js (ESM) + preload.cjs
-pnpm --filter @mailsense/core test         # Jest (13 тестов)
-node scripts/test_pop3.mjs                 # интеграционный тест POP3
-```
+1. **Новая логика — новые тесты.** Покрываем поведение, а не реализацию.
+2. **Найденный баг — сначала тест, потом починка.**
+3. **Правка интерфейса — прогон Playwright** (администратор и рядовой сотрудник, консоль пуста).
+4. **Покрытие не должно падать.**
 
-## Критично: нативные модули и версии
+Детали, команды и грабли — в `docs/testing.md`.
 
-1. **better-sqlite3@13 — N-API 10, только Node 22+.** Бинарники лежат прямо в npm-пакете
-   (`prebuilds/`, `gypfile: false`) — компиляция НЕ нужна. НЕ понижай Electron ниже 35 (Node 20.18 = N-API 9):
-   `new Database()` упадёт. Электрон 35 (Node 22.16, N-API 10) — выбран специально под better-sqlite3@13.
-2. **@napi-rs/canvas** — платформенные бинарники через `optionalDependencies` с `os`/`cpu`-гейтами.
-   На Linux НЕ ставится `@napi-rs/canvas-win32-x64-msvc` → для Windows-сборки он выложен вручную в
-   `apps/electron/vendor/canvas-win32-x64-msvc/` и подключается через `win.extraResources`.
-3. **Компиляция нативных модулей ломается в путях с пробелами/кириллицей** (например,
-   `/home/user/Рабочий стол/...`). v13 это не нужно (prebuilds). Если когда-то понадобится собирать
-   node-gyp — делай это в каталоге без пробелов.
+### Текущий рубеж покрытия (обновлять при росте)
 
-## Критично: pnpm и build-скрипты
+| Пакет | Тестов | Что покрыто |
+|---|---|---|
+| `@mailsense/core` | 517 | 88% / 76% |
+| `@mailsense/docflow` | 181 | роли, права, сессии, аудит, журнал, нумерация, резолюции, разметка писем |
+| E2E-сценарии | 35 + 27 + 86 | журнал, API резолюций, сквозной по ролям |
 
-- pnpm 11 **игнорирует** поле `pnpm` в корневом `package.json` (был `pnpm.onlyBuiltDependencies` — не работает).
-- Разрешение postinstall задаётся в **`pnpm-workspace.yaml`** ключом `allowBuilds` (map `имя: true/false`).
-- Сейчас: `better-sqlite3: false` (prebuilds, не нужен), `esbuild: true`, `electron: true` (скачивает бинарник).
-- Бинарник Electron скачивается в `~/.cache/electron` (переменная `XDG_CACHE_HOME`; `ELECTRON_CACHE` НЕ работает).
-- electron-builder кэширует в `~/.cache/electron-builder` (переменная `ELECTRON_BUILDER_CACHE`).
+⚠️ **Система не решает за человека, что за письмо пришло.** Автоматического разбора писем нет: аппарат
+отмечает письмо в почте, ИИ только предлагает заполнить поля. Не возвращайте авторазбор — подробности
+и причины в `docs/docflow.md`.
 
-## Упаковка (apps/electron)
+## Что важно помнить всегда
 
-- **core+server бандлятся в `main.js`** (tsup, ESM) — см. `apps/electron/tsup.config.ts`. Нативные
-  (`better-sqlite3`, `@napi-rs/canvas`) и `pdfjs-dist` остаются external. `main.ts` — ESM (`import.meta.url`),
-  `preload.cjs` — CJS.
-- ⚠️ **CJS-пакеты с динамическим `require()` нельзя бандлить в ESM `main.js`** — при старте падает
-  `Dynamic require of "..." is not supported`. Пример: `@kenjiuno/msgreader` (тянет `iconv-lite` → `safer-buffer`).
-  Такие пакеты добавляй в `dependencies` у `apps/electron/package.json` (останутся external), а не только в `@mailsense/core`.
-- `electron-builder` конфиг — в `apps/electron/package.json` (поле `build`): `asarUnpack: ["**/*.node"]`,
-  `npmRebuild: false` (N-API не требует пересборки), web-дист через `extraResources`.
-- **Windows NSIS-инсталлятор требует wine** (недоступен без sudo). Поэтому `win.target: ["zip"]` +
-  `signAndEditExecutable: false`. На машине с wine/Windows можно вернуть `nsis`.
-- **Linux: `.deb`** (chrome-sandbox получает setuid через postinst → песочница работает без флагов).
-- Артефакты: `apps/electron/release/` → `*.deb` (Linux), `*-win.zip` (Windows).
+Пять вещей, которые уже стоили дорого. Подробности — по ссылкам.
 
-## TLS и self-signed
+1. ⚠️ **Message-ID уникален в пределах ящика, а не глобально.** Одно письмо законно лежит и в
+   «Отправленных» отправителя, и в INBOX получателя. Дедупликация — только внутри ящика. `docs/mail.md`
+2. ⚠️ **Не занимайте чужие номера миграций.** Сверяйтесь с `schema_migrations` в живой базе: там могут
+   быть миграции, которых в коде уже нет, и ваша молча пропустится. `docs/mail.md`
+3. ⚠️ **Поручение без подписи уйти не должно.** Аппарат готовит и отправляет, подписант утверждает —
+   и наоборот это не работает. Проверка на сервере, не в интерфейсе. `docs/docflow.md`
+4. ⚠️ **Аудит обязан писаться в той же транзакции, что и изменение.** Иначе при сбое изменение
+   пройдёт без следа. ⚠️ Сейчас это выполнено **не везде**: регистрация, правка документа и переходы
+   резолюции — в транзакции; смена ролей, блокировка, справочники и архивация года идут через
+   `writeAudit`, который глотает ошибку. Проверка нашла расхождение с этим пунктом 2026-10-05.
+   `docs/docflow.md`
+5. ⚠️ **Когда данные противоречат коду — идите в базу.** Один раз это спасло от «починки» работающего
+   кода: врал проверочный скрипт, а не продукт. `docs/lessons.md`
 
-- `rejectUnauthorized` по умолчанию **false** (принимаем self-signed, как на проде MDaemon).
-  Смысл поля: `settings.rejectUnauthorized === true` → строгий режим.
+## Продуктовые решения
 
-## Тестовый стенд (см. `/home/user/Рабочий стол/test mail/README.md`)
+Журнал решений по документообороту (Р1…Р14) и открытые вопросы — в `EDMS_v0.1.4_questions.md`
+в корне репозитория. Прежде чем менять поведение СЭД, посмотрите, не зафиксировано ли оно там:
+часть решений принималась с заказчиком, и «улучшение» может противоречить договорённости.
 
-- Почта (docker-mailserver): `test@mail.test` / пароль стенда (env `STAND_PASS`); IMAP 993 (TLS), POP3 995/110 (SSL/STLS/plain),
-  self-signed. Хост `127.0.0.1` (локально) или `192.168.21.83` (LAN).
-- ИИ (llama.cpp): `http://10.70.203.245:3010/v1`; OCR-модель `glm-ocr`, summary-модель `qwen-3.5-9b`
-  (у summary отключено мышление через `chat_template_kwargs:{enable_thinking:false}`, иначе JSON обрезается).
-- E2E UI — через Playwright MCP (открыть `http://127.0.0.1:8123`).
+Что уже решено и почему — коротко:
 
-## Конфигурация (env)
-
-См. `packages/core/src/config.ts`. Ключевые: `MAILSENSE_DATA_DIR`, `MAILSENSE_PORT` (8123),
-`MAILSENSE_AI_BASE_URL`, `MAILSENSE_AI_MODEL`, `MAILSENSE_MAIL_HOST`/`_PORT`/`_USER`/`_PASS`, `MAILSENSE_SEED_ACCOUNT`.
-
-Дефолтный аккаунт засевается **только** если `MAILSENSE_SEED_ACCOUNT=true` И заданы `MAILSENSE_MAIL_USER`+`MAILSENSE_MAIL_PASS`.
-По умолчанию (`false`) ничего не засевается — в сборке жёстко зашитых учётных данных нет.
-
-## Частые подводные камни
-
-- Seeding тестового аккаунта выключен по умолчанию. Для локального стенда задай env:
-  `MAILSENSE_SEED_ACCOUNT=true MAILSENSE_MAIL_USER=test@mail.test MAILSENSE_MAIL_PASS=<пароль стенда>`
-  (или добавь аккаунт через окно настроек).
-- Пароли: в Electron — `safeStorage`, иначе фолбэк AES-256-GCM (ключ в `data/secret.key`).
-- POP3: после `RETR`/`UIDL` сначала идёт строка статуса `+OK …` — её нужно читать отдельно от тела (см. `pop3Client.ts`).
-
-## Почта: диапазон дат, авто-скан, переписки
-
-- **Диапазон дат в IMAP.** Не передавай в `imapflow.fetch()` объект `{since, before}`: библиотека компилирует
-  `BEFORE`/`SINCE` в расширение `WITHIN` (`OLDER`/`YOUNGER`), которое Dovecot отвергает
-  (`BAD Invalid search interval parameter`) — и скан молча возвращает 0 писем. В `imapConnector.ts` сначала
-  получается СПИСОК UID (`SEARCH SENTSINCE/SENTBEFORE` при диапазоне, иначе `SEARCH ALL`), из него вычитаются
-  `knownUids`, и только после этого качаются тела (`fetch(uidList, {source:true, uid:true}, {uid:true})`,
-  пачками по 500). Нельзя снова скачивать весь ящик через `fetch("1:*")` и фильтровать уже полученные письма —
-  на большом ящике скан без периода выглядит «зависшим». Фолбэк на `1:*` — только если SEARCH упал.
-  Плюс `mailService` фильтрует по `Date` на клиенте (в локальной зоне) — как страховка и для POP3.
-- **POP3** серверного поиска по датам не имеет: скачиваются все неизвестные UID, диапазон применяется клиентски.
-- **Удаление и повторный скан.** Удалённые письма пишутся в `deleted_emails` (надгробия): авто-скан
-  (`includeDeleted=false`) не воскрешает их, а ручной скан по `POST /api/accounts/:id/fetch` передаёт
-  `includeDeleted=true` — тогда UID/Message-ID надгробий не считаются известными и письма скачиваются заново
-  (`clearDeletedEmail` снимает надгробие). Иначе «удалил → скан» навсегда ничего не возвращает.
-- **Вложения: текст и описание.** OCR/извлечённый текст сохраняется в `attachments.extracted_text`
-  (`setAttachmentText` из `analysisService`), а описания модели — в `ai_description`. Сопоставление описаний
-  с вложениями идёт через `matchAttachmentDescriptions` (регистр/путь/пробелы/расширение), а не строгим
-  сравнением `filename` — иначе часть вложений остаётся без «краткого содержания».
-- **Авто-скан НЕ сканирует весь ящик.** Планировщик берёт `account.settings.lastFetchAt` и забирает письма
-  начиная с него (минус сутки запаса). Пока синхронизации не было, авто-скан молчит — первичный скан запускает
-  пользователь кнопкой «Скан» (при необходимости с диапазоном дат). Отключение — настройка `auto_fetch=false`
-  («Настройки → Общие»). Параллельные сканы одного аккаунта сериализуются в `mailService` (иначе
-  «Connection not available» / socket timeout).
-- **Переписки** (`services/threadService.ts`): приоритет — In-Reply-To/References; если родителя нет в БД,
-  ответы склеиваются по нормализованной теме (`Re:`/`Fwd:`/`Ответ:` срезаются, в т.ч. внутри строки);
-  письма без признаков ответа с одинаковой темой НЕ склеиваются (рассылки). Родитель, пришедший позже детей,
-  «усыновляет» их. При апгрейде беседы один раз пересобираются целиком — гейт `settings.maintenance.version`
-  (см. `services/maintenance.ts`). Ручная пересборка: `POST /api/threads/rebuild` (тело `{accountId?}`).
-- **Статус «Готово»** ставится только после успешного анализа. Ответы внутри переписки больше НЕ помечаются
-  готовыми без анализа: при `auto_analyze=false` они остаются «Ожидает».
-- **Письма: ответ/пересылка, подпись.** Шаблон для композера собирает `GET /api/compose-template`
-  (`services/composeService.ts`): получатели (Reply-To → From), тема без дублей `Re:`/`Fwd:`, цепочка
-  `References` = references оригинала + Message-ID родителя (`buildReferences`), строка атрибуции,
-  цитата (`>` в text/plain, `<blockquote>` в HTML) и подпись. Подпись и отображаемое имя — в
-  `account.settings` (`displayName`, `signature`, `signatureHtml`, `signatureEnabled`,
-  `signaturePosition`, `signatureDelimiter`, `replyQuote`, `replyAttribution`, `forwardAttachments`) и правятся в
-  «Настройки → Аккаунты → Отправка и подпись». Пересылка прикладывает вложения оригинала.
-  `signatureHtml` — подпись из WYSIWYG-редактора (приоритет), `signature` — plain-зеркало для text/plain.
-  ⚠️ Редактор TipTap отдаёт HTML; text/plain собирается `htmlToPlainText` (blockquote → `>`), а не
-  `editor.getText()` — иначе цитата теряет `>`.
-  ⚠️ Адреса в «Кому/Копия» разбирает `parseEmails` (Composer.tsx) НЕ через split: имя вида
-  «Иванов, И.И. <a@b>" не должно рваться по запятой, поэтому ищутся готовые адреса
-  (`"Имя" <a@b>` / `Имя <a@b>` / `a@b`), а разделители просто игнорируются. В `AddressSelect`
-  `tokenSeparators={[";"]}` — запятая намеренно НЕ разделитель (иначе имя рвётся при вводе).
-- **Единый WYSIWYG-редактор.** `components/RichTextEditor.tsx` (TipTap StarterKit + Placeholder) — один
-  редактор на композер, шаблоны и подпись: панель с заголовками, списками, цитатой, ссылкой и «Tx».
-  Не плодить второй экземпляр TipTap — переиспользовать этот компонент.
-- **Шаблоны писем.** «Настройки → Шаблоны»: список + кнопка «Добавить шаблон», форма — в **попапе**
-  (встроенной формы под списком больше нет). Сохраняются `bodyHtml` (WYSIWYG) и `bodyText` (plain-фолбэк).
-  ⚠️ Модалка настроек НЕ размонтирует вкладки, поэтому в `SettingsModal` они пересоздаются по `reloadKey`
-  при каждом открытии — иначе список шаблонов (и статус каталога) остаются устаревшими и сохранённый
-  из композера шаблон «не появляется» в настройках.
-- **Каталог LDAP/AD (адресная книга).** Вход опционален (`services/directoryService.ts`, `directory/ldap.ts`, `ldapts`):
-  bind от учётки пользователя, пароль — зашифрованно (`settings`: `ldap.login`/`ldap.passwordEncrypted`). Настройки —
-  `ldap.*` (`url`, `baseDn`, `loginFormat`, `upnSuffix`, `netbiosDomain`, `userFilter`, `attributes`, `sizeLimit`,
-  `rejectUnauthorized`), UI — «Настройки → Каталог (LDAP)». Автокомплит адресов — `GET /api/contacts/search`
-  (кэш таблицы `contacts` + онлайн-дополнение). ⚠️ `upnSuffix` может содержать ведущий `@` — не удваивать
-  (`buildBindIdentifier`). Стенд: `stand.test`, `ldaps://127.0.0.1:636`, bind `test`/пароль стенда (плейн 389 Samba не пускает).
-  ⚠️ `ldapts` объявлен в `dependencies` и у `@mailsense/core`, и у `apps/electron` (external для tsup) — иначе
-  electron-builder не положит его в asar.
+- Формат номера — `вх{N}`, без ведущих нулей, сброс каждый год.
+- Резолюцию **всегда утверждает подписант**; отправляет исполнителям **всегда аппарат**.
+- Утверждение — в приложении или ответом на письмо. **Что за письмо пришло, определяет аппарат, а не система:** он отмечает его во вкладке «СЭД» открытого письма, ИИ лишь предлагает черновик полей.
+- Исполнителей может быть несколько; ответственный — отдельным признаком, но необязательным.
+- ИИ предлагает **только текст** резолюции: исполнителей и срок модель не подставляет.
+- Штатное расписание не заводим: выбор исполнителей идёт из каталога AD.
+- Подсказка исполнителей (граф знаний) — **после 0.1.4**; сейчас копим данные и держим место в интерфейсе.

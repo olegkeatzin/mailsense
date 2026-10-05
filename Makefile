@@ -5,13 +5,14 @@
 SHELL := /bin/bash
 PNPM  := pnpm
 
-.PHONY: help install core server web electron build test run dev-server dev-web typecheck package-linux package-deb package-win package-win-exe package-win-nsis package clean
+.PHONY: help install core docflow server web electron build test pg run dev-server dev-web typecheck package-linux package-deb package-win package-win-exe package-win-nsis package clean
 
 help: ## Список команд
 	@echo "MailSense — цели:"
 	@echo "  make install        установить зависимости (pnpm install)"
 	@echo "  make build          собрать всё: core + server + web + electron"
-	@echo "  make test           юнит-тесты (Jest)"
+	@echo "  make test           юнит-тесты (Jest; документам нужна PostgreSQL)"
+	@echo "  make pg             поднять PostgreSQL для разработки и тестов"
 	@echo "  make run            запустить headless-сервер http://127.0.0.1:8123"
 	@echo "  make dev-server     dev-сервер API (tsx watch, порт 8123)"
 	@echo "  make dev-web        dev-сервер SPA (Vite, порт 5173)"
@@ -24,8 +25,11 @@ help: ## Список команд
 install: ## Установить зависимости
 	$(PNPM) install
 
-core: ## Собрать @mailsense/core
+core: ## Собрать @mailsense/core (почта)
 	$(PNPM) --filter @mailsense/core build
+
+docflow: ## Собрать @mailsense/docflow (серверная часть)
+	$(PNPM) --filter @mailsense/docflow build
 
 server: ## Собрать @mailsense/server
 	$(PNPM) --filter @mailsense/server build
@@ -33,15 +37,19 @@ server: ## Собрать @mailsense/server
 web: ## Собрать @mailsense/web (SPA)
 	$(PNPM) --filter @mailsense/web build
 
-electron: core server ## Собрать Electron main/preload (bundle core+server)
+electron: core docflow server ## Собрать Electron main/preload (bundle core+docflow+server)
 	$(PNPM) --filter mailsense-electron build
 
-build: core server web electron ## Собрать всё
+build: core docflow server web electron ## Собрать всё
 
-test: ## Юнит-тесты
+pg: ## Поднять PostgreSQL для разработки и тестов (порт 55432)
+	docker compose -f docker/docker-compose.dev.yml up -d
+
+test: ## Юнит-тесты (почта + серверная часть; документам нужна PostgreSQL — make pg)
 	$(PNPM) --filter @mailsense/core test
+	$(PNPM) --filter @mailsense/docflow test
 
-run: core server web ## Запустить headless-сервер (продакшн)
+run: core docflow server web ## Запустить headless-сервер (продакшн)
 	$(PNPM) --filter @mailsense/server start
 
 dev-server: ## Dev-сервер API (tsx watch)
