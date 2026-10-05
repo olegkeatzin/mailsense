@@ -134,6 +134,12 @@ packages/server    @mailsense/server    REST API: связывает оба па
 
 Проверка — на сервере (`requirePermission`), UI лишь скрывает кнопки (`store.can()`).
 
+⚠️ **Список всех резолюций и канбан закрыты от исполнителя** (решение заказчика 2026-10-05).
+Они требуют `resolution.create`, а не `journal.view`: последнее есть у всех ролей, и исполнитель
+видел бы чужие сроки, тексты и соисполнителей. Свои поручения он видит в «Моих задачах»
+(`task.view`), очередь подписанта — в `/for-approval` (`resolution.approve`).
+Проверяется дважды: `routes.access.test.ts` (матрица) и `test_resolutions.mjs` (сквозной).
+
 ## Резолюции (этап 3)
 
 Миграция v3 создаёт `resolutions`, `resolution_assignees`, `resolution_approvals`;

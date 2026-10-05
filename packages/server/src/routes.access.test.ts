@@ -186,10 +186,14 @@ const CASES: RouteCase[] = [
     allowed: ["admin"]
   },
   {
-    what: "GET /api/docflow/resolutions/board — доска поручений видна тем, кто видит журнал",
+    // ⚠️ Решение заказчика 2026-10-05: список ВСЕХ резолюций и канбан закрыты от исполнителя.
+    // Он видит только свои задачи («Мои задачи»), чужие сроки, тексты и соисполнители ему
+    // ни к чему. Права `journal.view` здесь мало — оно есть у всех ролей. Сквозная проверка
+    // живёт в scripts/test_resolutions.mjs («рядовой сотрудник не видит список резолюций»).
+    what: "GET /api/docflow/resolutions/board — канбан только тем, кто управляет поручениями",
     method: "GET",
     path: "/api/docflow/resolutions/board",
-    allowed: [...ROLES]
+    allowed: ["admin", "secretary", "manager"]
   }
 ];
 

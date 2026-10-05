@@ -360,9 +360,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     })
   );
 
+  // ⚠️ Канбан показывает ВСЕ поручения организации — исполнителю здесь нечего делать
+  // (у него «Мои задачи»). Право `journal.view` есть у всех ролей, поэтому его мало.
   app.get(
     "/api/docflow/resolutions/board",
-    ...view,
+    ...prepare,
     asyncHandler(async (_req, res) => {
       res.json(await listBoard());
     })
@@ -376,9 +378,12 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     })
   );
 
+  // ⚠️ Список ВСЕХ резолюций — то же самое: чужие сроки, тексты и соисполнители
+  // исполнителю не нужны. Решение заказчика 2026-10-05. Проверяется сквозным сценарием
+  // (test_resolutions.mjs: «рядовой сотрудник не видит список резолюций»).
   app.get(
     "/api/docflow/resolutions",
-    ...view,
+    ...prepare,
     asyncHandler(async (req, res) => {
       res.json(
         await listResolutions({
