@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import {
+  Alert,
   AutoComplete,
   Button,
   Collapse,
@@ -23,6 +24,9 @@ import { useStore } from "../store";
 import RichTextEditor from "./RichTextEditor";
 import { escapeHtml, htmlToPlainText } from "../utils/text";
 import { api } from "../api";
+import { DocflowTab, UsersTab } from "./DocflowAdmin";
+import AuditTab from "./AuditTab";
+import NumberingTab from "./NumberingTab";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, Template } from "../types";
 
 const PROTOCOL_OPTIONS = [
@@ -585,9 +589,12 @@ function AiTab() {
 
 function GeneralTab() {
   const [settings, setSettings] = useState<Record<string, string>>({});
+  /** Ящики нужны для выбора служебного: без него письмо руководителю уйдёт не от того адреса. */
+  const [accounts, setAccounts] = useState<Array<{ id: string; email?: string; login?: string }>>([]);
 
   useEffect(() => {
     void api.settings().then(setSettings);
+    void api.accounts().then((list) => setAccounts(list as Array<{ id: string; email?: string; login?: string }>)).catch(() => setAccounts([]));
   }, []);
 
   const save = async (k: string, v: string | number | boolean) => {
@@ -609,6 +616,22 @@ function GeneralTab() {
           <Typography.Text type="secondary" style={{ fontSize: 12, display: "block" }}>
             Забирает только письма после последней синхронизации. Первичный скан ящика — кнопкой «Скан»
             (при необходимости с диапазоном дат).
+          </Typography.Text>
+        </div>
+        <div>
+          <Typography.Text>Служебный ящик аппарата</Typography.Text>
+          <br />
+          <Select
+            style={{ minWidth: 320, marginTop: 4 }}
+            allowClear
+            placeholder="не выбран — берётся первый подходящий"
+            value={settings["docflow.serviceAccountId"] || undefined}
+            onChange={(v) => void save("docflow.serviceAccountId", v ?? "")}
+            options={accounts.map((a) => ({ value: a.id, label: a.email || a.login || a.id }))}
+          />
+          <Typography.Text type="secondary" style={{ fontSize: 12, display: "block" }}>
+            С него уходят письма руководителю на резолюцию. Если не выбрать, система возьмёт первый
+            подходящий ящик — на предприятии с несколькими ящиками это может быть не тот адрес.
           </Typography.Text>
         </div>
         <div>
@@ -636,6 +659,13 @@ function GeneralTab() {
 }
 
 function LdapTab() {
+  // Каталог — инфраструктура предприятия. Когда работает серверная часть, настройки
+  // задаёт администратор на сервере (иначе пользователь мог бы подменить каталог и
+  // подсунуть чужие адреса в автодополнение). Ему остаётся ввести свой логин и пароль.
+  const docflowEnabled = useStore((s) => s.authStatus?.docflowEnabled === true);
+  const can = useStore((s) => s.can);
+  const readOnly = docflowEnabled && !can("settings.manage");
+
   const [status, setStatus] = useState<DirectoryStatus | null>(null);
   const [form] = Form.useForm();
   const [login, setLogin] = useState("");
@@ -739,7 +769,21 @@ function LdapTab() {
         Каталог (Active Directory) — для автокомплита адресов. Вход опционален: без него почта работает как обычно,
         а подсказки берутся из локального кэша. Логин и пароль AD хранятся зашифрованно локально.
       </Typography.Paragraph>
-      <Form form={form} layout="vertical" onFinish={saveSettings}>
+
+      {readOnly ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Каталог настроен администратором"
+          description={
+            "Адрес каталога и Base DN задаёт предприятие на сервере — здесь они только для справки. " +
+            "Чтобы получать подсказки адресов, войдите в каталог под своей доменной учётной записью."
+          }
+        />
+      ) : null}
+
+      <Form form={form} layout="vertical" onFinish={saveSettings} disabled={readOnly}>
         <Collapse
           defaultActiveKey={["conn"]}
           items={[
@@ -803,14 +847,24 @@ function LdapTab() {
             }
           ]}
         />
-        <Button type="primary" htmlType="submit" loading={busy} style={{ marginTop: 12 }}>
-          Сохранить
-        </Button>
+        {readOnly ? null : (
+          <Button type="primary" htmlType="submit" loading={busy} style={{ marginTop: 12 }}>
+            Сохранить
+          </Button>
+        )}
       </Form>
 
       <Divider plain style={{ fontSize: 13, margin: "16px 0" }}>
         Вход в каталог
       </Divider>
+      {readOnly ? (
+        // Служебная учётка каталога — не дело рядового сотрудника: показываем только итог.
+        <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+          Статус справочника: {status?.loggedIn ? "доступен" : "недоступен"} · контактов в кэше:{" "}
+          {status?.contacts ?? 0}
+        </Typography.Paragraph>
+      ) : (
+        <>
       <Space wrap>
         <Input placeholder="Логин AD" value={login} onChange={(e) => setLogin(e.target.value)} style={{ width: 220 }} />
         <Input.Password
@@ -819,10 +873,12 @@ function LdapTab() {
           onChange={(e) => setPassword(e.target.value)}
           style={{ width: 220 }}
         />
-        <Button type="primary" loading={busy} onClick={() => void doLogin()}>
+        <Button type="primary" loading={busy} onClick={() => void doLogin()} disabled={readOnly}>
           Войти
         </Button>
-        <Button onClick={() => void doLogout()}>Выйти</Button>
+        <Button onClick={() => void doLogout()} disabled={readOnly}>
+          Выйти
+        </Button>
         <Button loading={busy} onClick={() => void doRefresh()}>
           Обновить кэш адресной книги
         </Button>
@@ -831,6 +887,8 @@ function LdapTab() {
         Статус: {status?.loggedIn ? "вход выполнен (" + (status.login ?? "") + ")" : "не выполнен"} · контактов в кэше:{" "}
         {status?.contacts ?? 0}
       </Typography.Paragraph>
+        </>
+      )}
     </div>
   );
 }
@@ -994,7 +1052,11 @@ function TemplatesTab() {
 export default function SettingsModal() {
   const open = useStore((s) => s.settingsOpen);
   const setOpen = useStore((s) => s.setSettingsOpen);
+  const can = useStore((s) => s.can);
   const [reloadKey, setReloadKey] = useState(0);
+  const [activeTab, setActiveTab] = useState("mail");
+  // Вкладки администрирования документооборот видны только тем, кто может управлять пользователями.
+  const canManageUsers = can("users.manage");
 
   // Модалка не размонтирует вкладки, поэтому при каждом открытии настроек
   // пересоздаём их: иначе список шаблонов и статус каталога остаются устаревшими.
@@ -1003,10 +1065,28 @@ export default function SettingsModal() {
   }, [open]);
 
   return (
-    <Modal open={open} onCancel={() => setOpen(false)} footer={null} width={760} title="Настройки">
+    <Modal
+      open={open}
+      onCancel={() => setOpen(false)}
+      footer={null}
+      // Таблица пользователей шире обычной формы: на 760 px колонка «Статус» и кнопка
+      // блокировки обрезались. Для остальных вкладок ширины хватает.
+      width={activeTab === "users" ? "min(1100px, 94vw)" : 760}
+      title="Настройки"
+    >
       <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
         items={[
           { key: "mail", label: "Почта", children: <AccountTab /> },
+          ...(canManageUsers
+            ? [
+                { key: "users", label: "Пользователи и роли", children: <UsersTab key={reloadKey} /> },
+                { key: "docflow", label: "Документооборот", children: <DocflowTab key={reloadKey} /> }
+              ]
+            : []),
+          ...(can("journal.view") ? [{ key: "numbering", label: "Нумерация", children: <NumberingTab key={reloadKey} /> }] : []),
+          ...(can("audit.view") ? [{ key: "audit", label: "Аудит", children: <AuditTab /> }] : []),
           { key: "ai", label: "ИИ", children: <AiTab /> },
           { key: "templates", label: "Шаблоны", children: <TemplatesTab key={reloadKey} /> },
           { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> },

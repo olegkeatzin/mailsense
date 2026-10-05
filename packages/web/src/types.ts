@@ -249,3 +249,190 @@ export interface AiConfig {
   concurrency?: number;
   ocrConcurrency?: number;
 }
+
+
+// ---------------- документооборот: пользователи, роли, вход ----------------
+
+export type UserSource = "ldap" | "local" | "manual";
+
+export type Permission =
+  | "journal.view"
+  | "journal.register"
+  | "journal.edit"
+  | "journal.archive"
+  | "resolution.create"
+  | "resolution.edit"
+  | "resolution.approve"
+  | "resolution.dispatch"
+  | "task.view"
+  | "task.report"
+  | "users.manage"
+  | "settings.manage"
+  | "audit.view";
+
+export interface Role {
+  id: string;
+  name: string;
+  description: string;
+  sortOrder: number;
+  isSystem: boolean;
+}
+
+export interface User {
+  id: string;
+  ldapUid: string | null;
+  email: string;
+  fullName: string;
+  department: string;
+  position: string;
+  managerId: string | null;
+  phone: string;
+  source: UserSource;
+  isActive: boolean;
+  blocked: boolean;
+  lastLoginAt: string | null;
+  roles: string[];
+}
+
+export interface AuthUser extends User {
+  permissions: Permission[];
+}
+
+export interface AuthStatus {
+  /** Задан ли список логинов-администраторов (MAILSENSE_ADMIN_LOGINS). */
+  adminConfigured: boolean;
+  /** Есть ли в системе действующий администратор. */
+  hasAdmin: boolean;
+  docflowEnabled: boolean;
+  ldapConfigured: boolean;
+  needsBootstrap: boolean;
+  localLoginEnabled: boolean;
+}
+
+export interface AuditEntry {
+  id: string;
+  userId: string | null;
+  userName: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  oldValue: string | null;
+  newValue: string | null;
+  createdAt: string;
+}
+
+// ---------------- Журнал регистрации (СЭД, этап 2) ----------------
+
+export type DocumentStatus = "new" | "on_resolution" | "in_progress" | "executed" | "archived";
+
+export const DOCUMENT_STATUS_TITLES: Record<DocumentStatus, string> = {
+  new: "Новый",
+  on_resolution: "На резолюции",
+  in_progress: "На исполнении",
+  executed: "Исполнен",
+  archived: "В архиве"
+};
+
+export interface DocumentRecord {
+  id: string;
+  regNumber: string;
+  regNumberNumeric: number;
+  regPeriod: string;
+  regDate: string;
+  docNumber: string;
+  docDate: string | null;
+  sender: string;
+  summary: string;
+  sheetsCount: number | null;
+  caseNumber: string | null;
+  documentName: string;
+  status: DocumentStatus;
+  emailId: string | null;
+  correspondentId: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+}
+
+export interface DocumentListItem extends DocumentRecord {
+  /** ФИО того, кто зарегистрировал: видно прямо в журнале. */
+  createdByName: string;
+  emailsCount: number;
+}
+
+export interface DocumentPage {
+  items: DocumentListItem[];
+  total: number;
+}
+
+export interface DocumentCard extends DocumentRecord {
+  emails: Array<{ emailId: string; role: string; linkedAt: string }>;
+}
+
+export interface JournalFilter {
+  search?: string;
+  status?: DocumentStatus | "";
+  period?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  sort?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+/** Письмо, ожидающее регистрации (раздел «Входящие на регистрацию»). */
+export interface IncomingItem {
+  emailId: string;
+  accountId: string;
+  subject: string;
+  from: { name?: string; address: string } | null;
+  date: string | null;
+  analysisStatus: string;
+  externalNumber: string | null;
+  sendDate: string | null;
+  summary: string;
+  priority: number | null;
+  tags: string[];
+  attachmentsCount: number;
+}
+
+/** Подсказки для формы регистрации: то, что удалось взять из письма и ИИ. */
+export interface RegisterSuggest {
+  emailId: string;
+  sender: string;
+  summary: string;
+  docNumber: string;
+  docDate: string;
+  sheetsCount: number | null;
+  documentName: string;
+  alreadyRegistered: string | null;
+}
+
+export interface DuplicateMatch {
+  document: DocumentListItem;
+  reason: "email" | "docNumber" | "summary";
+}
+
+export interface NumberingRuleRecord {
+  stream: string;
+  prefix: string;
+  reset: "year" | "never";
+  template: string | null;
+}
+
+export interface NumberingState {
+  rules: NumberingRuleRecord[];
+  openPeriod: string | null;
+  archivedPeriods: string[];
+  blockedReason: string | null;
+}
+
+export interface CaseRecord {
+  id: string;
+  code: string;
+  title: string;
+  isActive: boolean;
+  sortOrder: number;
+}

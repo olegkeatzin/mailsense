@@ -1,10 +1,31 @@
 import { create } from "zustand";
 import { api } from "./api";
-import type { Account, AiConfig, AnalysisStatus, Draft, Email, EmailView, ThreadGroup } from "./types";
+import type {
+  Account,
+  AiConfig,
+  AnalysisStatus,
+  AuthStatus,
+  AuthUser,
+  Draft,
+  Email,
+  EmailView,
+  Permission,
+  ThreadGroup
+} from "./types";
 
 export type SortBy = "date" | "priority";
 export type SortDir = "asc" | "desc";
 export type ComposeMode = "new" | "reply" | "replyAll" | "forward";
+
+/** Разделы приложения: почта и рабочие места документооборота. */
+export type AppSection =
+  | "mail"
+  | "journal"
+  | "incoming"
+  | "approvals"
+  | "confirmation"
+  | "tasks"
+  | "board";
 
 export interface FilterState {
   categories: string[];
@@ -32,6 +53,8 @@ interface State extends FilterState {
   selectedId: string | null;
   emailView: EmailView | null;
   selectedIds: string[];
+  /** Письмо, для которого нужно сразу открыть форму регистрации (переход из списка «На регистрацию»). */
+  registerIntent: string | null;
   loading: boolean;
   settingsOpen: boolean;
   aiConfig: AiConfig | null;
@@ -47,14 +70,40 @@ interface State extends FilterState {
   setThreadView: (v: boolean) => void;
   loadThreads: () => Promise<void>;
 
+  // -------- документооборот: вход --------
+  /** Состояние входа, известное серверу (включён ли документооборот, настроен ли каталог и т.д.). */
+  authStatus: AuthStatus | null;
+  /** Текущий пользователь; null — документооборот выключен или вход не выполнен. */
+  authUser: AuthUser | null;
+  /** Первичная проверка сессии завершена (иначе показываем «загрузку», а не форму входа). */
+  authReady: boolean;
+  /**
+   * Сервер документооборота недоступен. Почта при этом работает: она локальная,
+   * поэтому не блокируем приложение, а только прячем функции документооборота.
+   */
+  docflowUnavailable: boolean;
+  loadAuth: () => Promise<void>;
+  login: (login: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  can: (permission: Permission) => boolean;
+
   init: () => Promise<void>;
   loadAccounts: () => Promise<void>;
   loadAiConfig: () => Promise<void>;
   loadEmails: () => Promise<void>;
   select: (id: string) => Promise<void>;
+  /** Просьба открыть форму регистрации для письма: ставится списком, снимается формой. */
+  requestRegister: (emailId: string) => void;
+  clearRegisterIntent: () => void;
   refreshSelected: () => Promise<void>;
   setFolder: (f: string) => void;
   setAccountFilter: (id: string | null) => void;
+  /**
+   * Активный раздел приложения. Роутера нет намеренно: разделы СЭД — это
+   * состояние, а не адреса (см. журнал решений, «Роутер: отсутствует»).
+   */
+  section: AppSection;
+  setSection: (s: AppSection) => void;
   setFilter: (patch: Partial<FilterState>) => void;
   resetFilters: () => void;
   fetchAccount: (id: string) => Promise<void>;
@@ -104,10 +153,12 @@ export const useStore = create<State>()((set, get) => ({
   accounts: [],
   emails: [],
   folder: "INBOX",
+  section: "mail",
   accountFilter: null,
   selectedId: null,
   emailView: null,
   selectedIds: [],
+  registerIntent: null,
   loading: false,
   settingsOpen: false,
   aiConfig: null,
@@ -130,6 +181,49 @@ export const useStore = create<State>()((set, get) => ({
   sendDateTo: "",
   sortBy: "date",
   sortDir: "desc",
+  authStatus: null,
+  authUser: null,
+  authReady: false,
+  docflowUnavailable: false,
+
+  loadAuth: async () => {
+    try {
+      const status = await api.authStatus();
+      set({ authStatus: status, docflowUnavailable: false });
+      if (!status.docflowEnabled) {
+        // Автономный режим: документооборот выключен, входа нет.
+        set({ authUser: null, authReady: true });
+        return;
+      }
+      const me = await api.authMe();
+      set({ authUser: me.user ?? null, authReady: true });
+    } catch (err) {
+      // 503 от прокси = сервер документооборота недоступен. Локальная почта
+      // обязана продолжать работать, поэтому не показываем экран входа.
+      set({ authUser: null, authStatus: null, authReady: true, docflowUnavailable: true });
+      console.warn("Документооборот недоступен:", (err as Error).message);
+    }
+  },
+
+  login: async (login, password) => {
+    const res = await api.login(login, password);
+    set({ authUser: res.user, authReady: true });
+    await get().init();
+  },
+
+  logout: async () => {
+    await api.logout();
+    set({ authUser: null, emails: [], emailView: null, selectedId: null, selectedIds: [] });
+  },
+
+  can: (permission) => {
+    const s = get();
+    // Сервер недоступен — функции документооборота недоступны (но почта работает).
+    if (s.docflowUnavailable) return false;
+    // Документооборот выключен — ограничений нет (автономный режим).
+    if (!s.authStatus?.docflowEnabled) return true;
+    return !!s.authUser?.permissions.includes(permission);
+  },
 
   init: async () => {
     await get().loadAccounts();
@@ -247,6 +341,9 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   setSettingsOpen: (v: boolean) => set({ settingsOpen: v }),
+  setSection: (section: AppSection) => set({ section }),
+  requestRegister: (emailId) => set({ registerIntent: emailId }),
+  clearRegisterIntent: () => set({ registerIntent: null }),
 
   openCompose: (mode, emailId = null) => set({ compose: { open: true, mode, emailId, draft: null } }),
   openDraftCompose: (draft) => set({ compose: { open: true, mode: "new", emailId: null, draft } }),

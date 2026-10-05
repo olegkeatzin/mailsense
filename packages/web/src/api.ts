@@ -2,22 +2,47 @@ import type {
   Account,
   AccountInput,
   AiConfig,
+  AuditEntry,
+  AuthStatus,
+  AuthUser,
+  CaseRecord,
   ComposeInput,
   ComposeTemplate,
+  DocumentCard,
+  DocumentPage,
+  DocumentRecord,
   Draft,
+  DuplicateMatch,
   Email,
   DirectoryContact,
   DirectoryStatus,
   EmailView,
+  IncomingItem,
+  JournalFilter,
   LdapSettings,
+  NumberingRuleRecord,
+  NumberingState,
+  RegisterSuggest,
+  Role,
   Template,
-  ThreadGroup
+  ThreadGroup,
+  User
 } from "./types";
+import type {
+  AssigneeKind,
+  BoardColumn,
+  ReplyContextItem,
+  Resolution,
+  ResolutionPriority,
+  TaskItem
+} from "./resolutionTypes";
 
 const BASE = "";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + url, {
+    // Сессия документооборот живёт в HttpOnly-cookie — без credentials её не будет.
+    credentials: "include",
     headers: { "Content-Type": "application/json" },
     ...init
   });
@@ -206,12 +231,348 @@ export const api = {
       body: JSON.stringify(p)
     }),
 
+  // -------- документооборот: вход и пользователи --------
+  authStatus: () => request<AuthStatus>("/api/auth/status"),
+  authMe: () => request<{ docflowEnabled: boolean; user: AuthUser | null }>("/api/auth/me"),
+  login: (login: string, password: string) =>
+    request<{ user: AuthUser; expiresAt: string }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ login, password })
+    }),
+  logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+
+  roles: () => request<Role[]>("/api/roles"),
+  users: (opts: { q?: string; roleId?: string; includeInactive?: boolean } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set("q", opts.q);
+    if (opts.roleId) p.set("roleId", opts.roleId);
+    if (opts.includeInactive) p.set("includeInactive", "1");
+    const qs = p.toString();
+    return request<User[]>("/api/users" + (qs ? "?" + qs : ""));
+  },
+  createUser: (u: { email: string; fullName?: string; department?: string; position?: string; phone?: string; roleIds?: string[] }) =>
+    request<User>("/api/users", { method: "POST", body: JSON.stringify(u) }),
+  updateUser: (id: string, patch: Record<string, unknown>) =>
+    request<User>("/api/users/" + id, { method: "PATCH", body: JSON.stringify(patch) }),
+  setUserRoles: (id: string, roleIds: string[]) =>
+    request<User>("/api/users/" + id + "/roles", { method: "PUT", body: JSON.stringify({ roleIds }) }),
+  syncUsers: () =>
+    request<{ total: number; created: number; updated: number; deactivated: number; linked: number }>(
+      "/api/users/sync",
+      { method: "POST" }
+    ),
+  saveDocflowSettings: (patch: { enabled?: boolean; sessionTtlHours?: number; localLoginEnabled?: boolean }) =>
+    request<AuthStatus>("/api/docflow/settings", { method: "PUT", body: JSON.stringify(patch) }),
+  audit: (filter: Record<string, string | number | undefined> = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(filter)) if (v !== undefined && v !== "") p.set(k, String(v));
+    const qs = p.toString();
+    return request<{ entries: AuditEntry[]; total: number }>("/api/audit" + (qs ? "?" + qs : ""));
+  },
+
+// -------- Журнал регистрации (СЭД, этап 2) --------
+  journal: (filter: JournalFilter = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(filter)) {
+      if (v !== undefined && v !== "" && v !== null) p.set(k, String(v));
+    }
+    const qs = p.toString();
+    return request<DocumentPage>("/api/docflow/journal" + (qs ? "?" + qs : ""));
+  },
+  document: (id: string) => request<DocumentCard>("/api/docflow/journal/" + id),
+  documentByEmail: (emailId: string) =>
+    request<DocumentRecord | null>("/api/docflow/journal/by-email/" + encodeURIComponent(emailId)),
+  registerDocument: (input: Record<string, unknown>) =>
+    request<DocumentRecord>("/api/docflow/journal", { method: "POST", body: JSON.stringify(input) }),
+  updateDocument: (id: string, patch: Record<string, unknown>) =>
+    request<DocumentRecord>("/api/docflow/journal/" + id, { method: "PATCH", body: JSON.stringify(patch) }),
+  journalDuplicates: (filter: { emailId?: string; docNumber?: string; summary?: string }) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(filter)) if (v) p.set(k, String(v));
+    const qs = p.toString();
+    return request<DuplicateMatch[]>("/api/docflow/journal/duplicates" + (qs ? "?" + qs : ""));
+  },
+  /** Какой входящий номер будет присвоен — подсказка; счётчик при этом не двигается. */
+  nextRegNumber: () => request<{ regNumber: string; period: string }>("/api/docflow/journal/next-number"),
+  journalSuggest: (emailId: string) =>
+    request<RegisterSuggest>("/api/docflow/journal/suggest?emailId=" + encodeURIComponent(emailId)),
+  journalIncoming: (limit = 100) =>
+    request<{ items: IncomingItem[]; total: number }>("/api/docflow/journal/incoming?limit=" + limit),
+  journalStatusCounts: () => request<Record<string, number>>("/api/docflow/journal/status-counts"),
+  /** Ссылка на выгрузку: скачивание делает браузер, а не fetch. */
+  journalExportUrl: (filter: JournalFilter = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(filter)) {
+      if (v !== undefined && v !== "" && v !== null) p.set(k, String(v));
+    }
+    const qs = p.toString();
+    return "/api/docflow/journal/export" + (qs ? "?" + qs : "");
+  },
+  auditExportUrl: (filter: Record<string, string | number | undefined> = {}) => {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(filter)) if (v !== undefined && v !== "") p.set(k, String(v));
+    const qs = p.toString();
+    return "/api/audit/export" + (qs ? "?" + qs : "");
+  },
+  numbering: (period?: string) =>
+    request<NumberingState>("/api/docflow/numbering" + (period ? "?period=" + period : "")),
+  saveNumbering: (rule: NumberingRuleRecord) =>
+    request<NumberingRuleRecord>("/api/docflow/numbering", { method: "PUT", body: JSON.stringify(rule) }),
+  archivePeriod: (period: string, fileName?: string) =>
+    request<{ ok: boolean; period: string; documentCount: number }>("/api/docflow/numbering/archive", {
+      method: "POST",
+      body: JSON.stringify({ period, fileName })
+    }),
+  cases: (onlyActive = false) =>
+    request<CaseRecord[]>("/api/docflow/cases" + (onlyActive ? "?active=1" : "")),
+  saveCase: (c: Partial<CaseRecord> & { code: string }) =>
+    request<CaseRecord>("/api/docflow/cases", { method: "POST", body: JSON.stringify(c) }),
+
   settings: () => request<Record<string, string>>("/api/settings"),
   saveSetting: (key: string, value: string) =>
     request<Record<string, string>>("/api/settings", {
       method: "PUT",
       body: JSON.stringify({ [key]: value })
     })
+};
+
+
+/**
+ * Резолюции (СЭД, этап 3).
+ *
+ * Разделены по шагам процесса: аппарат готовит и отправляет, подписант утверждает,
+ * исполнитель получает задачу. Сервер проверяет права независимо — здесь только удобство.
+ */
+export const resolutionApi = {
+  /** ИИ предлагает текст черновика по письму-источнику документа. */
+  draft(documentId: string) {
+    return request<{ text: string; attachments: number; reason?: string }>("/api/docflow/resolutions/draft", {
+      method: "POST",
+      body: JSON.stringify({ documentId })
+    });
+  },
+
+  create(input: {
+    documentId: string;
+    text: string;
+    sourceText?: string;
+    sourceKind?: "manual" | "ai";
+    priority?: ResolutionPriority;
+    deadline?: string | null;
+    assignees: Array<{ userId: string; kind: AssigneeKind }>;
+  }) {
+    return request<Resolution>("/api/docflow/resolutions", { method: "POST", body: JSON.stringify(input) });
+  },
+
+  update(
+    id: string,
+    patch: {
+      text?: string;
+      priority?: ResolutionPriority;
+      deadline?: string | null;
+      assignees?: Array<{ userId: string; kind: AssigneeKind }>;
+    }
+  ) {
+    return request<Resolution>("/api/docflow/resolutions/" + id, { method: "PATCH", body: JSON.stringify(patch) });
+  },
+
+  get(id: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id);
+  },
+
+  byDocument(documentId: string) {
+    return request<Resolution[]>("/api/docflow/resolutions/by-document/" + documentId);
+  },
+
+  requestApproval(id: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/request-approval", { method: "POST", body: "{}" });
+  },
+
+  /** Утверждение вместе с решением: руководитель пишет текст и назначает исполнителя (Р8). */
+  approve(
+    id: string,
+    opts: {
+      comment?: string;
+      text?: string;
+      assignees?: Array<{ userId: string; kind: AssigneeKind }>;
+      priority?: ResolutionPriority;
+      deadline?: string | null;
+    } = {}
+  ) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/approve", {
+      method: "POST",
+      body: JSON.stringify(opts)
+    });
+  },
+
+  /** Аппарат направляет письмо руководителю: резолюции ещё нет, решает он. */
+  forward(documentId: string, toUserId: string) {
+    return request<Resolution & { sentTo?: string; sentEmailId?: string }>("/api/docflow/resolutions/forward", {
+      method: "POST",
+      body: JSON.stringify({ documentId, toUserId })
+    });
+  },
+
+  /** Способ В, шаг 1: зафиксировать, что подписант ответил письмом. */
+  emailApproval(id: string, emailId: string, replyText: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/email-approval", {
+      method: "POST",
+      body: JSON.stringify({ emailId, replyText })
+    });
+  },
+
+  /**
+   * Способ В, шаг 2: аппарат проверил ответ подписанта и подтвердил.
+   *
+   * Вместе с подтверждением аппарат вписывает текст (обычно это слова руководителя,
+   * подставленные в форму) и назначает исполнителя: фамилию из письма машина разобрать
+   * не может, а поручение без исполнителя не уйдёт.
+   */
+  confirm(
+    id: string,
+    approvedBy?: string | null,
+    opts: {
+      text?: string;
+      assignees?: Array<{ userId: string; kind: AssigneeKind }>;
+      priority?: ResolutionPriority;
+      deadline?: string | null;
+    } = {}
+  ) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/confirm", {
+      method: "POST",
+      body: JSON.stringify({ approvedBy, ...opts })
+    });
+  },
+
+  reject(id: string, comment: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/reject", {
+      method: "POST",
+      body: JSON.stringify({ comment })
+    });
+  },
+
+  dispatch(id: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/dispatch", { method: "POST", body: "{}" });
+  },
+
+  cancel(id: string, comment: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/cancel", {
+      method: "POST",
+      body: JSON.stringify({ comment })
+    });
+  },
+
+  /** Очередь подписанта: и ожидающие решения, и уже ответившие письмом. */
+  forApproval() {
+    return request<{ items: Resolution[]; total: number }>("/api/docflow/resolutions/for-approval");
+  },
+
+
+  /** Отчёт исполнителя об исполнении: описывает, что сделано (этап 4). */
+  report(id: string, text: string, emailId?: string | null) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/report", {
+      method: "POST",
+      body: JSON.stringify({ text, emailId })
+    });
+  },
+
+  /** Закрытие поручения аппаратом: исполнитель отчитался письмом или лично. */
+  close(id: string, comment: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/close", {
+      method: "POST",
+      body: JSON.stringify({ comment })
+    });
+  },
+
+
+
+  /** В переписке ли письмо и по какому поручению — факт из заголовков, а не догадка. */
+  replyContext(emailId: string) {
+    return request<ReplyContextItem[]>("/api/docflow/emails/" + emailId + "/reply-context");
+  },
+
+  /**
+   * Черновик полей по тексту письма. Модель вызывается ТОЛЬКО здесь — по нажатию кнопки:
+   * письма она не разбирает, аппарат решает сам, что это за письмо.
+   */
+  suggestFields(emailId: string, kind: "approval" | "report") {
+    return request<{ text: string; source: "ai" | "none" }>(
+      "/api/docflow/emails/" + emailId + "/suggest-fields",
+      { method: "POST", body: JSON.stringify({ kind }) }
+    );
+  },
+
+  /** Аппарат отметил письмо как резолюцию руководителя — это и есть подтверждение. */
+  markApproval(
+    resolutionId: string,
+    opts: {
+      emailId: string;
+      text?: string;
+      assignees?: Array<{ userId: string; kind: AssigneeKind }>;
+      deadline?: string | null;
+      priority?: ResolutionPriority;
+    }
+  ) {
+    return request<Resolution>("/api/docflow/resolutions/" + resolutionId + "/mark-approval", {
+      method: "POST",
+      body: JSON.stringify(opts)
+    });
+  },
+
+  /** Принять отчёт: текст можно поправить — дальше срабатывает правило закрытия. */
+  confirmReport(resolutionId: string, userId: string, text?: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + resolutionId + "/report/confirm", {
+      method: "POST",
+      body: JSON.stringify({ userId, text })
+    });
+  },
+
+  /** Очередь аппарата: ответы руководителя, ждущие подтверждения разбора (Р9). */
+  forConfirmation() {
+    return request<{ items: Resolution[]; total: number }>("/api/docflow/resolutions/for-confirmation");
+  },
+
+  myTasks() {
+    return request<TaskItem[]>("/api/docflow/resolutions/my-tasks");
+  },
+
+  /** «Расписка»: исполнитель получил документ (графа 8 журнала). */
+  markReceived(id: string) {
+    return request<{ ok: boolean }>("/api/docflow/resolutions/" + id + "/received", { method: "POST", body: "{}" });
+  },
+
+  /** Ссылка на .ics задачи: календарь сам напомнит о сроке (Р11). */
+  icsUrl(id: string) {
+    return "/api/docflow/resolutions/" + id + "/ics";
+  },
+
+  board() {
+    return request<BoardColumn[]>("/api/docflow/resolutions/board");
+  },
+
+  /**
+   * Кандидаты в исполнители для выбора. Не `/api/users`: тот только для администратора,
+   * а выбирать исполнителей должны и аппарат, и руководитель.
+   */
+  executorCandidates() {
+    return request<Array<{ id: string; fullName: string; email: string; department: string }>>(
+      "/api/docflow/resolutions/executor-candidates"
+    );
+  },
+
+  /**
+   * Подсказка исполнителей. Сейчас всегда `ready: false` — граф знаний ещё не построен (Р14).
+   * Форма ответа зафиксирована заранее, чтобы интерфейс не переделывать.
+   */
+  suggestAssignees(documentId: string) {
+    return request<{
+      ready: boolean;
+      collected: number;
+      needed: number;
+      items: Array<{ userId: string; fullName: string; reason: string; confidence: number }>;
+      reason?: string;
+    }>("/api/docflow/resolutions/suggest-assignees?documentId=" + encodeURIComponent(documentId));
+  },
 };
 
 export function attachmentUrl(emailId: string, attId: string, inline = false): string {

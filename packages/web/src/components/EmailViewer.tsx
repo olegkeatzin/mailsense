@@ -12,6 +12,9 @@ import { api, attachmentUrl, previewUrl } from "../api";
 import type { Attachment, EmailView } from "../types";
 import { formatBytes, formatDate, statusColor, statusLabel } from "../utils";
 import AnalysisPanel from "./AnalysisPanel";
+import EmailDocflowTab from "./EmailDocflowTab";
+import { RegisterPanel } from "./RegisterPanel";
+import { SafeLetterHtml } from "./SafeLetterHtml";
 
 const FOLDER_OPTIONS = [
   { value: "INBOX", label: "Входящие" },
@@ -149,7 +152,9 @@ function MailTab({ view }: { view: EmailView }) {
   const previewPage = previewAtt && previewAtt.id === view.numberSourceAttachmentId ? view.numberSourcePage : 1;
 
   return (
-    <div>
+    // Слева письмо, справа регистрация: заполнять поля, не видя письма, нельзя.
+    <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
       <Descriptions size="small" column={1} bordered>
         <Descriptions.Item label="От">
           <Typography.Text copyable={{ text: view.from?.address ?? "" }}>{from}</Typography.Text>
@@ -199,7 +204,7 @@ function MailTab({ view }: { view: EmailView }) {
         {view.bodyText ? (
           <div className="email-body">{view.bodyText}</div>
         ) : view.bodyHtml ? (
-          <div dangerouslySetInnerHTML={{ __html: view.bodyHtml }} />
+          <SafeLetterHtml html={view.bodyHtml} />
         ) : (
           <Typography.Text type="secondary">(пустое письмо)</Typography.Text>
         )}
@@ -233,6 +238,9 @@ function MailTab({ view }: { view: EmailView }) {
           <List dataSource={view.attachments} renderItem={(a) => <AttachmentItem view={view} a={a} />} />
         </div>
       ) : null}
+      </div>
+
+      <RegisterPanel emailId={view.id} />
     </div>
   );
 }
@@ -242,6 +250,7 @@ export default function EmailViewer() {
   const analyze = useStore((s) => s.analyze);
   const moveSelected = useStore((s) => s.moveSelected);
   const openCompose = useStore((s) => s.openCompose);
+  const canJournal = useStore((s) => s.can("journal.view"));
   const [activeTab, setActiveTab] = useState("mail");
 
   if (!view) {
@@ -290,7 +299,9 @@ export default function EmailViewer() {
         onChange={setActiveTab}
         items={[
           { key: "mail", label: "Письмо", children: <MailTab view={view} /> },
-          { key: "analysis", label: "Анализ", children: <AnalysisPanel view={view} /> }
+          { key: "analysis", label: "Анализ", children: <AnalysisPanel view={view} /> },
+          ...(canJournal
+            ? [{ key: "docflow", label: "СЭД", children: <EmailDocflowTab emailId={view.id} letter={view} /> }] : [])
         ]}
       />
     </div>
