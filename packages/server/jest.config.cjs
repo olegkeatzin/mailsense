@@ -22,7 +22,8 @@ module.exports = {
     // Права ролей и классы ошибок — чистые модули без базы: берём их по-настоящему,
     // чтобы матрица «маршрут × роль» проверяла реальные права, а не их копию в тесте.
     "^@mailsense/docflow/roles$": "<rootDir>/../docflow/src/roles.ts",
-    "^@mailsense/docflow/errors$": "<rootDir>/../docflow/src/errors.ts"
+    "^@mailsense/docflow/errors$": "<rootDir>/../docflow/src/errors.ts",
+    "^@mailsense/docflow/types$": "<rootDir>/../docflow/src/types.ts"
   },
   moduleFileExtensions: ["ts", "js", "json"],
   testMatch: ["**/*.test.ts"],

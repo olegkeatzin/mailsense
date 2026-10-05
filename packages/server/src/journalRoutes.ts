@@ -3,6 +3,7 @@ import type express from "express";
 import { buildXlsx, classifyKind, exportFileName, getEmailView, listAttachments, listEmailsWithAnalysis, logger, pdfPageCount } from "@mailsense/core";
 import {
   AppError,
+  DOCUMENT_STATUSES,
   archivePeriod,
   documentStatusCounts,
   findDuplicates,
@@ -419,7 +420,22 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       if (b.correspondentId !== undefined) {
         patch.correspondentId = b.correspondentId ? String(b.correspondentId) : null;
       }
-      if (b.status !== undefined) patch.status = b.status as DocumentStatus;
+      if (b.status !== undefined) {
+        // ⚠️ Статус — не свободный текст: произвольное значение ломало фильтры журнала
+        // и подписи состояния («почти исполнен» никому ничего не говорит). Список берём
+        // из docflow, чтобы проверка не разошлась с моделью.
+        if (!DOCUMENT_STATUSES.includes(b.status as DocumentStatus)) {
+          throw new AppError(
+            "Недопустимый статус документа: " +
+              String(b.status) +
+              ". Допустимо: " +
+              DOCUMENT_STATUSES.join(", "),
+            400,
+            "bad_status"
+          );
+        }
+        patch.status = b.status as DocumentStatus;
+      }
       if (b.regDate !== undefined) patch.regDate = String(b.regDate);
 
       const updated = await updateDocument(req.params.id, patch, actorOf(req));

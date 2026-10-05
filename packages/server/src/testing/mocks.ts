@@ -79,6 +79,9 @@ export function docflowMockModule(): Record<string, unknown> {
   const sessions = new Map<string, TestUser>();
   const errors = jest.requireActual("@mailsense/docflow/errors") as Record<string, unknown>;
   const roles = jest.requireActual("@mailsense/docflow/roles") as Record<string, unknown>;
+  // Список статусов документа — продуктовый: берём настоящий, чтобы проверка на сервере
+  // не разошлась с тем, что принимает журнал.
+  const types = jest.requireActual("@mailsense/docflow/types") as Record<string, unknown>;
 
   const stub = (value: unknown) => jest.fn(async () => value);
 
@@ -109,6 +112,8 @@ export function docflowMockModule(): Record<string, unknown> {
     isAdmin: roles.isAdmin,
     roleName: roles.roleName,
     ROLE_DEFINITIONS: roles.ROLE_DEFINITIONS,
+    DOCUMENT_STATUSES: types.DOCUMENT_STATUSES,
+    DOCUMENT_STATUS_TITLES: types.DOCUMENT_STATUS_TITLES,
 
     // Пользователи и роли.
     listRoles: stub([]),

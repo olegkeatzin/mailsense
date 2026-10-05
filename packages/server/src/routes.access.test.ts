@@ -424,6 +424,68 @@ describe("отправка поручения: захват → письмо →
   });
 });
 
+describe("сбой базы не выдаёт себя за выход из системы", () => {
+  it("/api/auth/me отвечает 503, а не «user: null» (иначе клиент показывает вход)", async () => {
+    mockedDocflow.resolveToken.mockRejectedValueOnce(new Error("ECONNREFUSED 127.0.0.1:55432"));
+
+    const res = await request(app.baseUrl, "GET", "/api/auth/me", { token: token("admin") });
+
+    expect(res.status).toBe(503);
+    expect(String((res.body as { error?: string }).error)).toContain("База документооборота недоступна");
+  });
+
+  it("защищённый маршрут отвечает 503, а не 401", async () => {
+    mockedDocflow.resolveToken.mockRejectedValueOnce(new Error("таймаут соединения"));
+
+    const res = await request(app.baseUrl, "GET", "/api/users", { token: token("admin") });
+
+    expect(res.status).toBe(503);
+  });
+
+  it("при живом входе /api/auth/me отдаёт пользователя как раньше", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/auth/me", { token: token("admin") });
+
+    expect(res.status).toBe(200);
+    expect((res.body as { user: { id: string } }).user.id).toBe("u-admin");
+  });
+});
+
+describe("статус документа проверяется на сервере", () => {
+  it("неизвестный статус отклонён с 400, документ не меняется", async () => {
+    const updateDocument = mockedDocflow.updateDocument;
+
+    const res = await request(app.baseUrl, "PATCH", "/api/docflow/journal/doc-1", {
+      token: token("secretary"),
+      body: { status: "почти исполнен" }
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "bad_status" });
+    expect(String((res.body as { error?: string }).error)).toContain("executed");
+    expect(updateDocument).not.toHaveBeenCalled();
+  });
+
+  it("известный статус принимается и уходит в базу", async () => {
+    const res = await request(app.baseUrl, "PATCH", "/api/docflow/journal/doc-1", {
+      token: token("secretary"),
+      body: { status: "executed" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedDocflow.updateDocument.mock.calls[0][1]).toMatchObject({ status: "executed" });
+  });
+
+  it("без статуса прочие поля правятся как раньше", async () => {
+    const res = await request(app.baseUrl, "PATCH", "/api/docflow/journal/doc-1", {
+      token: token("secretary"),
+      body: { summary: "уточнено" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedDocflow.updateDocument.mock.calls[0][1]).toMatchObject({ summary: "уточнено" });
+  });
+});
+
 /** Префиксы, которые обслуживает сервер документооборота: всё здесь под правами. */
 const DOCFLOW_PREFIXES = ["/api/docflow", "/api/users", "/api/roles", "/api/audit", "/api/directory"];
 

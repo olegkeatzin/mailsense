@@ -114,10 +114,32 @@ describe("requireAuth", () => {
     expect(withRole.status).toBe(503);
   });
 
-  it("ошибка разбора токена не ломает запрос: пользователь просто не определён", async () => {
-    mocked.resolveToken.mockRejectedValue(new Error("база упала"));
+  it("сбой базы при проверке сессии — 503, а не «вы не авторизованы»", async () => {
+    // ⚠️ Кратковременная недоступность PostgreSQL не должна выбрасывать людей из системы:
+    // «сессии нет» и «база недоступна» — разные ответы, и клиент лечится по-разному.
+    mocked.resolveToken.mockRejectedValue(new Error("ECONNREFUSED 127.0.0.1:55432"));
     const res = await request(app.baseUrl, "GET", "/api/private", { token: "token:admin" });
+    expect(res.status).toBe(503);
+    expect(String((res.body as { error?: string }).error)).toContain("База документооборота недоступна");
+  });
+
+  it("отсутствие сессии по-прежнему 401 — это не сбой базы", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/private");
     expect(res.status).toBe(401);
+  });
+
+  it("сбой базы не обходится правом: маршрут с requirePermission тоже 503", async () => {
+    mocked.resolveToken.mockRejectedValue(new Error("таймаут соединения"));
+    const res = await request(app.baseUrl, "PUT", "/api/settings", { token: "token:admin", body: {} });
+    expect(res.status).toBe(503);
+  });
+
+  it("сбой базы не запирает публичные маршруты и SPA", async () => {
+    mocked.resolveToken.mockRejectedValue(new Error("таймаут соединения"));
+    const health = await request(app.baseUrl, "GET", "/api/health");
+    expect(health.status).toBe(200);
+    const spa = await request(app.baseUrl, "GET", "/");
+    expect(spa.status).toBe(200);
   });
 });
 

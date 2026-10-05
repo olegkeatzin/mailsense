@@ -15,6 +15,8 @@ declare global {
       /** Пользователь сессии; null в устаревшем однопользовательском режиме. */
       user: AuthUser | null;
       sessionToken: string | null;
+      /** Не удалось проверить сессию: база документооборота недоступна. */
+      authLookupError: Error | null;
     }
   }
 }
@@ -57,8 +59,14 @@ export async function attachUser(
   try {
     // База документооборота теперь PostgreSQL, поэтому проверка сессии асинхронная.
     req.user = await resolveToken(token);
-  } catch {
+    req.authLookupError = null;
+  } catch (err) {
+    // ⚠️ Это НЕ «сессии нет»: база документооборота не ответила. Отдай мы здесь 401 —
+    // кратковременный сбой PostgreSQL выбрасывал бы всех вошедших из системы, и человек
+    // лечил бы несуществующую проблему со входом. Ошибку запоминаем: requireAuth и
+    // requirePermission ответят 503 «база недоступна».
     req.user = null;
+    req.authLookupError = err as Error;
   }
   next();
 }
@@ -107,6 +115,10 @@ export async function requireAuth(
   // один HTML-каркас, который сам сходит за /api/auth/me.
   if (!req.path.startsWith("/api/")) return next();
   if (PUBLIC_PATHS.has(req.path)) return next();
+  if (req.authLookupError) {
+    res.status(503).json({ error: "База документооборота недоступна: " + req.authLookupError.message });
+    return;
+  }
   if (!req.user) {
     res.status(401).json({ error: "Требуется вход в систему" });
     return;
@@ -120,6 +132,11 @@ export function requirePermission(permission: Permission) {
     const enabled = await docflowOn(res);
     if (enabled === null) return;
     if (!enabled) return next();
+    // База не ответила при проверке сессии — это 503, а не «нет прав» и не «нет входа».
+    if (req.authLookupError) {
+      res.status(503).json({ error: "База документооборота недоступна: " + req.authLookupError.message });
+      return;
+    }
     if (!req.user) {
       res.status(401).json({ error: "Требуется вход в систему" });
       return;

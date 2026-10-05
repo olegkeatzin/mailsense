@@ -107,6 +107,14 @@ export const BODY_LIMIT = "2mb";
 export const ATTACHMENT_BODY_LIMIT = "50mb";
 export const IMPORT_BODY_LIMIT = "100mb";
 
+/**
+ * Сколько строк аудита выгружаем за один раз. Это предохранитель от выгрузки, которая
+ * съест память процесса, а не «страница интерфейса»: до него выгружается ВСЁ.
+ */
+export const AUDIT_EXPORT_MAX_ROWS = 20000;
+/** listAudit отдаёт не больше 1000 записей за раз — ходим страницами этого размера. */
+const AUDIT_EXPORT_PAGE = 1000;
+
 function asyncHandler(
   fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>
 ) {
@@ -800,6 +808,14 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   app.get(
     "/api/auth/me",
     asyncHandler(async (req, res) => {
+      // ⚠️ База не ответила при проверке сессии: ответить «user: null» — значит выбросить
+      // человека на экран входа из-за сбоя связи. По 503 клиент прячет только функции СЭД,
+      // а локальная почта продолжает работать (store.loadAuth).
+      if (req.authLookupError) {
+        return res
+          .status(503)
+          .json({ error: "База документооборота недоступна: " + req.authLookupError.message });
+      }
       if (!req.user) {
         // Документооборот выключен либо вход не выполнен: клиент решает сам.
         return res.json({ docflowEnabled: await isDocflowEnabled(), user: null });
@@ -950,11 +966,51 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
         entityId: (req.query.entityId as string) || undefined,
         action: (req.query.action as string) || undefined,
         dateFrom: (req.query.dateFrom as string) || undefined,
-        dateTo: (req.query.dateTo as string) || undefined,
-        limit: 1000,
-        offset: 0
+        dateTo: (req.query.dateTo as string) || undefined
       };
-      const entries = await listAudit(filter);
+      // ⚠️ Раньше выгрузка была жёстко обрезана первой тысячей записей и молчала об этом:
+      // файл выглядел полным, а части следа в нём не было. Система заведена ради вопроса
+      // «кто внёс данные неверно», поэтому выгружаем ВСЁ — постранично, — а если сработал
+      // предохранитель, говорим об этом прямо в файле и в заголовках ответа.
+      const total = await countAudit(filter);
+      const rows: Array<Record<string, unknown>> = [];
+      const limit = Math.min(total, AUDIT_EXPORT_MAX_ROWS);
+      for (let offset = 0; offset < limit; offset += AUDIT_EXPORT_PAGE) {
+        const page = await listAudit({ ...filter, limit: AUDIT_EXPORT_PAGE, offset });
+        rows.push(
+          ...page.map((e) => ({
+            createdAt: e.createdAt,
+            userName: e.userName,
+            action: e.action,
+            entityType: e.entityType,
+            entityId: e.entityId,
+            oldValue: e.oldValue ?? "",
+            newValue: e.newValue ?? ""
+          }))
+        );
+        if (page.length < AUDIT_EXPORT_PAGE) break;
+      }
+
+      const exported = rows.length;
+      const truncated = exported < total;
+      if (truncated) {
+        logger.warn(
+          { exported, total, max: AUDIT_EXPORT_MAX_ROWS },
+          "Выгрузка аудита неполная: сработал предохранитель"
+        );
+        // Первая строка файла — предупреждение: его видно сразу, до чтения самих следов.
+        rows.unshift({
+          createdAt: "⚠️ ВЫГРУЗКА НЕПОЛНАЯ",
+          userName: "",
+          action:
+            "Показано " + exported + " из " + total + " записей, пропущено " + (total - exported),
+          entityType: "",
+          entityId: "",
+          oldValue: "Сузьте фильтр (период, пользователь, объект) и выгрузите снова",
+          newValue: ""
+        });
+      }
+
       const buf = buildXlsx({
         sheetName: "Аудит",
         columns: [
@@ -966,17 +1022,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
           { key: "oldValue", title: "Было", width: 40 },
           { key: "newValue", title: "Стало", width: 40 }
         ],
-        rows: entries.map((e) => ({
-          createdAt: e.createdAt,
-          userName: e.userName,
-          action: e.action,
-          entityType: e.entityType,
-          entityId: e.entityId,
-          oldValue: e.oldValue ?? "",
-          newValue: e.newValue ?? ""
-        }))
+        rows
       });
       const name = exportFileName("audit");
+      // Заголовки для тех, кто качает файл скриптом: полнота выгрузки видна без открытия.
+      res.setHeader("X-Export-Rows", String(exported));
+      res.setHeader("X-Export-Total", String(total));
+      res.setHeader("X-Export-Truncated", truncated ? "true" : "false");
       res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
       res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(name));
       res.send(buf);
