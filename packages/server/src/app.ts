@@ -16,7 +16,9 @@ import {
   directoryLogout,
   directoryStatus,
   deleteEmails,
+  buildXlsx,
   decryptPassword,
+  exportFileName,
   fetchEmails,
   getAccountById,
   getTemplate,
@@ -66,6 +68,34 @@ import {
   buildComposeTemplate
 } from "@mailsense/core";
 import { logger } from "@mailsense/core";
+// Серверная часть (документооборот) — отдельный пакет со своей базой.
+import {
+  SESSION_COOKIE,
+  assignRoles,
+  authStatus,
+  createManualUser,
+  getUserWithRoles,
+  hasDocflowDb,
+  isAppError,
+  isDocflowEnabled,
+  countAudit,
+  listAudit,
+  listRoles,
+  listUsersWithRoles,
+  login,
+  logout,
+  sessionTtlHours,
+  setDocflowEnabled,
+  setUserActive,
+  syncDirectoryUsers,
+  updateManualUser,
+  type AuthUser,
+  type UserWithRoles
+} from "@mailsense/docflow";
+import { attachUser, parseCookies, requireAdmin, requireAuth, requirePermission, sessionCookieOptions } from "./auth.js";
+import { mountJournalRoutes } from "./journalRoutes.js";
+import { mountResolutionRoutes } from "./resolutionRoutes.js";
+import { createDocflowProxy } from "./proxy.js";
 
 function asyncHandler(
   fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>
@@ -148,10 +178,73 @@ function escapeIcs(text: string): string {
     .replace(/\r?\n/g, "\\n");
 }
 
-export function createApp(options: { webDist?: string } = {}): express.Express {
+/** DTO пользователя для UI: хэш пароля и служебные поля наружу не отдаём. */
+function userDto(u: UserWithRoles) {
+  return {
+    id: u.id,
+    ldapUid: u.ldapUid,
+    email: u.email,
+    fullName: u.fullName,
+    department: u.department,
+    position: u.position,
+    managerId: u.managerId,
+    phone: u.phone,
+    source: u.source,
+    // isActive — состояние в каталоге, blocked — ручная блокировка администратором.
+    // UI показывает их раздельно, поэтому наружу нужны оба.
+    isActive: u.isActive,
+    blocked: u.blocked,
+    lastLoginAt: u.lastLoginAt,
+    roles: u.roles
+  };
+}
+
+function authUserDto(u: AuthUser) {
+  return { ...userDto(u), permissions: u.permissions };
+}
+
+export interface CreateAppOptions {
+  webDist?: string;
+  /**
+   * Адрес сервера документооборота. Если задан, локальный backend работает
+   * в режиме клиента: почта обслуживается здесь, а журнал/пользователи/резолюции
+   * проксируются на сервер. Локальная проверка входа при этом не применяется —
+   * аутентификацию выполняет сервер.
+   */
+  docflowServerUrl?: string | null;
+}
+
+export async function createApp(options: CreateAppOptions = {}): Promise<express.Express> {
   const app = express();
-  app.use(cors());
+  const proxyMode = !!options.docflowServerUrl;
+
+  // CORS. Пока документооборот выключен — поведение 0.1.3 (локальный однопользовательский
+  // режим). Как только включается вход, открытый CORS недопустим: SPA и API живут на одном
+  // origin, поэтому по умолчанию кросс-доменные запросы не разрешаем вовсе.
+  const corsOrigins = (getAllSettings()["security.corsOrigins"] ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  // В режиме клиента локальной базы документооборота нет — спрашивать её нельзя,
+  // иначе сервер падает на старте. Источник истины там удалённый сервер.
+  const localDocflowEnabled = proxyMode ? false : await isDocflowEnabled();
+  if (!localDocflowEnabled && !proxyMode) {
+    app.use(cors());
+  } else if (corsOrigins.length > 0) {
+    app.use(cors({ origin: corsOrigins, credentials: true }));
+  }
+
+  // Прокси ставим ДО express.json: иначе тело запроса будет уже прочитано
+  // и до сервера документооборота дойдёт пустым.
+  if (proxyMode) {
+    app.use(createDocflowProxy({ baseUrl: options.docflowServerUrl! }));
+  }
+
   app.use(express.json({ limit: "100mb" }));
+
+  // Пользователь сессии + обязательный вход (когда документооборот ведётся локально).
+  app.use(attachUser);
+  if (!proxyMode) app.use(requireAuth);
 
   // -------- health / settings --------
   app.get("/api/health", (_req, res) => {
@@ -159,10 +252,17 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
   });
 
   app.get("/api/settings", (_req, res) => {
-    res.json(getAllSettings());
+    // ⚠️ Секреты наружу не отдаём. Маршрут открыт любому вошедшему (рядовой видит настройки
+    // только для чтения), а `getAllSettings` возвращает ВСЮ таблицу — включая `ai.apiKey`
+    // и зашифрованный пароль каталога. Ни одному экрану этого маршрута они не нужны:
+    // форма ИИ берёт ключ из `/api/ai/config`, а он закрыт правом.
+    const all = getAllSettings();
+    delete all["ai.apiKey"];
+    delete all["ldap.passwordEncrypted"];
+    res.json(all);
   });
 
-  app.put("/api/settings", (req, res) => {
+  app.put("/api/settings", requirePermission("settings.manage"), (req, res) => {
     const body = req.body ?? {};
     if (body && typeof body === "object") {
       for (const [k, v] of Object.entries(body)) {
@@ -172,11 +272,14 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     res.json(getAllSettings());
   });
 
-  app.get("/api/ai/config", (_req, res) => {
+  // ⚠️ Здесь в ответе `apiKey` — маршрут обязан быть за правом. Раньше был открыт:
+  // ключ модели мог прочитать любой вошедший. Рядовому он не нужен — вкладка «ИИ» админская,
+  // а в клиенте вызов обёрнут в try/catch (store.ts loadAiConfig), поэтому 403 ничего не ломает.
+  app.get("/api/ai/config", requirePermission("settings.manage"), (_req, res) => {
     res.json(getAiConfig());
   });
 
-  app.put("/api/ai/config", (req, res) => {
+  app.put("/api/ai/config", requirePermission("settings.manage"), (req, res) => {
     setAiConfig(req.body ?? {});
     res.json(getAiConfig());
   });
@@ -185,13 +288,14 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     res.json(getPromptSettings());
   });
 
-  app.put("/api/ai/prompt", (req, res) => {
+  app.put("/api/ai/prompt", requirePermission("settings.manage"), (req, res) => {
     setPromptSettings(req.body ?? {});
     res.json(getPromptSettings());
   });
 
   app.post(
     "/api/ai/test",
+    requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
       const cfg = getAiConfig();
       const baseUrl = (req.body?.baseUrl as string) || cfg.baseUrl;
@@ -210,26 +314,27 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     res.json(getAccounts().map(accountDto));
   });
 
-  app.post("/api/accounts", (req, res) => {
+  app.post("/api/accounts", requirePermission("settings.manage"), (req, res) => {
     const input = req.body as AccountInput;
     const account = createAccount(input);
     res.status(201).json(accountDto(account));
   });
 
-  app.put("/api/accounts/:id", (req, res) => {
+  app.put("/api/accounts/:id", requirePermission("settings.manage"), (req, res) => {
     const input = req.body as AccountInput;
     const updated = updateAccountById(req.params.id, input);
     if (!updated) return res.status(404).json({ error: "Аккаунт не найден" });
     res.json(accountDto(updated));
   });
 
-  app.delete("/api/accounts/:id", (req, res) => {
+  app.delete("/api/accounts/:id", requirePermission("settings.manage"), (req, res) => {
     removeAccount(req.params.id);
     res.json({ ok: true });
   });
 
   app.post(
     "/api/accounts/test",
+    requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
       const result = await testConnection(req.body as AccountInput);
       res.json(result);
@@ -459,6 +564,7 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
 
   app.post(
     "/api/accounts/:id/test-smtp",
+    requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
       const result = await testSmtpConnection(req.params.id);
       res.json(result);
@@ -515,24 +621,34 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     res.json(directoryStatus());
   });
 
-  app.put("/api/directory/settings", (req, res) => {
-    res.json(setLdapSettings(req.body ?? {}));
-  });
+  app.put(
+    "/api/directory/settings",
+    requirePermission("settings.manage"),
+    asyncHandler(async (req, res) => {
+      res.json(await setLdapSettings(req.body ?? {}));
+    })
+  );
 
   app.post(
     "/api/directory/login",
+    requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
       const b = req.body ?? {};
       res.json(await directoryLogin(String(b.login ?? ""), String(b.password ?? "")));
     })
   );
 
-  app.post("/api/directory/logout", (_req, res) => {
-    res.json(directoryLogout());
-  });
+  app.post(
+    "/api/directory/logout",
+    requirePermission("settings.manage"),
+    asyncHandler(async (_req, res) => {
+      res.json(await directoryLogout());
+    })
+  );
 
   app.post(
     "/api/directory/refresh",
+    requirePermission("settings.manage"),
     asyncHandler(async (_req, res) => {
       res.json({ synced: await refreshDirectory() });
     })
@@ -622,6 +738,239 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
     })
   );
 
+  // -------- Документооборот: вход, выход, текущий пользователь --------
+  app.get(
+    "/api/auth/status",
+    asyncHandler(async (_req, res) => {
+      res.json(await authStatus());
+    })
+  );
+
+  app.post(
+    "/api/auth/login",
+    asyncHandler(async (req, res) => {
+      if (!(await isDocflowEnabled())) {
+        // Иначе пользователь получал бы невнятную ошибку подключения к каталогу.
+        return res.status(400).json({ error: "Документооборот выключен — вход в систему не требуется" });
+      }
+      const b = req.body ?? {};
+      const result = await login({
+        login: String(b.login ?? ""),
+        password: String(b.password ?? ""),
+        userAgent: String(req.headers["user-agent"] ?? ""),
+        ip: req.ip ?? ""
+      });
+      const ttlMs = (await sessionTtlHours()) * 60 * 60 * 1000;
+      res.cookie(SESSION_COOKIE, result.token, sessionCookieOptions(req, ttlMs));
+      res.json({ user: authUserDto(result.user), expiresAt: result.expiresAt });
+    })
+  );
+
+  app.post(
+    "/api/auth/logout",
+    asyncHandler(async (req, res) => {
+      await logout(req.sessionToken ?? parseCookies(req.headers.cookie)[SESSION_COOKIE] ?? null);
+      res.clearCookie(SESSION_COOKIE, { path: "/" });
+      res.json({ ok: true });
+    })
+  );
+
+  app.get(
+    "/api/auth/me",
+    asyncHandler(async (req, res) => {
+      if (!req.user) {
+        // Документооборот выключен либо вход не выполнен: клиент решает сам.
+        return res.json({ docflowEnabled: await isDocflowEnabled(), user: null });
+      }
+      res.json({ docflowEnabled: true, user: authUserDto(req.user) });
+    })
+  );
+
+  // -------- Документооборот: настройки --------
+  app.put(
+    "/api/docflow/settings",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const b = req.body ?? {};
+      if (b.enabled !== undefined) await setDocflowEnabled(!!b.enabled);
+      if (b.sessionTtlHours !== undefined) setSettingValue("auth.sessionTtlHours", String(b.sessionTtlHours));
+      if (b.localLoginEnabled !== undefined) {
+        setSettingValue("auth.localLoginEnabled", b.localLoginEnabled ? "true" : "false");
+      }
+      res.json(await authStatus());
+    })
+  );
+
+  /**
+   * Маршруты документооборота требуют настроенной базы. Без неё приложение работает
+   * как почтовый клиент, и вместо невнятной 500 отвечаем понятной 503.
+   */
+  const requireDocflowDb: express.RequestHandler = (_req, res, next) => {
+    if (!hasDocflowDb()) {
+      res.status(503).json({ error: "Документооборот не настроен: задайте DOCFLOW_DATABASE_URL" });
+      return;
+    }
+    next();
+  };
+
+  // -------- Документооборот: роли --------
+  app.get(
+    "/api/roles",
+    requireDocflowDb,
+    requirePermission("journal.view"),
+    asyncHandler(async (_req, res) => {
+      res.json(await listRoles());
+    })
+  );
+
+  // -------- Документооборот: пользователи и роли --------
+  app.get(
+    "/api/users",
+    requireDocflowDb,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const list = await listUsersWithRoles({
+        q: (req.query.q as string) || undefined,
+        roleId: (req.query.roleId as string) || undefined,
+        includeInactive: req.query.includeInactive === "1"
+      });
+      res.json(list.map(userDto));
+    })
+  );
+
+  app.post(
+    "/api/users",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const b = req.body ?? {};
+      const created = await createManualUser(
+        {
+          email: String(b.email ?? ""),
+          fullName: b.fullName,
+          department: b.department,
+          position: b.position,
+          phone: b.phone,
+          roleIds: Array.isArray(b.roleIds) ? (b.roleIds as string[]) : []
+        },
+        req.user
+      );
+      res.status(201).json(userDto(created));
+    })
+  );
+
+  app.patch(
+    "/api/users/:id",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const b = req.body ?? {};
+      const u =
+        b.isActive !== undefined
+          ? await setUserActive(req.params.id, !!b.isActive, req.user)
+          : await updateManualUser(
+              req.params.id,
+              { fullName: b.fullName, department: b.department, position: b.position, phone: b.phone, email: b.email },
+              req.user
+            );
+      const full = await getUserWithRoles(u.id);
+      res.json(userDto(full ?? { ...u, roles: [] }));
+    })
+  );
+
+  app.put(
+    "/api/users/:id/roles",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const roleIds = Array.isArray(req.body?.roleIds) ? (req.body.roleIds as string[]) : [];
+      res.json(userDto(await assignRoles(req.params.id, roleIds, req.user)));
+    })
+  );
+
+  app.post(
+    "/api/users/sync",
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      res.json(await syncDirectoryUsers(req.user));
+    })
+  );
+
+  // -------- Документооборот: аудит --------
+  app.get(
+    "/api/audit",
+    requireDocflowDb,
+    requirePermission("audit.view"),
+    asyncHandler(async (req, res) => {
+      const filter = {
+        userId: (req.query.userId as string) || undefined,
+        entityType: (req.query.entityType as string) || undefined,
+        entityId: (req.query.entityId as string) || undefined,
+        action: (req.query.action as string) || undefined,
+        dateFrom: (req.query.dateFrom as string) || undefined,
+        dateTo: (req.query.dateTo as string) || undefined,
+        limit: req.query.limit ? Number(req.query.limit) : 200,
+        offset: req.query.offset ? Number(req.query.offset) : 0
+      };
+      res.json({ entries: await listAudit(filter), total: await countAudit(filter) });
+    })
+  );
+
+  /**
+   * Выгрузка следов аудита в Excel. Нужна, когда разбирают инцидент:
+   * «кто менял этот документ» удобнее читать таблицей, чем списком в UI.
+   */
+  app.get(
+    "/api/audit/export",
+    requireDocflowDb,
+    requirePermission("audit.view"),
+    asyncHandler(async (req, res) => {
+      const filter = {
+        userId: (req.query.userId as string) || undefined,
+        entityType: (req.query.entityType as string) || undefined,
+        entityId: (req.query.entityId as string) || undefined,
+        action: (req.query.action as string) || undefined,
+        dateFrom: (req.query.dateFrom as string) || undefined,
+        dateTo: (req.query.dateTo as string) || undefined,
+        limit: 1000,
+        offset: 0
+      };
+      const entries = await listAudit(filter);
+      const buf = buildXlsx({
+        sheetName: "Аудит",
+        columns: [
+          { key: "createdAt", title: "Когда", width: 24 },
+          { key: "userName", title: "Кто", width: 24 },
+          { key: "action", title: "Действие", width: 26 },
+          { key: "entityType", title: "Объект", width: 16 },
+          { key: "entityId", title: "Идентификатор объекта", width: 38 },
+          { key: "oldValue", title: "Было", width: 40 },
+          { key: "newValue", title: "Стало", width: 40 }
+        ],
+        rows: entries.map((e) => ({
+          createdAt: e.createdAt,
+          userName: e.userName,
+          action: e.action,
+          entityType: e.entityType,
+          entityId: e.entityId,
+          oldValue: e.oldValue ?? "",
+          newValue: e.newValue ?? ""
+        }))
+      });
+      const name = exportFileName("audit");
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(name));
+      res.send(buf);
+    })
+  );
+
+  // -------- Документооборот: журнал регистрации (этап 2) --------
+  mountJournalRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+  mountResolutionRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+
+  // Ответ руководителя распознаётся сразу после синхронизации ящика: письмо приходит
+  // в тред, резолюция переходит в «ждёт подтверждения», аппарат видит её в своей очереди.
+  // ⚠️ Автоматического разбора писем НЕТ и не должно быть: что ответ руководителя, а что отчёт
+  // исполнителя, определяет аппарат, открыв письмо в почте. ИИ лишь помогает заполнить поля.
+  // Прежняя подписка на скан (`installApprovalReplyHook`) убрана — она решала за человека.
+
   // -------- static SPA (собранный web) --------
   const webDist = options.webDist;
   if (webDist && fs.existsSync(path.join(webDist, "index.html"))) {
@@ -635,6 +984,12 @@ export function createApp(options: { webDist?: string } = {}): express.Express {
   // -------- error handler --------
   app.use(
     (err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      // Ожидаемые отказы (неверный пароль, нет прав, каталог не настроен) отдаём
+      // их статусом и текстом; всё остальное — 500 без внутренних деталей.
+      if (isAppError(err)) {
+        logger.warn({ err: err.message, status: err.status }, "Отказ API");
+        return res.status(err.status).json({ error: err.message, code: err.code });
+      }
       logger.error({ err: err.message }, "Ошибка API");
       res.status(500).json({ error: err.message });
     }
