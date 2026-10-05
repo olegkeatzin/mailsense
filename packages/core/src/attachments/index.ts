@@ -117,4 +117,4 @@ export async function renderPreviewImage(kind: AttachmentKind, content: Buffer, 
 }
 
 export { classifyKind, saveAttachmentFile };
-export { pdfToText } from "./pdf.js";
+export { pdfToText, pdfPageCount } from "./pdf.js";

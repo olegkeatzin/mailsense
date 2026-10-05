@@ -30,5 +30,7 @@ export function initApp(overrides?: Partial<Config>, secretStore?: SecretStore):
   } catch (err) {
     logger.warn({ err: (err as Error).message }, "Не удалось выполнить обслуживание данных");
   }
+
+  // Серверная часть (документооборот) инициализируется отдельно — у неё своя база.
   return { config, secrets };
 }

@@ -1,6 +1,7 @@
 import {
   index,
   integer,
+  primaryKey,
   sqliteTable,
   text,
   uniqueIndex
@@ -61,7 +62,9 @@ export const emails = sqliteTable(
     updatedAt: text("updated_at").notNull()
   },
   (t) => ({
-    msgIdx: uniqueIndex("emails_message_id_idx").on(t.messageId),
+    // Message-ID уникален В ПРЕДЕЛАХ ЯЩИКА: одно и то же письмо законно лежит
+    // и в «Отправленных» отправителя, и в ящике получателя.
+    msgIdx: uniqueIndex("emails_account_message_id_idx").on(t.accountId, t.messageId),
     acctIdx: index("emails_account_folder_idx").on(t.accountId, t.folder),
     statusIdx: index("emails_status_idx").on(t.analysisStatus),
     threadIdx: index("emails_thread_idx").on(t.threadId)

@@ -96,7 +96,13 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
     logger.warn({ emailId: email.id, err: (err as Error).message }, "Не удалось привязать беседу (отправка)");
   }
 
-  await appendToSent(account, raw);
+  // Письмо получателю уже ушло. Сбой дописывания копии в «Отправленные» —
+  // это не неудачная отправка, и показывать пользователю ошибку нельзя.
+  try {
+    await appendToSent(account, raw);
+  } catch (err) {
+    logger.warn({ emailId: email.id, err: (err as Error).message }, "Копия не дописана в «Отправленные»");
+  }
 
   return { emailId: email.id, messageId: storedMessageId };
 }

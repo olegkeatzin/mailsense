@@ -16,15 +16,19 @@ export function splitMbox(data: Buffer): Buffer[] {
   const lines = text.split(/\r?\n/);
   const messages: Buffer[] = [];
   let current: string[] = [];
+  // Всё до первого разделителя — не письмо, а «шапка» файла. Без этого флага
+  // ведущие пустые строки превращались в фиктивное пустое письмо.
+  let started = false;
   for (const line of lines) {
     if (/^From /.test(line)) {
-      if (current.length > 0) messages.push(Buffer.from(current.join("\n"), "latin1"));
+      if (started && current.length > 0) messages.push(Buffer.from(current.join("\n"), "latin1"));
+      started = true;
       current = [];
-    } else {
+    } else if (started) {
       // убираем mbox-экранирование ">From "
       current.push(line.startsWith(">From ") ? line.slice(1) : line);
     }
   }
-  if (current.length > 0) messages.push(Buffer.from(current.join("\n"), "latin1"));
+  if (started && current.length > 0) messages.push(Buffer.from(current.join("\n"), "latin1"));
   return messages;
 }

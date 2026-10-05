@@ -16,6 +16,7 @@ import { isMboxData, splitMbox } from "../mail/mbox.js";
 import { prepareAttachment } from "../attachments/index.js";
 import { buildConnector, decryptPassword } from "./accountService.js";
 import { getSettingValue } from "./settingsService.js";
+import { runMailSyncHook } from "./mailSyncHook.js";
 import { enqueue } from "./analysisService.js";
 import { assignThread } from "./threadService.js";
 import type { Account } from "../types.js";
@@ -49,10 +50,18 @@ async function persistParsedEmail(
   parsed: ParsedEmail,
   dataDir: string,
   includeDeleted = false
-): Promise<boolean> {
+): Promise<string | null> {
+  // Файл без единого заголовка — это не письмо, а мусор (пользователь может
+  // импортировать что угодно). Проверяем именно заголовки: по полям разбора
+  // мусор не отличить — парсер подставляет тему «(без темы)».
+  const hasHeaders = Object.keys(parsed.headers ?? {}).length > 0;
+  if (!hasHeaders && parsed.attachments.length === 0) return null;
+
   // Письма без Message-ID получают синтетический уникальный ID (иначе UNIQUE-констрейнт их роняет).
   const messageId = parsed.messageId || `${accountId}:${folder}:${uid}:${parsed.subject}`;
-  if (emailExistsByMessageId(messageId, includeDeleted)) return false;
+  // Ящик обязателен: без него письмо в «Отправленных» отправителя отменяло бы
+  // то же письмо в ящике получателя (найденный баг — поручения не доходили).
+  if (emailExistsByMessageId(messageId, includeDeleted, accountId)) return null;
 
   const email = insertEmail({
     accountId,
@@ -102,7 +111,8 @@ async function persistParsedEmail(
   if (getSettingValue("auto_analyze", "true") === "true") {
     enqueue(email.id);
   }
-  return true;
+  // Возвращаем идентификатор: он нужен точке «письма добавлены» (см. mailSyncHook).
+  return email.id;
 }
 
 /** Фильтр по дате получения в локальном часовом поясе (сравниваем моменты времени, а не строки UTC). */
@@ -150,6 +160,8 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
 
   let added = 0;
   let skipped = 0;
+  /** Письма, добавленные именно этим сканом: их отдаём точке «письма добавлены». */
+  const addedEmailIds: string[] = [];
 
   const includeDeleted = opts.includeDeleted === true;
 
@@ -166,10 +178,17 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
           skipped++;
           continue;
         }
-        if (
-          await persistParsedEmail(accountId, storeFolder, raw.uid, parsed, ctx.config.dataDir, includeDeleted)
-        ) {
+        const savedId = await persistParsedEmail(
+          accountId,
+          storeFolder,
+          raw.uid,
+          parsed,
+          ctx.config.dataDir,
+          includeDeleted
+        );
+        if (savedId) {
           added++;
+          addedEmailIds.push(savedId);
         } else {
           skipped++;
         }
@@ -200,6 +219,11 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
   // Отметка времени последней синхронизации: планировщик использует её,
   // чтобы не сканировать весь ящик при каждом запуске (см. scheduler.ts).
   patchAccountSettings(accountId, { lastFetchAt: new Date().toISOString() });
+
+  // Точка для владельца серверной части: по добавленным письмам он распознаёт,
+  // например, ответ руководителя на запрос резолюции. Ошибка обработчика не
+  // отменяет скан — письма уже сохранены (см. runMailSyncHook).
+  await runMailSyncHook({ accountId, addedEmailIds });
 
   return { added, skipped };
 }

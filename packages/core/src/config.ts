@@ -34,6 +34,12 @@ export interface Config {
   ai: AiConfig;
   defaultAccount: DefaultAccountConfig | null;
   seedAccount: boolean;
+  /**
+   * Адрес сервера документооборота. Почта при этом остаётся локальной: клиент
+   * держит свой ящик и свою базу, а на сервер ходит только за журналом,
+   * пользователями и резолюциями. Пусто — документооборот локальный/выключен.
+   */
+  docflowServerUrl: string | null;
 }
 
 function env(key: string, fallback: string): string {
@@ -73,6 +79,7 @@ export function loadConfig(): Config {
       timeoutMs: Number(env("MAILSENSE_AI_TIMEOUT_MS", "120000"))
     },
     defaultAccount,
-    seedAccount: env("MAILSENSE_SEED_ACCOUNT", "false") === "true"
+    seedAccount: env("MAILSENSE_SEED_ACCOUNT", "false") === "true",
+    docflowServerUrl: env("MAILSENSE_DOCFLOW_URL", "").trim().replace(/\/+$/, "") || null
   };
 }

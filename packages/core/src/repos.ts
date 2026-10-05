@@ -195,13 +195,23 @@ function mapEmail(row: typeof emails.$inferSelect): Email {
  * Есть ли письмо с таким Message-ID. Надгробия удалённых писем учитываются,
  * когда includeDeleted=false (авто-скан не воскрешает удалённое). Ручной скан
  * (`includeDeleted=true`) игнорирует их, чтобы письмо можно было скачать заново.
+ *
+ * ⚠️ **`accountId` обязателен при сканировании ящика.** Без него проверка идёт по всей
+ * базе, и тогда копия письма в «Отправленных» отправителя «отменяет» то же письмо
+ * в ящике получателя: скан считает его дубликатом и не сохраняет. Из-за этого письма,
+ * отправленные системой (поручения, письма руководителю), не появлялись у адресатов.
+ * Параметр необязателен только ради обратной совместимости вызовов без ящика.
  */
-export function emailExistsByMessageId(messageId: string, includeDeleted = false): boolean {
+export function emailExistsByMessageId(messageId: string, includeDeleted = false, accountId?: string): boolean {
   if (!messageId) return false;
   const db = getDb();
-  if (db.select({ id: emails.id }).from(emails).where(eq(emails.messageId, messageId)).get()) return true;
+  const byMessageId = eq(emails.messageId, messageId);
+  const inAccount = accountId ? and(byMessageId, eq(emails.accountId, accountId)) : byMessageId;
+  if (db.select({ id: emails.id }).from(emails).where(inAccount).get()) return true;
   if (includeDeleted) return false;
-  return !!db.select({ id: deletedEmails.id }).from(deletedEmails).where(eq(deletedEmails.messageId, messageId)).get();
+  const tombstone = eq(deletedEmails.messageId, messageId);
+  const tombstoneInAccount = accountId ? and(tombstone, eq(deletedEmails.accountId, accountId)) : tombstone;
+  return !!db.select({ id: deletedEmails.id }).from(deletedEmails).where(tombstoneInAccount).get();
 }
 
 /**
@@ -1028,25 +1038,21 @@ export function upsertContacts(list: DirectoryContact[]): void {
   });
 }
 
-/** Поиск по кэшу каталога: имя/почта/логин/отдел. */
+/**
+ * Поиск по кэшу каталога: имя/почта/логин/отдел.
+ *
+ * Сравнение идёт в JS, а не через SQL lower(): SQLite понимает только ASCII,
+ * поэтому «иван» не находил «Иванов» — русские имена в адресной книге не искались.
+ * Кэш каталога невелик (тысячи записей), так что фильтрация в памяти допустима.
+ */
 export function searchContactsCache(q: string, limit = 25): DirectoryContact[] {
-  const needle = "%" + (q ?? "").trim().toLowerCase() + "%";
-  return getDb()
-    .select()
-    .from(contacts)
-    .where(
-      q
-        ? or(
-            sql`lower(${contacts.displayName}) LIKE ${needle}`,
-            sql`lower(${contacts.mail}) LIKE ${needle}`,
-            sql`lower(${contacts.login}) LIKE ${needle}`,
-            sql`lower(${contacts.department}) LIKE ${needle}`
-          )
-        : sql`1=1`
-    )
-    .limit(limit)
-    .all()
-    .map(mapContact);
+  const needle = (q ?? "").trim().toLowerCase();
+  const rows = getDb().select().from(contacts).all().map(mapContact);
+  if (!needle) return rows.slice(0, limit);
+  const has = (v: string | null | undefined): boolean => (v ?? "").toLowerCase().includes(needle);
+  return rows
+    .filter((c) => has(c.displayName) || has(c.mail) || has(c.login) || has(c.department))
+    .slice(0, limit);
 }
 
 export function listContacts(limit = 500): DirectoryContact[] {

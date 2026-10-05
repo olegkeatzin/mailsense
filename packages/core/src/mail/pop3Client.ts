@@ -119,12 +119,20 @@ export class Pop3Client {
   }
 
   async quit(): Promise<void> {
+    const sock = this.socket;
+    if (!sock) return;
     try {
       await this.send("QUIT");
+      // Даём серверу ответить и закрыться штатно. destroy() рвёт соединение:
+      // на той стороне это выглядит как ECONNRESET, а не как нормальное завершение.
+      await Promise.race([
+        this.readLine().catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 500))
+      ]);
     } catch {
-      /* ignore */
+      /* соединение могло закрыться раньше */
     }
-    this.socket?.destroy();
+    sock.end();
     this.socket = null;
   }
 

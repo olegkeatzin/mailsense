@@ -211,6 +211,23 @@ export interface LdapSettings {
   rejectUnauthorized?: boolean;
 }
 
+/**
+ * Профиль сотрудника из каталога. Часть каталога, а не документооборота:
+ * каталог — общая инфраструктура (адресная книга почты и вход в серверную часть).
+ */
+export interface LdapProfile {
+  dn: string;
+  ldapUid: string;
+  email: string;
+  fullName: string;
+  department: string;
+  position: string;
+  phone: string;
+  managerDn: string | null;
+  /** Профиль найден, но учётка в каталоге отключена (userAccountControl & 2). */
+  disabled: boolean;
+}
+
 /** Контакт каталога (для автокомплита адресов). */
 export interface DirectoryContact {
   dn: string;

@@ -32,6 +32,20 @@ export async function pdfToText(data: Buffer, maxPages = 20): Promise<string> {
   return parts.join("\n\n");
 }
 
+/**
+ * Число страниц в PDF. Нужно для графы «количество листов» в журнале:
+ * рендерить страницы ради этого не требуется, достаточно открыть документ.
+ */
+export async function pdfPageCount(data: Buffer): Promise<number> {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjs.getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise;
+  try {
+    return doc.numPages;
+  } finally {
+    await doc.destroy();
+  }
+}
+
 export async function pdfToImages(data: Buffer, maxPages = 6, scale = 1.5): Promise<PdfRenderResult> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const doc = await pdfjs.getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise;

@@ -56,7 +56,9 @@ export const DEFAULT_USER_TEMPLATE = [
 ].join("\n");
 
 function renderTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{\{(\w+)\}\}/g, (_, k) => vars[k] ?? "");
+  // \p{L} вместо \w: иначе переменная с кириллическим именем не распознаётся
+  // и её плейсхолдер уходит в промпт как есть.
+  return template.replace(/\{\{([\p{L}\p{N}_]+)\}\}/gu, (_, k: string) => vars[k] ?? "");
 }
 
 export interface PromptOptions {

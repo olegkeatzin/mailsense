@@ -8,11 +8,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./directory": {
+      "types": "./dist/directory/index.d.ts",
+      "import": "./dist/directory/index.js"
     }
   },
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --clean --sourcemap",
-    "test": "jest"
+    "build": "tsup src/index.ts src/directory/index.ts --format esm --dts --clean --sourcemap",
+    "test": "jest --runInBand --forceExit"
   },
   "dependencies": {
     "@kenjiuno/msgreader": "^1.28.0",

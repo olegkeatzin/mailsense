@@ -231,11 +231,29 @@ CREATE TABLE IF NOT EXISTS contacts (
 CREATE INDEX IF NOT EXISTS contacts_mail_idx ON contacts(mail);
 CREATE INDEX IF NOT EXISTS contacts_name_idx ON contacts(display_name);
 `
+  },
+  {
+    // ⚠️ Номер 11 занят исторической миграцией `edms_users_roles_sessions_audit`
+    // (следы первой реализации СЭД в SQLite). Нумерация сквозная: занять чужой номер
+    // нельзя — миграция молча пропускается как «уже применённая».
+    version: 12,
+    name: "emails_unique_per_account",
+    sql: `
+-- Message-ID был уникален ГЛОБАЛЬНО, и это ломало доставку: копия письма в «Отправленных»
+-- отправителя не давала сохранить то же письмо в ящике получателя. Скан считал его
+-- дубликатом, и письма, отправленные системой (поручения, письма руководителю),
+-- до адресатов не доходили — хотя почтовый сервер их доставлял.
+-- Теперь Message-ID уникален В ПРЕДЕЛАХ ЯЩИКА: это разные записи разных ящиков.
+DROP INDEX IF EXISTS emails_message_id_idx;
+CREATE UNIQUE INDEX IF NOT EXISTS emails_account_message_id_idx ON emails(account_id, message_id);
+`
   }
 ];
 
 export function runMigrations(db: Database.Database): void {
-  db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)");
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)"
+  );
   const applied = new Set<number>(
     db.prepare("SELECT version FROM schema_migrations").all().map((r) => (r as { version: number }).version)
   );
