@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
 import { getDb } from "./db/index.js";
 import { schema } from "./db/schema.js";
 import { normalizeMessageId } from "./mail/parser.js";
@@ -344,30 +344,71 @@ export interface EmailListFilter {
   sortDir?: "asc" | "desc";
 }
 
+/**
+ * Условия, которые можно считать в SQL. Вынесены отдельно, потому что тот же
+ * набор нужен и «ленте переписки» (listEmailsWithAnalysisByThreadIds).
+ *
+ * ⚠️ Фильтры по тексту (tag, q, from, to, externalNumber) сюда НЕ переносятся:
+ * SQLite складывает регистр только по ASCII, поэтому «иван» перестал бы находить
+ * «Иванов» и «договор» — «Договор». Это уже стоило одного бага в каталоге
+ * (см. searchContactsCache).
+ */
+function emailListConditions(filter: EmailListFilter) {
+  const conditions = [];
+  if (filter.accountId) conditions.push(eq(emails.accountId, filter.accountId));
+  if (filter.folder) conditions.push(eq(emails.folder, filter.folder));
+  if (filter.status) conditions.push(eq(emails.analysisStatus, filter.status));
+  if (filter.categories && filter.categories.length > 0) {
+    conditions.push(inArray(analysisResults.category, filter.categories));
+  }
+  if (filter.minPriority) conditions.push(gte(analysisResults.priority, filter.minPriority));
+  if (filter.hasEvent) conditions.push(isNotNull(analysisResults.eventDate));
+  // Даты — обычные ISO-строки, поэтому сравнение в SQL совпадает с прежним
+  // сравнением в JS. Без даты письмо не проходит только нижнюю границу —
+  // как и раньше: пустая строка меньше любой даты.
+  if (filter.dateFrom) {
+    conditions.push(sql`substr(coalesce(${emails.date}, ''), 1, 10) >= ${filter.dateFrom}`);
+  }
+  if (filter.dateTo) {
+    conditions.push(sql`substr(coalesce(${emails.date}, ''), 1, 10) <= ${filter.dateTo}`);
+  }
+  if (filter.sendDateFrom) {
+    conditions.push(sql`coalesce(${emails.sendDate}, '') >= ${filter.sendDateFrom}`);
+  }
+  if (filter.sendDateTo) {
+    conditions.push(sql`coalesce(${emails.sendDate}, '') <= ${filter.sendDateTo}`);
+  }
+  return conditions;
+}
+
+/**
+ * Письма вместе с результатом анализа.
+ *
+ * ⚠️ Раньше на каждое письмо делался отдельный запрос за анализом (N+1): ящик
+ * на 500 писем — 501 запрос на каждое открытие списка. Теперь это один JOIN;
+ * число запросов не зависит от размера ящика.
+ */
 export function listEmailsWithAnalysis(filter: EmailListFilter = {}): EmailListItem[] {
-  let items = listEmails({ accountId: filter.accountId, folder: filter.folder }).map((e) => ({
-    ...e,
-    analysis: getAnalysis(e.id)
+  const conditions = emailListConditions(filter);
+  const rows = getDb()
+    .select({ email: emails, analysis: analysisResults })
+    .from(emails)
+    .leftJoin(analysisResults, eq(analysisResults.emailId, emails.id))
+    .where(conditions.length ? and(...conditions) : undefined)
+    .orderBy(desc(emails.date))
+    .all();
+
+  // id анализа пуст, если JOIN не нашёл строку: у письма ещё нет результата.
+  let items: EmailListItem[] = rows.map((r) => ({
+    ...mapEmail(r.email),
+    analysis: r.analysis && r.analysis.id ? mapAnalysis(r.analysis) : null
   }));
 
-  if (filter.categories && filter.categories.length > 0) {
-    const set = new Set(filter.categories);
-    items = items.filter((e) => (e.analysis?.category ? set.has(e.analysis.category) : false));
-  }
-  if (filter.minPriority) {
-    items = items.filter((e) => (e.analysis?.priority ?? 0) >= (filter.minPriority ?? 0));
-  }
   if (filter.tag) {
     const t = filter.tag.toLowerCase();
     items = items.filter((e) =>
       (e.analysis?.tags ?? []).some((x) => x.toLowerCase().includes(t))
     );
-  }
-  if (filter.hasEvent) {
-    items = items.filter((e) => !!e.analysis?.eventDate);
-  }
-  if (filter.status) {
-    items = items.filter((e) => e.analysisStatus === filter.status);
   }
   if (filter.q) {
     const q = filter.q.toLowerCase();
@@ -404,19 +445,6 @@ export function listEmailsWithAnalysis(filter: EmailListFilter = {}): EmailListI
     const ns = filter.externalNumber.map((n) => n.toLowerCase());
     items = items.filter((e) => ns.some((n) => (e.externalNumber ?? "").toLowerCase().includes(n)));
   }
-  if (filter.dateFrom) {
-    items = items.filter((e) => (e.date?.slice(0, 10) ?? "") >= filter.dateFrom!);
-  }
-  if (filter.dateTo) {
-    items = items.filter((e) => (e.date?.slice(0, 10) ?? "") <= filter.dateTo!);
-  }
-  if (filter.sendDateFrom) {
-    items = items.filter((e) => (e.sendDate ?? "") >= filter.sendDateFrom!);
-  }
-  if (filter.sendDateTo) {
-    items = items.filter((e) => (e.sendDate ?? "") <= filter.sendDateTo!);
-  }
-
   const dir = filter.sortDir === "asc" ? 1 : -1;
   items.sort((a, b) => {
     if (filter.sortBy === "priority") {
@@ -430,17 +458,23 @@ export function listEmailsWithAnalysis(filter: EmailListFilter = {}): EmailListI
   return items;
 }
 
-/** Все письма указанных бесед, без учёта папки — для сквозной ленты переписки. */
+/**
+ * Все письма указанных бесед, без учёта папки — для сквозной ленты переписки.
+ * Анализ подтягивается тем же JOIN: иначе лента переписки снова давала N+1.
+ */
 export function listEmailsWithAnalysisByThreadIds(threadIds: string[]): EmailListItem[] {
   if (!threadIds.length) return [];
   return getDb()
-    .select()
+    .select({ email: emails, analysis: analysisResults })
     .from(emails)
+    .leftJoin(analysisResults, eq(analysisResults.emailId, emails.id))
     .where(inArray(emails.threadId, threadIds))
+    .orderBy(emails.date)
     .all()
-    .map(mapEmail)
-    .map((e) => ({ ...e, analysis: getAnalysis(e.id) }))
-    .sort((a, b) => (a.date ?? "").localeCompare(b.date ?? ""));
+    .map((r) => ({
+      ...mapEmail(r.email),
+      analysis: r.analysis && r.analysis.id ? mapAnalysis(r.analysis) : null
+    }));
 }
 
 export function setEmailStatus(id: string, status: AnalysisStatus): void {
@@ -476,27 +510,37 @@ export function setEmailsFolder(ids: string[], folder: string): void {
   getDb().update(emails).set({ folder, updatedAt: now() }).where(inArray(emails.id, ids)).run();
 }
 
+/**
+ * Удаляет письма: надгробия, анализ, вложения и сами письма — одним изменением.
+ *
+ * ⚠️ Раньше это были четыре независимых действия без транзакции. Сбой между ними
+ * (например, на удалении вложений) оставлял половинчатое состояние: надгробие уже
+ * записано, анализ удалён, а письмо осталось — при этом авто-скан считает его
+ * удалённым и больше никогда не скачает, а в интерфейсе оно висит без анализа.
+ */
 export function deleteEmails(ids: string[]): number {
   if (ids.length === 0) return 0;
   const db = getDb();
-  const rows = db.select().from(emails).where(inArray(emails.id, ids)).all();
-  const ts = now();
-  for (const r of rows) {
-    db.insert(deletedEmails)
-      .values({
-        id: randomUUID(),
-        accountId: r.accountId,
-        folder: r.folder,
-        uid: r.uid,
-        messageId: r.messageId,
-        deletedAt: ts
-      })
-      .onConflictDoNothing()
-      .run();
-  }
-  db.delete(analysisResults).where(inArray(analysisResults.emailId, ids)).run();
-  db.delete(attachments).where(inArray(attachments.emailId, ids)).run();
-  return db.delete(emails).where(inArray(emails.id, ids)).run().changes;
+  return db.transaction((tx) => {
+    const rows = tx.select().from(emails).where(inArray(emails.id, ids)).all();
+    const ts = now();
+    for (const r of rows) {
+      tx.insert(deletedEmails)
+        .values({
+          id: randomUUID(),
+          accountId: r.accountId,
+          folder: r.folder,
+          uid: r.uid,
+          messageId: r.messageId,
+          deletedAt: ts
+        })
+        .onConflictDoNothing()
+        .run();
+    }
+    tx.delete(analysisResults).where(inArray(analysisResults.emailId, ids)).run();
+    tx.delete(attachments).where(inArray(attachments.emailId, ids)).run();
+    return tx.delete(emails).where(inArray(emails.id, ids)).run().changes;
+  });
 }
 
 // ---------------- Attachments ----------------

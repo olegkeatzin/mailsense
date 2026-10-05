@@ -1,14 +1,21 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { initDb, closeDb } from "./db/index.js";
+import { eq, sql } from "drizzle-orm";
+import { initDb, closeDb, getDb } from "./db/index.js";
+import { deletedEmails } from "./db/schema.js";
 import {
   clearDeletedEmail,
   deleteEmails,
   emailExistsByMessageId,
+  getAnalysis,
+  getEmail,
   insertAccount,
+  insertAttachment,
   insertEmail,
-  knownUidsForAccount
+  knownUidsForAccount,
+  listAttachments,
+  upsertAnalysis
 } from "./repos.js";
 
 let accountId = "";
@@ -79,6 +86,80 @@ describe("надгробия удалённых писем", () => {
     expect(knownUidsForAccount(accountId, "INBOX").has("uid-2")).toBe(false);
     expect(knownUidsForAccount(accountId, "INBOX", true).has("uid-2")).toBe(false);
     expect(emailExistsByMessageId("msg-2@test")).toBe(false);
+  });
+});
+
+describe("атомарность удаления", () => {
+  /** Надгробий у письма: 0 — удаление не состоялось. */
+  function tombstonesFor(messageId: string): number {
+    return getDb().select().from(deletedEmails).where(eq(deletedEmails.messageId, messageId)).all().length;
+  }
+
+  function emailWithAnalysisAndAttachment(uid: string, messageId: string) {
+    const email = addEmail(uid, messageId);
+    upsertAnalysis({
+      emailId: email.id,
+      summary: "кратко",
+      tags: ["акт"],
+      priority: 3,
+      urgent: false,
+      eventDate: null,
+      category: "personal",
+      rawResponse: "{}",
+      modelUsed: "test"
+    });
+    insertAttachment({
+      emailId: email.id,
+      filename: "akt.pdf",
+      mimeType: "application/pdf",
+      size: 10,
+      storagePath: null,
+      extractedText: null,
+      contentId: null,
+      kind: "pdf",
+      handled: true
+    });
+    return email;
+  }
+
+  test("успешное удаление убирает письмо, анализ и вложения, оставляя надгробие", () => {
+    const email = emailWithAnalysisAndAttachment("uid-full", "msg-full@test");
+    expect(deleteEmails([email.id])).toBe(1);
+
+    expect(getEmail(email.id)).toBeNull();
+    expect(getAnalysis(email.id)).toBeNull();
+    expect(listAttachments(email.id)).toEqual([]);
+    expect(tombstonesFor("msg-full@test")).toBe(1);
+  });
+
+  test("сбой на середине удаления откатывает всё, а не оставляет половинчатое состояние", () => {
+    const email = emailWithAnalysisAndAttachment("uid-atomic", "msg-atomic@test");
+
+    // Имитируем сбой хранилища ровно на шаге удаления вложений: без транзакции
+    // надгробие и удалённый анализ остались бы, а письмо — нет.
+    getDb().run(
+      sql.raw(
+        "CREATE TRIGGER fail_attachments_delete BEFORE DELETE ON attachments" +
+          " WHEN OLD.email_id = '" + email.id + "'" +
+          " BEGIN SELECT RAISE(ABORT, 'диск недоступен'); END"
+      )
+    );
+    try {
+      expect(() => deleteEmails([email.id])).toThrow();
+
+      // Письмо цело вместе с анализом и вложениями: частичного удаления нет.
+      expect(getEmail(email.id)).not.toBeNull();
+      expect(getAnalysis(email.id)).not.toBeNull();
+      expect(listAttachments(email.id)).toHaveLength(1);
+      // И надгробия нет — иначе авто-скан навсегда пропустил бы это письмо.
+      expect(tombstonesFor("msg-atomic@test")).toBe(0);
+    } finally {
+      getDb().run(sql.raw("DROP TRIGGER IF EXISTS fail_attachments_delete"));
+    }
+
+    // После снятия сбоя удаление проходит целиком.
+    expect(deleteEmails([email.id])).toBe(1);
+    expect(tombstonesFor("msg-atomic@test")).toBe(1);
   });
 });
 

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -22,10 +23,20 @@ jest.mock("./analysisService.js", () => ({
   enqueue: (...args: unknown[]) => mockEnqueue(...args)
 }));
 
+// pdfjs-dist — ESM и в jest не грузится: разбор PDF подменяем, как в
+// attachments/index.test.ts. Вложение при этом проходит весь остальной путь.
+jest.mock("../attachments/pdf.js", () => ({
+  __esModule: true,
+  pdfToImages: async () => ({ pages: [], totalPages: 0, truncated: false }),
+  pdfToText: async () => "",
+  pdfPageToImage: async () => null
+}));
+
 import { initApp } from "../init.js";
 import { closeDb } from "../db/index.js";
 import { eq } from "drizzle-orm";
-import { deleteEmails, getAccount, listAccounts, listEmails, setSetting } from "../repos.js";
+import { deleteEmails, getAccount, listAccounts, listAttachments, listEmails, setSetting } from "../repos.js";
+import { Pop3Connector } from "../mail/pop3Connector.js";
 import { getDb } from "../db/index.js";
 import { emails } from "../db/schema.js";
 import { normalizeMessageId } from "../mail/parser.js";
@@ -88,6 +99,7 @@ interface FakeOptions {
   messages?: RawMessage[];
   mailboxes?: Array<{ path: string; name: string; specialUse?: string }>;
   fetchError?: Error;
+  disconnectError?: Error;
 }
 
 function fakeConnector(opts: FakeOptions = {}) {
@@ -100,6 +112,7 @@ function fakeConnector(opts: FakeOptions = {}) {
     }),
     disconnect: jest.fn(async () => {
       calls.push("disconnect");
+      if (opts.disconnectError) throw opts.disconnectError;
     }),
     listMailboxes: jest.fn(async () => opts.mailboxes ?? []),
     fetchNew: jest.fn(async () => {
@@ -188,6 +201,74 @@ describe("получение писем из ящика", () => {
     mockBuildConnector.mockReturnValue(connector);
     await expect(fetchEmails(accountId)).rejects.toThrow("сеть упала");
     expect(calls).toContain("disconnect");
+  });
+
+  test("ошибка отключения не подменяет причину сбоя скана", async () => {
+    // Иначе в журнале и в интерфейсе видно «не удалось закрыть соединение»
+    // вместо настоящей причины — диагностика врёт.
+    const { connector, calls } = fakeConnector({
+      fetchError: new Error("сеть упала"),
+      disconnectError: new Error("сокет уже закрыт")
+    });
+    mockBuildConnector.mockReturnValue(connector);
+
+    await expect(fetchEmails(accountId)).rejects.toThrow("сеть упала");
+    expect(calls).toContain("disconnect");
+  });
+
+  test("ошибка отключения не превращает удачный скан в сбой", async () => {
+    // Письма уже сохранены — терять результат из-за неудачного QUIT нельзя.
+    const { connector } = fakeConnector({ messages: [], disconnectError: new Error("нет связи") });
+    mockBuildConnector.mockReturnValue(connector);
+    await expect(fetchEmails(accountId)).resolves.toEqual({ added: 0, skipped: 0 });
+  });
+});
+
+/** «Замолчавший» POP3-сервер: соединение принимается, ответа нет. */
+function silentServer(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<net.Socket>();
+  const srv = net.createServer((s) => {
+    sockets.add(s);
+    s.on("close", () => sockets.delete(s));
+    s.on("error", () => undefined);
+    // Ни одного байта в ответ — именно так выглядит зависший POP3-сервер.
+  });
+  return new Promise((resolve) => {
+    srv.listen(0, "127.0.0.1", () => {
+      resolve({
+        port: (srv.address() as net.AddressInfo).port,
+        close: () =>
+          new Promise<void>((r) => {
+            for (const s of sockets) s.destroy();
+            sockets.clear();
+            srv.close(() => r());
+          })
+      });
+    });
+  });
+}
+
+describe("зависший POP3-сервер", () => {
+  test("молчащий сервер завершает скан ошибкой, аккаунт не залипает", async () => {
+    const srv = await silentServer();
+    // Настоящий коннектор и настоящий сокет: проверяем всю цепочку до сервиса.
+    const account = {
+      ...getAccount(accountId)!,
+      protocol: "pop3" as const,
+      host: "127.0.0.1",
+      port: srv.port,
+      tls: "none" as const,
+      settings: { timeoutMs: 200 }
+    };
+    mockBuildConnector.mockReturnValue(new Pop3Connector(account, "secret"));
+    try {
+      await expect(fetchEmails(accountId)).rejects.toThrow(/не отвечает/);
+      // Главное: аккаунт не остался «в процессе». Иначе кнопка «Скан» и
+      // планировщик молчат до перезапуска приложения.
+      expect(isFetching(accountId)).toBe(false);
+    } finally {
+      await srv.close();
+    }
   });
 });
 
@@ -291,6 +372,109 @@ describe("автоанализ", () => {
     mockBuildConnector.mockReturnValue(connector);
     await fetchEmails(accountId);
     expect(mockEnqueue).not.toHaveBeenCalled();
+  });
+});
+
+/** Письмо с двумя вложениями, у которых ОДИНАКОВОЕ имя файла. */
+function emailWithTwoSameNamedAttachments(): Buffer {
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+  return Buffer.from(
+    [
+      "From: sender@test.local",
+      "To: receiver@test.local",
+      "Subject: Два акта",
+      "Date: Wed, 15 Jan 2026 10:00:00 +0300",
+      "Message-ID: <two-acts@test.local>",
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/mixed; boundary="BOUND"',
+      "",
+      "--BOUND",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Во вложении два акта.",
+      "--BOUND",
+      'Content-Type: application/pdf; name="акт.pdf"',
+      "Content-Transfer-Encoding: base64",
+      'Content-Disposition: attachment; filename="акт.pdf"',
+      "",
+      b64("первый акт"),
+      "--BOUND",
+      'Content-Type: application/pdf; name="акт.pdf"',
+      "Content-Transfer-Encoding: base64",
+      'Content-Disposition: attachment; filename="акт.pdf"',
+      "",
+      b64("второй акт"),
+      "--BOUND--",
+      ""
+    ].join("\r\n"),
+    "utf8"
+  );
+}
+
+describe("вложения с одинаковым именем", () => {
+  test("два «акт.pdf» в одном письме — два файла, оба читаются", async () => {
+    const res = await importEmails(accountId, "Imported", [
+      { filename: "two-acts.eml", data: emailWithTwoSameNamedAttachments() }
+    ]);
+    expect(res.added).toBe(1);
+
+    const email = listEmails({ accountId, folder: "Imported" }).find((e) => e.subject === "Два акта")!;
+    const atts = listAttachments(email.id);
+    expect(atts).toHaveLength(2);
+    expect(atts.map((a) => a.filename)).toEqual(["акт.pdf", "акт.pdf"]);
+
+    // Раньше путь был один и тот же: второе вложение затирало первое, и в
+    // списке было два файла, а открывался один.
+    expect(atts[0].storagePath).not.toBe(atts[1].storagePath);
+    expect(fs.readFileSync(atts[0].storagePath!, "utf8")).toBe("первый акт");
+    expect(fs.readFileSync(atts[1].storagePath!, "utf8")).toBe("второй акт");
+  });
+});
+
+/** Письмо с вложением, названным как устройство Windows. */
+function emailWithDeviceNamedAttachment(): Buffer {
+  return Buffer.from(
+    [
+      "From: sender@test.local",
+      "To: receiver@test.local",
+      "Subject: Устройство",
+      "Date: Wed, 15 Jan 2026 10:00:00 +0300",
+      "Message-ID: <device-name@test.local>",
+      "MIME-Version: 1.0",
+      'Content-Type: multipart/mixed; boundary="BOUND"',
+      "",
+      "--BOUND",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "Во вложении файл с именем устройства.",
+      "--BOUND",
+      'Content-Type: application/octet-stream; name="CON"',
+      "Content-Transfer-Encoding: base64",
+      'Content-Disposition: attachment; filename="CON"',
+      "",
+      Buffer.from("данные", "utf8").toString("base64"),
+      "--BOUND--",
+      ""
+    ].join("\r\n"),
+    "utf8"
+  );
+}
+
+describe("имена-устройства Windows", () => {
+  test("вложение «CON» сохраняется, письмо не теряется", async () => {
+    const res = await importEmails(accountId, "Imported", [
+      { filename: "con.eml", data: emailWithDeviceNamedAttachment() }
+    ]);
+    // Раньше падение на имени вложения уносило письмо целиком.
+    expect(res.added).toBe(1);
+
+    const email = listEmails({ accountId, folder: "Imported" }).find((e) => e.subject === "Устройство")!;
+    expect(email).toBeTruthy();
+    const atts = listAttachments(email.id);
+    expect(atts).toHaveLength(1);
+    // В интерфейсе имя исходное, на диске — безопасное.
+    expect(atts[0].filename).toBe("CON");
+    expect(fs.readFileSync(atts[0].storagePath!, "utf8")).toBe("данные");
   });
 });
 

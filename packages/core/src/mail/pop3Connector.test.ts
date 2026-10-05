@@ -70,6 +70,20 @@ describe("подключение", () => {
     expect(mockConstructor).toHaveBeenCalledWith(expect.objectContaining({ rejectUnauthorized: true }));
   });
 
+  test("таймаут чтения берётся из настроек аккаунта", async () => {
+    // Без этого «замолчавший» сервер держит скан 30 секунд по умолчанию, и
+    // настройку нельзя ни ускорить, ни задать под конкретный сервер.
+    await new Pop3Connector(account({ settings: { timeoutMs: 1234 } }), "пароль").connect();
+    expect(mockConstructor).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1234 }));
+  });
+
+  test("некорректный таймаут игнорируется, клиент берёт свой", async () => {
+    await new Pop3Connector(account({ settings: { timeoutMs: -5 } }), "пароль").connect();
+    expect(mockConstructor.mock.calls[0][0].timeoutMs).toBeUndefined();
+    await new Pop3Connector(account({ settings: { timeoutMs: "30s" } }), "пароль").connect();
+    expect(mockConstructor.mock.calls[1][0].timeoutMs).toBeUndefined();
+  });
+
   test("сначала подключение, потом вход", async () => {
     const order: string[] = [];
     mockConnect.mockImplementation(async () => void order.push("connect"));

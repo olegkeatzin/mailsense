@@ -6,6 +6,9 @@ import { logger } from "../logger.js";
 /** Размер пачки UID в одном FETCH (страховка от слишком длинной строки команды). */
 const UID_BATCH_SIZE = 500;
 
+/** Размер окна при выгрузке всего ящика (когда серверный поиск не удался). */
+const FALLBACK_WINDOW_SIZE = 500;
+
 export class ImapConnector implements MailConnector {
   private client: ImapFlow | null = null;
 
@@ -80,11 +83,30 @@ export class ImapConnector implements MailConnector {
         return out;
       }
       // Серверный поиск не удался — выгружаем весь ящик и фильтруем на клиенте.
-      for await (const msg of this.client.fetch("1:*", { source: true, uid: true })) {
-        const uid = String(msg.uid);
-        if (knownUids.has(uid)) continue;
-        if (!msg.source) continue;
-        out.push({ uid, source: msg.source });
+      // ⚠️ Окнами: «1:*» на большом ящике — это один ответ, который целиком
+      // оседает в памяти (и тянет тела уже известных писем). Размер ящика
+      // известен после выбора папки, поэтому идём окнами до его конца.
+      const box = this.client.mailbox;
+      const total: number | null =
+        box && typeof box === "object" && typeof box.exists === "number" ? box.exists : null;
+      if (total === 0) return out;
+
+      let start = 1;
+      for (;;) {
+        const end = total === null ? null : Math.min(start + FALLBACK_WINDOW_SIZE - 1, total);
+        let seen = 0;
+        for await (const msg of this.client.fetch(end === null ? "1:*" : `${start}:${end}`, {
+          source: true,
+          uid: true
+        })) {
+          seen++;
+          const uid = String(msg.uid);
+          if (knownUids.has(uid)) continue;
+          if (!msg.source) continue;
+          out.push({ uid, source: msg.source });
+        }
+        if (end === null || total === null || seen === 0 || end >= total) break;
+        start = end + 1;
       }
     } finally {
       lock.release();

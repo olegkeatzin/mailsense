@@ -28,6 +28,8 @@ export class Pop3Client {
   private buf = "";
   private waiters: Array<() => void> = [];
   private closed = false;
+  /** Причина аварии (таймаут/ошибка сокета): её видит ожидающий readLine(). */
+  private failure: Error | null = null;
 
   constructor(private opts: Pop3ClientOptions) {}
 
@@ -39,18 +41,7 @@ export class Pop3Client {
         : net.connect({ host, port });
 
     this.socket = raw;
-    raw.setTimeout(this.opts.timeoutMs ?? 30000);
-    raw.on("data", (chunk: Buffer) => {
-      this.buf += chunk.toString("latin1");
-      this.notify();
-    });
-    raw.on("error", () => {
-      this.closed = true;
-    });
-    raw.on("close", () => {
-      this.closed = true;
-      this.notify();
-    });
+    this.watch(raw);
 
     await this.waitConnect(raw);
     const greeting = await this.readLine();
@@ -61,16 +52,20 @@ export class Pop3Client {
       const line = await this.readLine();
       if (!line.startsWith("+OK")) throw new Error("POP3 STLS: " + line);
       this.buf = "";
+      // С этого момента за тишину отвечает TLS-сокет. Таймер raw-сокета
+      // выключаем: иначе он мог бы разорвать живой TLS-сеанс по своему счёту.
+      raw.setTimeout(0);
       const tlsSocket = tls.connect({
         socket: raw,
         rejectUnauthorized,
-        servername: host
+        // ⚠️ servername с IP-адресом Node отвергает (ERR_INVALID_ARG_VALUE:
+        // «Setting the TLS ServerName to an IP address is not permitted»), из-за чего
+        // STARTTLS по IP не работал вообще ни у кого. SNI нужен только имени хоста —
+        // без него не проверить сертификат по имени.
+        ...(net.isIP(host) ? {} : { servername: host })
       });
       this.socket = tlsSocket;
-      tlsSocket.on("data", (chunk: Buffer) => {
-        this.buf += chunk.toString("latin1");
-        this.notify();
-      });
+      this.watch(tlsSocket);
       await this.waitConnect(tlsSocket);
     }
   }
@@ -78,6 +73,45 @@ export class Pop3Client {
   private notify(): void {
     const w = this.waiters.splice(0);
     for (const fn of w) fn();
+  }
+
+  /**
+   * Навешивает обработчики сокета. Отдельно от connect(), потому что после STLS
+   * работа идёт с другим сокетом — у него тоже должен быть таймаут.
+   */
+  private watch(sock: Socket): void {
+    // ⚠️ setTimeout БЕЗ обработчика 'timeout' — это зависание навсегда: сокет
+    // остаётся открытым, событие 'timeout' никем не слушается, readLine() ждёт
+    // строку бесконечно, а скан аккаунта навсегда остаётся «в процессе»
+    // (inFlightFetches в mailService не отпускает аккаунт до перезапуска).
+    sock.setTimeout(this.opts.timeoutMs ?? 30000, () => {
+      this.fail(
+        new Error(
+          `POP3: сервер ${this.opts.host}:${this.opts.port} не отвечает ${this.opts.timeoutMs ?? 30000} мс`
+        )
+      );
+    });
+    sock.on("data", (chunk: Buffer) => {
+      this.buf += chunk.toString("latin1");
+      this.notify();
+    });
+    sock.on("error", (err: Error) => {
+      // Причину запоминаем: иначе ожидающий readLine() видит только «соединение
+      // закрыто» и настоящая причина (ECONNRESET, EPIPE, таймаут) теряется.
+      this.fail(err);
+    });
+    sock.on("close", () => {
+      this.closed = true;
+      this.notify();
+    });
+  }
+
+  /** Аварийное завершение: запоминает причину, рвёт сокет и будит ожидающих. */
+  private fail(err: Error): void {
+    if (!this.failure) this.failure = err;
+    this.closed = true;
+    this.socket?.destroy();
+    this.notify();
   }
 
   private waitConnect(sock: Socket): Promise<void> {
@@ -151,6 +185,7 @@ export class Pop3Client {
         this.buf = this.buf.slice(idx + 2);
         return line;
       }
+      if (this.failure) throw this.failure;
       if (this.closed) throw new Error("POP3: соединение закрыто");
       await this.waitData();
     }

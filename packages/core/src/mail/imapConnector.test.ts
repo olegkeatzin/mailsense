@@ -10,6 +10,8 @@ interface FetchQuery {
 class FakeClient {
   public searches: Array<Record<string, unknown>> = [];
   public fetchedRanges: string[] = [];
+  /** Размер ящика, как его сообщает ImapFlow сразу после выбора папки. */
+  public mailbox: { exists: number } | false = false;
 
   constructor(
     private allUids: number[],
@@ -28,12 +30,24 @@ class FakeClient {
 
   fetch(range: string, _query: FetchQuery): AsyncGenerator<{ uid: number; source: Buffer }> {
     this.fetchedRanges.push(range);
-    const uids = range === "1:*" ? this.allUids : range.split(",").map((n) => Number(n));
+    const uids = this.rangeUids(range);
     return (async function* () {
       for (const uid of uids) {
         yield { uid, source: Buffer.from("Subject: test\r\n\r\nbody") };
       }
     })();
+  }
+
+  /** Диапазон — либо «1:*», либо номера сообщений (1-based), либо список UID. */
+  private rangeUids(range: string): number[] {
+    if (range === "1:*") return this.allUids;
+    const window = range.match(/^(\d+):(\d+)$/);
+    if (window) {
+      const from = Number(window[1]);
+      const to = Math.min(Number(window[2]), this.allUids.length);
+      return this.allUids.slice(from - 1, to);
+    }
+    return range.split(",").map((n) => Number(n));
   }
 }
 
@@ -103,5 +117,29 @@ describe("ImapConnector.fetchNew", () => {
 
     expect(fake.fetchedRanges).toEqual(["1:*"]);
     expect(messages.map((m) => m.uid)).toEqual(["2", "3"]);
+  });
+
+  test("фолбэк идёт окнами, когда сервер сообщил размер ящика", async () => {
+    const all = Array.from({ length: 1200 }, (_, i) => i + 1);
+    const fake = new FakeClient(all, true);
+    fake.mailbox = { exists: 1200 };
+    const conn = connectorWith(fake);
+
+    const messages = await conn.fetchNew("INBOX", new Set(["1"]));
+
+    // «1:*» на большом ящике — один гигантский ответ, который оседает в памяти
+    // целиком. Качаем окнами и останавливаемся на конце ящика.
+    expect(fake.fetchedRanges).toEqual(["1:500", "501:1000", "1001:1200"]);
+    expect(messages).toHaveLength(1199);
+    expect(messages[0].uid).toBe("2");
+  });
+
+  test("пустой ящик при сбое поиска не скачивается вовсе", async () => {
+    const fake = new FakeClient([], true);
+    fake.mailbox = { exists: 0 };
+    const conn = connectorWith(fake);
+
+    await expect(conn.fetchNew("INBOX", new Set())).resolves.toEqual([]);
+    expect(fake.fetchedRanges).toEqual([]);
   });
 });

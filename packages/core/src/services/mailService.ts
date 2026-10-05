@@ -213,7 +213,14 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
       }
     }
   } finally {
-    await connector.disconnect();
+    // ⚠️ Без catch ошибка закрытия соединения подменяла исходную ошибку скана:
+    // пользователь видел «не удалось закрыть соединение» вместо настоящей
+    // причины, а удачный скан (письма уже сохранены) падал из-за неудачного QUIT.
+    try {
+      await connector.disconnect();
+    } catch (err) {
+      logger.warn({ accountId, err: (err as Error).message }, "Не удалось закрыть соединение после скана");
+    }
   }
 
   // Отметка времени последней синхронизации: планировщик использует её,

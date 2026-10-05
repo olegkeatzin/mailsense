@@ -13,13 +13,21 @@ export class Pop3Connector implements MailConnector {
 
   async connect(): Promise<void> {
     const a = this.account;
+    // Таймаут чтения настраивается: по умолчанию 30 с (см. Pop3Client), но
+    // «замолчавший» сервер иначе держит скан полминуты на каждую команду.
+    const configuredTimeout = a.settings.timeoutMs;
+    const timeoutMs =
+      typeof configuredTimeout === "number" && Number.isFinite(configuredTimeout) && configuredTimeout > 0
+        ? configuredTimeout
+        : undefined;
     this.client = new Pop3Client({
       host: a.host,
       port: a.port,
       tls: a.tls,
       username: a.username,
       password: this.passwordDecrypted,
-      rejectUnauthorized: a.settings.rejectUnauthorized === true
+      rejectUnauthorized: a.settings.rejectUnauthorized === true,
+      timeoutMs
     });
     await this.client.connect();
     await this.client.login();

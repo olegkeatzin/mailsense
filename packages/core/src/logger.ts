@@ -22,7 +22,26 @@ export function setupFileLogging(dataDir: string): void {
   }
 }
 
-/** Ловит необработанные ошибки, чтобы они попадали в лог. */
+/**
+ * Завершает процесс после фатальной ошибки.
+ *
+ * pino пишет в файл асинхронно, поэтому мгновенный process.exit() потерял бы
+ * последнюю запись — а именно она нужна для разбора сбоя. Небольшая задержка
+ * даёт записи уйти; код возврата 1 видит супервизор (systemd/Electron).
+ */
+function exitAfterFatal(): void {
+  setTimeout(() => process.exit(1), 50);
+}
+
+/**
+ * Ловит необработанные ошибки, чтобы они попадали в лог.
+ *
+ * ⚠️ uncaughtException обязан завершать процесс: после необработанного
+ * исключения состояние неизвестно (битые соединения, полупустые транзакции,
+ * потерянные письма при скане), и «живой» сервер молча отвечает ошибками.
+ * unhandledRejection — другое дело: отклонённый промис фоновой задачи
+ * (планировщик, скан) не означает, что процесс в неопределённом состоянии.
+ */
 export function setupErrorHandlers(): void {
   process.on("uncaughtException", (err) => {
     try {
@@ -30,6 +49,7 @@ export function setupErrorHandlers(): void {
     } catch {
       /* ignore */
     }
+    exitAfterFatal();
   });
   process.on("unhandledRejection", (reason) => {
     try {
