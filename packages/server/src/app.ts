@@ -97,6 +97,16 @@ import { mountJournalRoutes } from "./journalRoutes.js";
 import { mountResolutionRoutes } from "./resolutionRoutes.js";
 import { createDocflowProxy } from "./proxy.js";
 
+/**
+ * Лимиты тела запроса. Тело читается в память целиком, поэтому общий предел жёсткий:
+ * 100mb на всех маршрутах означало, что один запрос кладёт процесс. Base64 раздувает
+ * вложение примерно на треть, поэтому у письма с вложениями и у импорта .eml — свои,
+ * более широкие пределы.
+ */
+export const BODY_LIMIT = "2mb";
+export const ATTACHMENT_BODY_LIMIT = "50mb";
+export const IMPORT_BODY_LIMIT = "100mb";
+
 function asyncHandler(
   fn: (req: express.Request, res: express.Response, next: express.NextFunction) => Promise<unknown>
 ) {
@@ -240,7 +250,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     app.use(createDocflowProxy({ baseUrl: options.docflowServerUrl! }));
   }
 
-  app.use(express.json({ limit: "100mb" }));
+  // Разбор тела: у импорта и у писем с вложениями — свои лимиты, остальное небольшое.
+  // body-parser помечает уже разобранный запрос, поэтому общий парсер их не трогает.
+  app.use("/api/import", express.json({ limit: IMPORT_BODY_LIMIT }));
+  app.use(["/api/emails/send", "/api/drafts"], express.json({ limit: ATTACHMENT_BODY_LIMIT }));
+  app.use(express.json({ limit: BODY_LIMIT }));
 
   // Пользователь сессии + обязательный вход (когда документооборот ведётся локально).
   app.use(attachUser);
@@ -715,7 +729,15 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
       } else {
         res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(att.filename));
       }
-      fs.createReadStream(att.storagePath).pipe(res);
+      const stream = fs.createReadStream(att.storagePath);
+      // Файл мог исчезнуть между existsSync и открытием: письмо удаляют, вложение
+      // чистят. Без обработчика ошибок это необработанное исключение — сервер падает.
+      stream.on("error", (err: Error) => {
+        logger.warn({ err: err.message, path: att.storagePath }, "Не удалось прочитать файл вложения");
+        if (res.headersSent) res.destroy();
+        else res.status(404).json({ error: "Файл не найден" });
+      });
+      stream.pipe(res);
     })
   );
 
@@ -990,8 +1012,21 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
         logger.warn({ err: err.message, status: err.status }, "Отказ API");
         return res.status(err.status).json({ error: err.message, code: err.code });
       }
-      logger.error({ err: err.message }, "Ошибка API");
-      res.status(500).json({ error: err.message });
+      // Отказы разбора тела (слишком большой запрос, битый JSON) приходят от body-parser
+      // со своим статусом: это ошибка клиента, а не сбой сервера.
+      const httpStatus =
+        (err as { status?: number; statusCode?: number }).status ??
+        (err as { statusCode?: number }).statusCode;
+      if (typeof httpStatus === "number" && httpStatus >= 400 && httpStatus < 500) {
+        logger.warn({ err: err.message, status: httpStatus }, "Отказ API");
+        return res
+          .status(httpStatus)
+          .json({ error: httpStatus === 413 ? "Тело запроса слишком велико" : "Некорректный запрос" });
+      }
+      logger.error({ err: err.message, stack: err.stack }, "Ошибка API");
+      // ⚠️ Наружу — только обобщённый текст: сообщение исключения выдаёт пути к файлам
+      // и устройство базы. Разбираться по логу.
+      res.status(500).json({ error: "Внутренняя ошибка сервера" });
     }
   );
 

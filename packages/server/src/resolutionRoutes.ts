@@ -7,11 +7,13 @@ import {
   getSettingValue,
   listAccounts,
   listAttachments,
+  logger,
   sendEmail
 } from "@mailsense/core";
 import {
   AppError,
   approveResolution,
+  attachDispatchEmail,
   cancelResolution,
   closeResolution,
   confirmEmailApproval,
@@ -36,6 +38,7 @@ import {
   rejectResolution,
   reportExecution,
   requestApproval,
+  revertDispatch,
   updateResolution,
   type Actor,
   type AssigneeKind,
@@ -78,6 +81,20 @@ function assigneesFrom(v: unknown): Array<{ userId: string; kind: AssigneeKind }
       };
     })
     .filter((a) => a.userId);
+}
+
+/**
+ * Проверяет, что у пользователя есть право подписи.
+ *
+ * ⚠️ Подписанта называют снаружи (аппарат прочитал письмо, администратор выбрал вручную),
+ * поэтому право проверяет сервер: иначе в графе «Резолюция руководства» окажется любой,
+ * чей идентификатор попал в тело запроса.
+ */
+async function assertSignRight(userId: string, message = "У пользователя нет права подписи"): Promise<void> {
+  const user = await getUser(userId);
+  if (!user) throw new AppError("Утверждающий не найден", 400, "no_signer");
+  const perms = permissionsOfRoles(await getUserRoles(user.id));
+  if (!perms.includes("resolution.approve")) throw new AppError(message, 403, "no_sign_right");
 }
 
 export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps): void {
@@ -284,10 +301,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const from = mail?.from?.address ?? "";
       const signer = from ? await getUserByEmail(from) : null;
       if (!signer) throw new AppError("Не удалось определить отправителя письма", 400, "no_sender");
-      const perms = permissionsOfRoles(await getUserRoles(signer.id));
-      if (!perms.includes("resolution.approve")) {
-        throw new AppError("Отправитель письма не имеет права подписи", 403, "no_sign_right");
-      }
+      await assertSignRight(signer.id, "Отправитель письма не имеет права подписи");
       // Если поручение уже помечено как «ответ письмом» (повторная разметка или старые данные),
       // первый шаг пропускаем: он допустим только из состояния «на утверждении».
       const current = await getResolution(req.params.id);
@@ -485,9 +499,13 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     ...dispatch,
     asyncHandler(async (req, res) => {
       const b = req.body ?? {};
+      // Подписанта вписывает аппарат, но право подписи проверяет сервер: без этого
+      // подписантом можно было назвать кого угодно — лишь бы он был в базе.
+      const approvedBy = b.approvedBy ? String(b.approvedBy) : null;
+      if (approvedBy) await assertSignRight(approvedBy);
       res.json(
         await confirmEmailApproval(req.params.id, actorOf(req), {
-          approvedBy: b.approvedBy ? String(b.approvedBy) : null,
+          approvedBy,
           comment: str(b.comment),
           // Фамилию и срок из письма машина разобрать не может — их вписывает аппарат.
           text: b.text !== undefined ? String(b.text) : undefined,
@@ -549,23 +567,43 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         "Аппарат генерального директора"
       ].filter((l) => l !== "").join("\n");
 
-      const sent = await sendEmail({
-        accountId: account.id,
-        to: withEmail.map((a) => ({ address: a.email, name: a.fullName })),
-        subject: "Поручение " + (detail.documentNumber || "") + ": " + detail.text.slice(0, 60),
-        bodyText,
-        // Ссылаемся на исходное письмо: переписка по делу остаётся одной цепочкой.
-        inReplyToEmailId: source?.id ?? null,
-        inReplyToMessageId: source?.messageId ?? null,
-        references: source?.messageId ? [source.messageId] : []
+      // ⚠️ Порядок шагов зафиксирован решением ведущего: СНАЧАЛА переход в «отправлено»,
+      // и только потом письмо. Переход идёт в транзакции с FOR UPDATE (docflow) и служит
+      // захватом поручения. Раньше письмо уходило до записи перехода: два одновременных
+      // нажатия «Отправить» отправляли исполнителям ДВА письма, а записывалось одно.
+      const claimed = await dispatchResolution(req.params.id, actorOf(req), {
+        comment: str(b.comment)
       });
 
-      res.json(
-        await dispatchResolution(req.params.id, actorOf(req), {
-          dispatchEmailId: sent.emailId,
-          comment: str(b.comment)
-        })
-      );
+      let sent: { emailId: string };
+      try {
+        sent = await sendEmail({
+          accountId: account.id,
+          to: withEmail.map((a) => ({ address: a.email, name: a.fullName })),
+          subject: "Поручение " + (detail.documentNumber || "") + ": " + detail.text.slice(0, 60),
+          bodyText,
+          // Ссылаемся на исходное письмо: переписка по делу остаётся одной цепочкой.
+          inReplyToEmailId: source?.id ?? null,
+          inReplyToMessageId: source?.messageId ?? null,
+          references: source?.messageId ? [source.messageId] : []
+        });
+      } catch (err) {
+        // Шаг 4: письмо не ушло — возвращаем поручение в «утверждено», чтобы аппарат
+        // мог повторить. Откат тоже может отказать (например, исполнитель уже отчитался),
+        // но наружу уходит ИСХОДНАЯ ошибка: аппарат должен узнать про почту, а не про откат.
+        await revertDispatch(req.params.id, actorOf(req), "Почтовый сервер не принял письмо: " + (err as Error).message)
+          .catch((revertError: Error) => {
+            logger.warn(
+              { err: revertError.message, resolutionId: req.params.id },
+              "Не удалось откатить отправку поручения — поручение осталось в «отправлено»"
+            );
+            return claimed;
+          });
+        throw err;
+      }
+
+      // Шаг 3: письмо ушло — записываем его идентификатор (журнал и карточка поручения).
+      res.json(await attachDispatchEmail(req.params.id, sent.emailId, actorOf(req)));
     })
   );
 
@@ -663,6 +701,13 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const b = req.body ?? {};
       const userId = String(b.userId ?? "");
       if (!userId) throw new AppError("Не указан исполнитель", 400, "no_user");
+      // Отчитывается исполнитель: подтвердить отчёт можно только за того, кому поручено.
+      // Проверка на сервере — иначе в журнале появится отчёт постороннего человека.
+      const detail = await getResolutionDetail(req.params.id);
+      if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
+      if (!detail.assignees.some((a) => a.userId === userId)) {
+        throw new AppError("Этот пользователь не исполнитель поручения", 400, "not_assignee");
+      }
       res.json(
         await confirmReport(
           req.params.id,

@@ -1,5 +1,6 @@
 import type express from "express";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 /**
  * Прокси к серверу документооборота.
@@ -105,9 +106,18 @@ export function createDocflowProxy(options: ProxyOptions) {
         res.end();
         return;
       }
-      Readable.fromWeb(upstream.body as never).pipe(res);
+      // ⚠️ Именно pipeline, а не pipe: pipe не переносит ошибку источника, и обрыв
+      // апстрима посередине ответа становился необработанным исключением — процесс
+      // падал вместе с локальной почтой, которая обязана работать и без СЭД.
+      await pipeline(Readable.fromWeb(upstream.body as never), res);
     } catch (err) {
       const message = (err as Error).name === "AbortError" ? "истёк таймаут" : (err as Error).message;
+      // Заголовки уже отправлены — статус не поменять, поэтому обрываем соединение:
+      // клиент увидит недополученный ответ, а не «200 с пустым телом».
+      if (res.headersSent) {
+        res.destroy();
+        return;
+      }
       // Локальная почта обязана работать даже когда сервер недоступен.
       res.status(503).json({ error: "Сервер документооборота недоступен: " + message });
     } finally {
