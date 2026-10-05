@@ -47,8 +47,8 @@ cd packages/core && node node_modules/jest/bin/jest.js --runInBand --forceExit \
 # Сквозные сценарии (нужен запущенный стенд)
 node scripts/test_docflow_auth.mjs          # вход и роли
 node scripts/test_journal.mjs               # журнал: 35 проверок
-node scripts/test_resolutions.mjs           # API резолюций: 27 проверок
-node scripts/test_roles_e2e.mjs             # по РОЛЯМ: 86 проверок, четыре роли + админ
+node scripts/test_resolutions.mjs           # API резолюций: 29 проверок
+node scripts/test_roles_e2e.mjs             # по РОЛЯМ: 93 проверки, четыре роли + админ
 ```
 
 ⚠️ **Тесты документооборота требуют PostgreSQL** — они работают с настоящей базой, а не с заглушкой.
