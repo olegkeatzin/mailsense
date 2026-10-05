@@ -28,16 +28,31 @@ export function ResolutionEmails({ resolution, compact = false }: { resolution: 
   ].filter((l) => !!l.id);
 
   if (!links.length) {
-    return <span style={{ color: "#bbb", fontSize: 12 }}>Писем не привязано</span>;
+    return <span style={{ color: "#767676", fontSize: 12 }}>Писем не привязано</span>;
   }
 
   return (
     <Space wrap size={4}>
-      {!compact ? <span style={{ color: "#888", fontSize: 12 }}>Письма по делу:</span> : null}
+      {!compact ? <span style={{ color: "#595959", fontSize: 12 }}>Письма по делу:</span> : null}
       {links.map((l) =>
         l.color ? (
-          <Tag key={l.id} color={l.color} style={{ cursor: "pointer", margin: 0 }} onClick={() => void open(l.id!)}>
-            {l.label}
+          // Цветной шаг процесса — внутри настоящая кнопка: Tag с onClick не берёт фокус с клавиатуры.
+          <Tag key={l.id} color={l.color} style={{ margin: 0, padding: 0 }}>
+            <button
+              type="button"
+              onClick={() => void open(l.id!)}
+              aria-label={"Открыть письмо: " + l.label}
+              style={{
+                background: "none",
+                border: 0,
+                padding: "0 7px",
+                font: "inherit",
+                color: "inherit",
+                cursor: "pointer"
+              }}
+            >
+              {l.label}
+            </button>
           </Tag>
         ) : (
           <Button key={l.id} size="small" type="link" style={{ padding: 0, height: "auto" }} onClick={() => void open(l.id!)}>

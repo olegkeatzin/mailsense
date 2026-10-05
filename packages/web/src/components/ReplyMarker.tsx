@@ -137,7 +137,7 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
           }
         >
           <div style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>{it.taskText}</div>
-          <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: "#595959", marginBottom: 8 }}>
             Отметьте, что это за письмо — система сама не определяет:
           </div>
           <Space wrap>
@@ -184,7 +184,7 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
           <Button icon={<RobotOutlined />} loading={aiBusy} onClick={() => void fillWithAi()}>
             Заполнить с помощью ИИ
           </Button>
-          <div style={{ fontSize: 12, color: "#999", margin: "6px 0 14px" }}>
+          <div style={{ fontSize: 12, color: "#595959", margin: "6px 0 14px" }}>
             Черновик по тексту письма. Проверьте: отвечает за формулировку человек.
           </div>
 

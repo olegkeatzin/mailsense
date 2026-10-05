@@ -41,7 +41,7 @@ export default function IncomingList() {
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
         <h3 style={{ margin: 0, flex: 1 }}>
           Входящие на регистрацию
-          {items.length > 0 && <span style={{ color: "#888", fontWeight: 400 }}> · {items.length}</span>}
+          {items.length > 0 && <span style={{ color: "#595959", fontWeight: 400 }}> · {items.length}</span>}
         </h3>
         <Button icon={<RollbackOutlined />} onClick={() => setSection("journal")}>
           В журнал
@@ -63,7 +63,7 @@ export default function IncomingList() {
               title={
                 <Space>
                   <span>{e.from?.name || e.from?.address || "Неизвестный отправитель"}</span>
-                  <span style={{ color: "#999", fontWeight: 400, fontSize: 12 }}>
+                  <span style={{ color: "#595959", fontWeight: 400, fontSize: 12 }}>
                     {e.date ? dayjs(e.date).format("DD.MM.YYYY HH:mm") : ""}
                   </span>
                 </Space>

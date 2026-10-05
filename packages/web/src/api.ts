@@ -127,15 +127,17 @@ export const api = {
       body: JSON.stringify(range ?? {})
     }),
 
-  emails: (filter: EmailFilter = {}) => request<Email[]>("/api/emails" + withQuery(emailQuery(filter))),
-  email: (id: string) => request<EmailView>("/api/emails/" + id),
+  /** `init.signal` — отмена: список перезапрашивается на каждое изменение фильтра, старый ответ не нужен. */
+  emails: (filter: EmailFilter = {}, init?: RequestInit) =>
+    request<Email[]>("/api/emails" + withQuery(emailQuery(filter)), init),
+  email: (id: string, init?: RequestInit) => request<EmailView>("/api/emails/" + id, init),
   composeTemplate: (accountId: string, mode: string, emailId?: string | null) => {
     const params = new URLSearchParams({ accountId, mode });
     if (emailId) params.set("emailId", emailId);
     return request<ComposeTemplate>("/api/compose-template?" + params.toString());
   },
-  threads: (filter: EmailFilter = {}) =>
-    request<ThreadGroup[]>("/api/threads" + withQuery(emailQuery(filter))),
+  threads: (filter: EmailFilter = {}, init?: RequestInit) =>
+    request<ThreadGroup[]>("/api/threads" + withQuery(emailQuery(filter)), init),
   setFolder: (id: string, folder: string) =>
     request<{ ok: boolean }>("/api/emails/" + id + "/folder", {
       method: "PATCH",

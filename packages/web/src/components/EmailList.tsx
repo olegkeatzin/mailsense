@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { FixedSizeList } from "react-window";
 import { Badge, Checkbox, Empty, Spin, Tag } from "antd";
 import { useStore } from "../store";
 import type { Email, ThreadGroup } from "../types";
 import {
   categoryColor,
+  categoryLabel,
   formatDate,
   priorityColor,
+  priorityLabel,
   statusColor,
   statusLabel
 } from "../utils";
@@ -40,13 +42,13 @@ function EmailRowItem({ e, selected }: { e: Email; selected: boolean }) {
           {senderName ? (
             <>
               <span style={{ fontWeight: 600 }}>{senderName}</span>{" "}
-              <span style={{ color: "#8c8c8c", fontWeight: 400, fontSize: 12 }}>&lt;{senderAddress}&gt;</span>
+              <span style={{ color: "#595959", fontWeight: 400, fontSize: 12 }}>&lt;{senderAddress}&gt;</span>
             </>
           ) : (
             <span style={{ fontWeight: 600 }}>{senderAddress}</span>
           )}
         </span>
-        <span style={{ fontSize: 12, color: "#888", whiteSpace: "nowrap" }}>{formatDate(e.date)}</span>
+        <span style={{ fontSize: 12, color: "#595959", whiteSpace: "nowrap" }}>{formatDate(e.date)}</span>
       </div>
       <div
         title={e.subject}
@@ -64,7 +66,7 @@ function EmailRowItem({ e, selected }: { e: Email; selected: boolean }) {
       <div
         style={{
           fontSize: 12,
-          color: "#999",
+          color: "#595959",
           marginTop: 2,
           overflow: "hidden",
           textOverflow: "ellipsis",
@@ -77,26 +79,37 @@ function EmailRowItem({ e, selected }: { e: Email; selected: boolean }) {
         <div style={{ display: "flex", gap: 4, alignItems: "center", flex: 1, minWidth: 0, overflow: "hidden" }}>
           {a ? (
             <>
+              {/*
+                Цветные точки несут смысл (приоритет и категория), но текстом не подписаны:
+                для чтения с экрана подпись задана здесь, глазами — во всплывающей подсказке.
+              */}
               <span
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: priorityColor(a.priority),
-                  display: "inline-block",
-                  flexShrink: 0
-                }}
-              />
-              <span
-                style={{
-                  width: 8,
-                  height: 8,
-                  borderRadius: "50%",
-                  background: categoryColor(a.category),
-                  display: "inline-block",
-                  flexShrink: 0
-                }}
-              />
+                role="img"
+                title={"Приоритет: " + priorityLabel(a.priority) + "; категория: " + categoryLabel(a.category)}
+                aria-label={"Приоритет: " + priorityLabel(a.priority) + "; категория: " + categoryLabel(a.category)}
+                style={{ display: "inline-flex", gap: 4, alignItems: "center", flexShrink: 0 }}
+              >
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: priorityColor(a.priority),
+                    display: "inline-block",
+                    flexShrink: 0
+                  }}
+                />
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: "50%",
+                    background: categoryColor(a.category),
+                    display: "inline-block",
+                    flexShrink: 0
+                  }}
+                />
+              </span>
               {a.tags.slice(0, 3).map((t) => (
                 <Tag key={t} style={{ margin: 0, fontSize: 11, lineHeight: "16px", flexShrink: 0 }}>
                   {t}
@@ -168,8 +181,18 @@ function ThreadTree({
     const kids = childrenMap.get(e.id) ?? [];
     return (
       <div key={e.id}>
+        {/* Строка открывает письмо: без role/tabIndex она была доступна только мышью. */}
         <div
+          role="button"
+          tabIndex={0}
+          aria-label={"Открыть письмо: " + (e.subject || "без темы")}
           onClick={() => onSelect(e.id)}
+          onKeyDown={(ev) => {
+            if (ev.key === "Enter" || ev.key === " ") {
+              ev.preventDefault();
+              onSelect(e.id);
+            }
+          }}
           style={{
             cursor: "pointer",
             marginLeft: depth * 20,
@@ -182,7 +205,11 @@ function ThreadTree({
             onClick={(ev) => ev.stopPropagation()}
             style={{ display: "flex", alignItems: "center", paddingLeft: 8 }}
           >
-            <Checkbox checked={selectedIds.includes(e.id)} onChange={() => toggleSelect(e.id)} />
+            <Checkbox
+              aria-label={"Выбрать письмо: " + (e.subject || "без темы")}
+              checked={selectedIds.includes(e.id)}
+              onChange={() => toggleSelect(e.id)}
+            />
           </div>
           <div
             style={{
@@ -225,7 +252,17 @@ function ThreadGroupItem({
   return (
     <div>
       <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        aria-label={(expanded ? "Свернуть переписку: " : "Развернуть переписку: ") + (t.subject || "без темы")}
         onClick={onToggle}
+        onKeyDown={(ev) => {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            onToggle();
+          }
+        }}
         style={{
           padding: "10px 12px",
           borderBottom: "1px solid #f5f5f5",
@@ -237,6 +274,7 @@ function ThreadGroupItem({
         }}
       >
         <Checkbox
+          aria-label={"Выбрать всю переписку: " + (t.subject || "без темы")}
           checked={t.emails.length > 0 && t.emails.every((e) => selectedIds.includes(e.id))}
           indeterminate={
             t.emails.some((e) => selectedIds.includes(e.id)) && !t.emails.every((e) => selectedIds.includes(e.id))
@@ -257,7 +295,7 @@ function ThreadGroupItem({
           >
             {t.subject}
           </div>
-          <div style={{ fontSize: 12, color: "#888" }}>
+          <div style={{ fontSize: 12, color: "#595959" }}>
             {formatDate(t.lastMessageAt)} · {t.count} сообщ.
           </div>
         </div>
@@ -287,17 +325,25 @@ export default function EmailList() {
   const toggleSelectMany = useStore((s) => s.toggleSelectMany);
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const ref = useRef<HTMLDivElement>(null);
   const [height, setHeight] = useState(600);
+  const resizeObserver = useRef<ResizeObserver | null>(null);
 
-  useEffect(() => {
-    if (!ref.current) return;
-    const el = ref.current;
-    const update = () => setHeight(el.clientHeight);
-    update();
-    const ro = new ResizeObserver(update);
+  /**
+   * Callback-ref вместо useEffect с [].
+   *
+   * Раньше высота измерялась в эффекте с пустыми зависимостями: на момент его
+   * запуска список ещё не отрисован (или отрисован «Нет писем»), ref был null,
+   * эффект выходил и больше не повторялся — FixedSizeList навсегда оставался
+   * высотой 600. Callback-ref вызывается в момент появления узла.
+   */
+  const attachList = useCallback((el: HTMLDivElement | null) => {
+    resizeObserver.current?.disconnect();
+    resizeObserver.current = null;
+    if (!el) return;
+    setHeight(el.clientHeight);
+    const ro = new ResizeObserver(() => setHeight(el.clientHeight));
     ro.observe(el);
-    return () => ro.disconnect();
+    resizeObserver.current = ro;
   }, []);
 
   if (loading && emails.length === 0 && threads.length === 0) {
@@ -344,7 +390,7 @@ export default function EmailList() {
   }
 
   return (
-    <div ref={ref} style={{ flex: 1, overflow: "hidden" }}>
+    <div ref={attachList} style={{ flex: 1, overflow: "hidden" }}>
       <FixedSizeList
         height={height}
         itemCount={emails.length}
@@ -359,9 +405,26 @@ export default function EmailList() {
                 onClick={(ev) => ev.stopPropagation()}
                 style={{ display: "flex", alignItems: "center", paddingLeft: 10 }}
               >
-                <Checkbox checked={selectedIds.includes(e.id)} onChange={() => toggleSelect(e.id)} />
+                <Checkbox
+                  aria-label={"Выбрать письмо: " + (e.subject || "без темы")}
+                  checked={selectedIds.includes(e.id)}
+                  onChange={() => toggleSelect(e.id)}
+                />
               </div>
-              <div style={{ flex: 1, minWidth: 0 }} onClick={() => void select(e.id)}>
+              {/* Письмо открывается и с клавиатуры: строка — кнопка, а не только div с onClick. */}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label={"Открыть письмо: " + (e.subject || "без темы")}
+                style={{ flex: 1, minWidth: 0 }}
+                onClick={() => void select(e.id)}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter" || ev.key === " ") {
+                    ev.preventDefault();
+                    void select(e.id);
+                  }
+                }}
+              >
                 <EmailRowItem e={e} selected={e.id === selectedId} />
               </div>
             </div>

@@ -52,12 +52,19 @@ export function statusLabel(s: AnalysisStatus): string {
   }
 }
 
+/**
+ * Цвет статуса анализа.
+ *
+ * Оттенки взяты темнее «фирменных» antd: светло-зелёный #52c41a на белом давал
+ * контраст 2.06:1 при норме 4.5:1 (WCAG AA для мелкого текста), и подпись статуса
+ * в списке писем было трудно прочитать. Значения проверяются тестом contrast.test.ts.
+ */
 export function statusColor(s: AnalysisStatus): string {
   switch (s) {
-    case "ready": return "#52c41a";
-    case "error": return "#f5222d";
-    case "processing": return "#1677ff";
-    case "queued": return "#faad14";
-    default: return "#999999";
+    case "ready": return "#237804";
+    case "error": return "#cf1322";
+    case "processing": return "#0958d9";
+    case "queued": return "#874d00";
+    default: return "#595959";
   }
 }

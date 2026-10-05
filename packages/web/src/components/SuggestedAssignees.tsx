@@ -66,7 +66,7 @@ export function SuggestedAssignees(props: {
     <div style={{ marginBottom: 12 }}>
       <div style={{ marginBottom: 4 }}>
         <b>Предложенные исполнители</b>{" "}
-        <span style={{ color: "#999", fontSize: 12 }}>по похожим письмам</span>
+        <span style={{ color: "#595959", fontSize: 12 }}>по похожим письмам</span>
       </div>
       <Space direction="vertical" size={4} style={{ width: "100%" }}>
         {state.items.map((s) => (

@@ -50,6 +50,20 @@ function fmt(a: EmailAddress): string {
   return a.name ? a.name + " <" + a.address + ">" : a.address;
 }
 
+/**
+ * Вложение в композере: к данным добавлен стабильный ключ.
+ *
+ * Индекс как key врал при удалении вложения — React переиспользовал строки
+ * не той позиции. Ключ присваивается один раз при добавлении.
+ */
+type AttachmentItem = DraftAttachment & { key: string };
+
+let attachmentSeq = 0;
+function withAttachmentKey(a: DraftAttachment): AttachmentItem {
+  attachmentSeq += 1;
+  return { ...a, key: "att-" + attachmentSeq };
+}
+
 
 
 function readAsBase64(f: File): Promise<string> {
@@ -154,6 +168,15 @@ function AddressSelect({
   const [options, setOptions] = useState<{ value: string; label: string }[]>([]);
   const timer = useRef<number | null>(null);
 
+  // Отложенный поиск по каталогу снимаем при закрытии окна: иначе таймер
+  // срабатывает уже после размонтирования и пишет в состояние мёртвого компонента.
+  useEffect(
+    () => () => {
+      if (timer.current) window.clearTimeout(timer.current);
+    },
+    []
+  );
+
   const onSearch = (q: string) => {
     if (timer.current) window.clearTimeout(timer.current);
     const needle = (q ?? "").trim();
@@ -218,13 +241,15 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
   const [cc, setCc] = useState<string[]>(template.cc.map(fmt));
   const [bcc, setBcc] = useState<string[]>(template.bcc.map(fmt));
   const [subject, setSubject] = useState(template.subject);
-  const [attachments, setAttachments] = useState<DraftAttachment[]>(
-    template.attachments.map((a) => ({
-      filename: a.filename,
-      mimeType: a.mimeType,
-      size: Math.floor((a.data.length * 3) / 4),
-      data: a.data
-    }))
+  const [attachments, setAttachments] = useState<AttachmentItem[]>(
+    template.attachments.map((a) =>
+      withAttachmentKey({
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: Math.floor((a.data.length * 3) / 4),
+        data: a.data
+      })
+    )
   );
   const [sending, setSending] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -257,9 +282,16 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
 
   const onFiles = async (files: FileList | null) => {
     if (!files) return;
-    const arr: DraftAttachment[] = [];
+    const arr: AttachmentItem[] = [];
     for (const f of Array.from(files)) {
-      arr.push({ filename: f.name, mimeType: f.type || "application/octet-stream", size: f.size, data: await readAsBase64(f) });
+      arr.push(
+        withAttachmentKey({
+          filename: f.name,
+          mimeType: f.type || "application/octet-stream",
+          size: f.size,
+          data: await readAsBase64(f)
+        })
+      );
     }
     setAttachments((prev) => [...prev, ...arr]);
   };
@@ -275,7 +307,8 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
     subject: subject.trim() || "(без темы)",
     bodyText: htmlToPlainText(bodyHtml),
     bodyHtml: plainTextOnly || isEmptyHtml ? "" : bodyHtml,
-    attachments,
+    // Ключ списка — деталь интерфейса, на сервер он не уходит.
+    attachments: attachments.map(({ key: _key, ...a }) => a),
     inReplyToEmailId: template.inReplyToEmailId,
     inReplyToMessageId: template.inReplyToMessageId,
     references: template.references
@@ -434,10 +467,17 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
         </div>
         {attachments.length > 0 ? (
           <div>
-            {attachments.map((a, i) => (
-              <Space key={i} style={{ display: "flex", marginBottom: 4 }}>
+            {attachments.map((a) => (
+              <Space key={a.key} style={{ display: "flex", marginBottom: 4 }}>
                 <Typography.Text style={{ fontSize: 12 }}>{a.filename}</Typography.Text>
-                <Button size="small" type="text" danger icon={<DeleteOutlined />} onClick={() => setAttachments((prev) => prev.filter((_, j) => j !== i))} />
+                <Button
+                  size="small"
+                  type="text"
+                  danger
+                  icon={<DeleteOutlined />}
+                  aria-label={"Убрать вложение " + a.filename}
+                  onClick={() => setAttachments((prev) => prev.filter((x) => x.key !== a.key))}
+                />
               </Space>
             ))}
           </div>

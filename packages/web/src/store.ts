@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { api } from "./api";
+import { debounce } from "./utils/debounce";
 import type {
   Account,
   AiConfig,
@@ -55,6 +56,11 @@ interface State extends FilterState {
   selectedIds: string[];
   /** Письмо, для которого нужно сразу открыть форму регистрации (переход из списка «На регистрацию»). */
   registerIntent: string | null;
+  /**
+   * Счётчик запусков анализа: по нему индикатор прогресса понимает, что очередь
+   * снова не пуста, и возобновляет опрос (в простое он не опрашивает сервер).
+   */
+  analysisEpoch: number;
   loading: boolean;
   settingsOpen: boolean;
   aiConfig: AiConfig | null;
@@ -149,6 +155,47 @@ function filterParams(s: State) {
   };
 }
 
+/**
+ * Письма, которые пользователь видит в списке прямо сейчас.
+ *
+ * Массовые действия считаются только по ним: иначе «Удалить» уносит письма,
+ * которых на экране нет (они остались выбранными от прежнего фильтра).
+ */
+export function visibleEmailIds(s: {
+  emails: Email[];
+  threads: ThreadGroup[];
+  threadView: boolean;
+}): string[] {
+  if (s.threadView) return [...new Set(s.threads.flatMap((t) => t.emails.map((e) => e.id)))];
+  return s.emails.map((e) => e.id);
+}
+
+/** Оставляет в выборе только видимое; если ничего не изменилось — тот же массив. */
+function pruneSelection(selectedIds: string[], visible: string[]): string[] {
+  const keep = new Set(visible);
+  const next = selectedIds.filter((id) => keep.has(id));
+  return next.length === selectedIds.length ? selectedIds : next;
+}
+
+/** Выбранное, что реально видно в текущем списке — только по этому и действуем. */
+function selectedVisible(s: State): string[] {
+  const keep = new Set(visibleEmailIds(s));
+  return s.selectedIds.filter((id) => keep.has(id));
+}
+
+/** Запрос списка: новый отменяет предыдущий, иначе старый ответ перетрёт свежий. */
+let emailsAbort: AbortController | null = null;
+
+/**
+ * Перезапрос списка с паузой: поиск идёт по буквам, поэтому «о», «от», «отч»
+ * должны превратиться в один запрос, а не в три (и не обогнать друг друга).
+ */
+const reloadListDebounced = debounce(() => {
+  void useStore.getState().loadEmails();
+}, 300);
+/** То же для открытого письма: быстрое переключение писем не должно подменять открытое. */
+let emailAbort: AbortController | null = null;
+
 export const useStore = create<State>()((set, get) => ({
   accounts: [],
   emails: [],
@@ -159,6 +206,7 @@ export const useStore = create<State>()((set, get) => ({
   emailView: null,
   selectedIds: [],
   registerIntent: null,
+  analysisEpoch: 0,
   loading: false,
   settingsOpen: false,
   aiConfig: null,
@@ -227,7 +275,9 @@ export const useStore = create<State>()((set, get) => ({
 
   init: async () => {
     await get().loadAccounts();
-    await get().loadAiConfig();
+    // Настройки ИИ закрыты правом settings.manage: остальным ролям запрос возвращал
+    // 403 и попадал в консоль браузера как ошибка.
+    if (get().can("settings.manage")) await get().loadAiConfig();
     await get().loadEmails();
   },
 
@@ -245,10 +295,16 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   loadEmails: async () => {
+    // Предыдущий запрос списка больше не нужен: его ответ описывает старый фильтр.
+    emailsAbort?.abort();
+    const ctrl = new AbortController();
+    emailsAbort = ctrl;
     set({ loading: true });
     try {
-      const emails = await api.emails(filterParams(get()));
-      set({ emails });
+      const emails = await api.emails(filterParams(get()), { signal: ctrl.signal });
+      // Отменённый ответ (или ответ, пришедший после отмены) в стор не попадает.
+      if (ctrl.signal.aborted) return;
+      set({ emails, selectedIds: pruneSelection(get().selectedIds, emails.map((e) => e.id)) });
       if (get().threadView) {
         try {
           await get().loadThreads();
@@ -256,18 +312,29 @@ export const useStore = create<State>()((set, get) => ({
           /* ignore */
         }
       }
+    } catch (err) {
+      // Отмена — не ошибка: её запросили мы сами, ответ просто устарел.
+      if (!ctrl.signal.aborted) throw err;
     } finally {
-      set({ loading: false });
+      if (emailsAbort === ctrl) {
+        emailsAbort = null;
+        set({ loading: false });
+      }
     }
   },
 
   select: async (id: string) => {
+    emailAbort?.abort();
+    const ctrl = new AbortController();
+    emailAbort = ctrl;
     set({ selectedId: id, emailView: null });
     try {
-      const emailView = await api.email(id);
+      const emailView = await api.email(id, { signal: ctrl.signal });
+      // Пока грузилось, могли открыть другое письмо — старый ответ не наш.
+      if (ctrl.signal.aborted || get().selectedId !== id) return;
       set({ emailView });
     } catch (e) {
-      console.error(e);
+      if (!ctrl.signal.aborted) console.error(e);
     }
   },
 
@@ -276,6 +343,8 @@ export const useStore = create<State>()((set, get) => ({
     if (!id) return;
     try {
       const emailView = await api.email(id);
+      // Фоновая перечитка не должна возвращать на экран письмо, от которого ушли.
+      if (get().selectedId !== id) return;
       set({ emailView });
     } catch {
       /* ignore */
@@ -283,24 +352,30 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   setFolder: (folder: string) => {
-    set({ folder });
+    // Смена папки — смена содержимого списка: прежний выбор к нему не относится.
+    set({ folder, selectedIds: [] });
+    reloadListDebounced.cancel();
     void get().loadEmails();
     if (get().threadView) void get().loadThreads();
   },
 
   setAccountFilter: (accountFilter: string | null) => {
-    set({ accountFilter });
+    set({ accountFilter, selectedIds: [] });
+    reloadListDebounced.cancel();
     void get().loadEmails();
     if (get().threadView) void get().loadThreads();
   },
 
   setFilter: (patch: Partial<FilterState>) => {
-    set(patch);
-    void get().loadEmails();
+    // Фильтр меняет то, что видно на экране, поэтому выбор сбрасываем:
+    // иначе массовое действие уходит на письма, которых пользователь не видит.
+    set({ ...patch, selectedIds: [] });
+    reloadListDebounced();
   },
 
   resetFilters: () => {
     set({
+      selectedIds: [],
       categories: [],
       minPriority: null,
       tag: null,
@@ -317,6 +392,7 @@ export const useStore = create<State>()((set, get) => ({
       sortBy: "date",
       sortDir: "desc"
     });
+    reloadListDebounced.cancel();
     void get().loadEmails();
   },
 
@@ -326,16 +402,19 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   analyze: async (id: string) => {
+    set({ analysisEpoch: get().analysisEpoch + 1 });
     await api.analyze(id);
     await get().loadEmails();
   },
 
   analyzeAll: async () => {
+    set({ analysisEpoch: get().analysisEpoch + 1 });
     await api.analyzeAll();
     await get().loadEmails();
   },
 
   stopAnalysis: async () => {
+    set({ analysisEpoch: get().analysisEpoch + 1 });
     await api.stopAnalysis();
     await get().loadEmails();
   },
@@ -356,7 +435,11 @@ export const useStore = create<State>()((set, get) => ({
   },
   loadThreads: async () => {
     const threads = await api.threads(filterParams(get()));
-    set({ threads });
+    const visible = [...new Set([
+      ...get().emails.map((e) => e.id),
+      ...threads.flatMap((t) => t.emails.map((e) => e.id))
+    ])];
+    set({ threads, selectedIds: pruneSelection(get().selectedIds, visible) });
   },
 
   moveSelected: async (folder: string) => {
@@ -388,27 +471,39 @@ export const useStore = create<State>()((set, get) => ({
   clearSelection: () => set({ selectedIds: [] }),
 
   bulkAnalyze: async () => {
-    await api.bulkAnalyze(get().selectedIds);
+    const ids = selectedVisible(get());
+    if (!ids.length) return;
+    set({ analysisEpoch: get().analysisEpoch + 1 });
+    await api.bulkAnalyze(ids);
     await get().loadEmails();
   },
 
   bulkMove: async (folder: string) => {
-    await api.bulkFolder(get().selectedIds, folder);
+    const ids = selectedVisible(get());
+    if (!ids.length) return;
+    await api.bulkFolder(ids, folder);
     set({ selectedIds: [] });
     await get().loadEmails();
   },
 
+  /**
+   * Удаление — необратимое действие, поэтому идём строго по видимым письмам:
+   * выбранное «из-под другого фильтра» не должно уехать в корзину.
+   */
   bulkDelete: async () => {
-    await api.bulkDelete(get().selectedIds);
+    const ids = selectedVisible(get());
+    if (!ids.length) return;
+    await api.bulkDelete(ids);
     set({ selectedIds: [], selectedId: null, emailView: null });
     await get().loadEmails();
   },
 
   selectAll: () => {
-    set({ selectedIds: get().emails.map((e) => e.id) });
+    set({ selectedIds: visibleEmailIds(get()) });
   },
 
   analyzeRange: async (since, until, accountIds) => {
+    set({ analysisEpoch: get().analysisEpoch + 1 });
     const r = await api.analyzeRange({ since, until, accountIds });
     await get().loadEmails();
     return r.queued;

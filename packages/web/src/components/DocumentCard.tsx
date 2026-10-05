@@ -134,7 +134,9 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
     } finally {
       setLoading(false);
     }
-  }, [documentId]);
+    // Полный список зависимостей: без can/loadResolutions карточка могла остаться
+    // с прежними правами и прежним списком резолюций после смены документа.
+  }, [documentId, can, loadResolutions]);
 
   useEffect(() => {
     if (documentId) void load();
@@ -332,7 +334,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                         Исполнители: {r.assignees.map((a) => a.fullName).join(", ") || "—"}
                       </div>
                       <ResolutionEmails resolution={r} />
-                      <div style={{ fontSize: 11, color: "#999" }}>
+                      <div style={{ fontSize: 11, color: "#595959" }}>
                         подготовил: {r.preparedByName || "—"}
                         {r.approvedByName ? " · утвердил: " + r.approvedByName : ""}
                         {r.dispatchedByName ? " · отправил: " + r.dispatchedByName : ""}
@@ -399,7 +401,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                 dataSource={doc.emails}
                 renderItem={(e) => (
                   <List.Item>
-                    <span style={{ color: "#888", marginRight: 8 }}>{e.role === "source" ? "входящее" : e.role}</span>
+                    <span style={{ color: "#595959", marginRight: 8 }}>{e.role === "source" ? "входящее" : e.role}</span>
                     <span style={{ fontFamily: "monospace", fontSize: 12 }}>{e.emailId}</span>
                   </List.Item>
                 )}
@@ -410,7 +412,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
           <div>
             <h4 style={{ marginBottom: 8 }}>История изменений</h4>
             {!can("audit.view") ? (
-              <div style={{ color: "#999", fontSize: 12, marginBottom: 8 }}>
+              <div style={{ color: "#595959", fontSize: 12, marginBottom: 8 }}>
                 История доступна пользователям с правом просмотра аудита.
               </div>
             ) : null}

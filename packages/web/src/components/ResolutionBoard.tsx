@@ -29,7 +29,7 @@ function CardBody({ r }: { r: Resolution }) {
         {responsible ? responsible.fullName + (responsible.kind === "responsible" ? " (отв.)" : "") : "исполнитель не указан"}
         {r.assignees.length > 1 ? " и ещё " + (r.assignees.length - 1) : ""}
       </div>
-      <div style={{ fontSize: 11, color: "#999", marginTop: 4 }}>
+      <div style={{ fontSize: 11, color: "#595959", marginTop: 4 }}>
         подготовил: {r.preparedByName || "—"}
         {r.approvedByName ? " · утвердил: " + r.approvedByName : ""}
         {r.dispatchedByName ? " · отправил: " + r.dispatchedByName : ""}
@@ -70,7 +70,7 @@ export function ResolutionBoard() {
                 {c.items.length ? (
                   c.items.map((r) => <CardBody key={r.id + c.key} r={r} />)
                 ) : (
-                  <div style={{ color: "#bbb", fontSize: 12, textAlign: "center", padding: 12 }}>пусто</div>
+                  <div style={{ color: "#767676", fontSize: 12, textAlign: "center", padding: 12 }}>пусто</div>
                 )}
               </div>
             </div>

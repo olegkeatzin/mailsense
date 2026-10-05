@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, Checkbox, Input, Select } from "antd";
 import { ClearOutlined, FilterOutlined } from "@ant-design/icons";
-import { useStore } from "../store";
+import { useStore, visibleEmailIds } from "../store";
 import type { AnalysisStatus, Category } from "../types";
 import FilterModal from "./FilterModal";
 
@@ -46,11 +46,15 @@ export default function FilterBar() {
   const setFilter = useStore((s) => s.setFilter);
   const resetFilters = useStore((s) => s.resetFilters);
   const emails = useStore((s) => s.emails);
+  const threads = useStore((s) => s.threads);
+  const threadView = useStore((s) => s.threadView);
   const selectedIds = useStore((s) => s.selectedIds);
   const selectAll = useStore((s) => s.selectAll);
   const clearSelection = useStore((s) => s.clearSelection);
 
-  const allSelected = emails.length > 0 && selectedIds.length === emails.length;
+  // «Все» — про то, что реально показано: в переписке это письма тредов, а не список.
+  const visibleCount = visibleEmailIds({ emails, threads, threadView }).length;
+  const allSelected = visibleCount > 0 && selectedIds.length === visibleCount;
   const someSelected = selectedIds.length > 0 && !allSelected;
 
   return (
@@ -79,6 +83,7 @@ export default function FilterBar() {
         style={{ width: 200 }}
         allowClear
         placeholder="Поиск по содержанию / номеру…"
+        aria-label="Поиск по содержанию и номеру письма"
         value={q}
         onChange={(e) => setFilter({ q: e.target.value })}
       />
@@ -104,6 +109,7 @@ export default function FilterBar() {
         style={{ width: 150 }}
         allowClear
         placeholder="Поиск по тегу…"
+        aria-label="Поиск по тегу"
         value={tag ?? ""}
         onChange={(e) => setFilter({ tag: e.target.value || null })}
       />

@@ -89,24 +89,64 @@ function AnalysisProgressBadge() {
     done: number;
     total: number;
   } | null>(null);
+  /** Запуск анализа из интерфейса: счётчик заставляет возобновить опрос очереди. */
+  const analysisEpoch = useStore((s) => s.analysisEpoch);
 
   useEffect(() => {
     let alive = true;
-    const tick = async () => {
-      try {
-        const r = await api.progress();
-        if (alive) setP(r);
-      } catch {
-        /* ignore */
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const stop = () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
       }
     };
+    const schedule = (ms: number) => {
+      if (!alive) return;
+      stop();
+      timer = setTimeout(() => void tick(), ms);
+    };
+
+    const tick = async () => {
+      if (!alive) return;
+      // Свёрнутое окно не опрашиваем: прогресс всё равно никто не видит.
+      if (document.hidden) {
+        schedule(5000);
+        return;
+      }
+      try {
+        const r = await api.progress();
+        if (!alive) return;
+        setP(r);
+        // Очередь пуста — опрашивать нечего, ждём следующего запуска анализа.
+        if (r.queueLength > 0 || r.stage !== "idle") schedule(1000);
+        else {
+          stop();
+          setP(null);
+        }
+      } catch {
+        // Сервер недоступен — не долбим его каждую секунду.
+        schedule(5000);
+      }
+    };
+
+    /** Возвращение к окну — повод проверить очередь сразу. */
+    const onVisibility = () => {
+      if (!document.hidden) {
+        stop();
+        void tick();
+      }
+    };
+
     void tick();
-    const t = setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       alive = false;
-      clearInterval(t);
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [analysisEpoch]);
 
   if (!p || (p.queueLength === 0 && p.stage === "idle")) return null;
 
@@ -130,7 +170,7 @@ function AnalysisProgressBadge() {
         right: 16,
         zIndex: 1000,
         fontSize: 12,
-        color: "#1677ff",
+        color: "#0958d9",
         whiteSpace: "nowrap",
         background: "#fff",
         border: "1px solid #d6e4ff",
@@ -184,11 +224,15 @@ export default function App() {
     if (authorized) void init();
   }, [authorized, init]);
 
+  // Фоновое обновление списка писем. Раньше оно шло в любом разделе и даже при
+  // свёрнутом окне — то есть дёргало сервер, когда результат никто не увидит.
   useEffect(() => {
     if (!authorized) return;
-    const t = setInterval(async () => {
-      await useStore.getState().loadEmails();
-      await useStore.getState().refreshSelected();
+    const t = setInterval(() => {
+      if (document.hidden) return;
+      if (useStore.getState().section !== "mail") return;
+      void useStore.getState().loadEmails();
+      void useStore.getState().refreshSelected();
     }, 4000);
     return () => clearInterval(t);
   }, [authorized]);
@@ -216,20 +260,44 @@ export default function App() {
     }
   };
 
-  const startResize = (e: React.MouseEvent) => {
+  /**
+   * Перетаскивание границы списка.
+   *
+   * Слушатели вешаются на сам элемент и снимаются по pointerup/pointercancel:
+   * если mouseup терялся (курсор уходил за окно), прежняя версия оставляла
+   * слушатели на window навсегда. setPointerCapture гарантирует, что конец
+   * перетаскивания придёт именно сюда.
+   */
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
+    const el = e.currentTarget;
+    const pointerId = e.pointerId;
+    try {
+      el.setPointerCapture(pointerId);
+    } catch {
+      /* захват недоступен — обойдёмся без него */
+    }
     const startX = e.clientX;
     const startW = listWidth;
-    const onMove = (ev: MouseEvent) => {
+    const onMove = (ev: PointerEvent) => {
       const w = startW + (ev.clientX - startX);
       if (w > 260 && w < 720) setListWidth(w);
     };
     const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      el.removeEventListener("pointermove", onMove);
+      el.removeEventListener("pointerup", onUp);
+      el.removeEventListener("pointercancel", onUp);
+      el.removeEventListener("lostpointercapture", onUp);
+      try {
+        if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
+      } catch {
+        /* уже отпущен */
+      }
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onUp);
+    el.addEventListener("pointercancel", onUp);
+    el.addEventListener("lostpointercapture", onUp);
   };
 
   return (
@@ -258,7 +326,13 @@ export default function App() {
             lineHeight: "52px"
           }}
         >
-          <Button type="text" icon={<MenuOutlined />} onClick={() => setCollapsed(!collapsed)} />
+          <Button
+            type="text"
+            icon={<MenuOutlined />}
+            aria-label={collapsed ? "Показать панель папок" : "Скрыть панель папок"}
+            title={collapsed ? "Показать панель папок" : "Скрыть панель папок"}
+            onClick={() => setCollapsed(!collapsed)}
+          />
           {section !== "mail" && (
             <Typography.Text strong style={{ marginRight: 8, whiteSpace: "nowrap" }}>
               {section === "journal"
@@ -321,7 +395,14 @@ export default function App() {
           )}
           <div style={{ flex: 1 }} />
           <CurrentUser />
-          <Button type="text" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
+          <Tooltip title="Настройки">
+            <Button
+              type="text"
+              icon={<SettingOutlined />}
+              aria-label="Настройки"
+              onClick={() => setSettingsOpen(true)}
+            />
+          </Tooltip>
         </Header>
         {docflowUnavailable ? (
           <Alert
@@ -349,7 +430,13 @@ export default function App() {
               <BulkBar />
               <EmailList />
             </div>
-            <div onMouseDown={startResize} style={{ width: 4, cursor: "col-resize", background: "#f0f0f0", flexShrink: 0 }} />
+            <div
+              onPointerDown={startResize}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Изменить ширину списка писем"
+              style={{ width: 4, cursor: "col-resize", background: "#f0f0f0", flexShrink: 0 }}
+            />
             <div style={{ flex: 1, minWidth: 280, background: "#fff", overflow: "hidden", display: "flex" }}>
               <EmailViewer />
             </div>

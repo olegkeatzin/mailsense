@@ -94,7 +94,7 @@ export default function AnalysisPanel({ view }: { view: EmailView }) {
 
   return (
     <div style={{ maxWidth: 720 }}>
-      <div style={{ marginBottom: 16, fontSize: 12, color: "#888" }}>
+      <div style={{ marginBottom: 16, fontSize: 12, color: "#595959" }}>
         Модель: {a.modelUsed || "—"} · обновлено {formatDate(a.updatedAt)}
       </div>
 

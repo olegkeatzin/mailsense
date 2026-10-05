@@ -136,7 +136,7 @@ export function UsersTab() {
         <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>
           Добавить
         </Button>
-        <Button icon={<ReloadOutlined />} onClick={() => void load()} />
+        <Button icon={<ReloadOutlined />} aria-label="Обновить список пользователей" title="Обновить" onClick={() => void load()} />
       </Space>
 
       <Table<User>

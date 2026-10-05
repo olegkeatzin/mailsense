@@ -63,7 +63,7 @@ function AttachmentItem({ view, a }: { view: EmailView; a: Attachment }) {
                       wordBreak: "break-word"
                     }}
                   >
-                    <span style={{ fontWeight: 600, color: "#1677ff" }}>Описание ИИ: </span>
+                    <span style={{ fontWeight: 600, color: "#0958d9" }}>Описание ИИ: </span>
                     {a.aiDescription}
                   </div>
                 ) : null}
@@ -255,7 +255,7 @@ export default function EmailViewer() {
 
   if (!view) {
     return (
-      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#999" }}>
+      <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#595959" }}>
         Выберите письмо
       </div>
     );

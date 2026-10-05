@@ -166,7 +166,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
         {isConfirm ? "Ответы руководителя — подтверждение" : "На утверждении"}
       </Typography.Title>
       {isConfirm ? (
-        <div style={{ color: "#888", fontSize: 12, marginBottom: 8 }}>
+        <div style={{ color: "#595959", fontSize: 12, marginBottom: 8 }}>
           Руководитель ответил письмом. Система нашла ответ в переписке и определила подписавшего
           по адресу отправителя, но утвердить его
           автоматически не может: проверьте формулировку и подтвердите — только после этого
@@ -199,7 +199,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                   </Space>
                 }
               >
-                <div style={{ fontSize: 12, color: "#888", marginBottom: 8 }}>
+                <div style={{ fontSize: 12, color: "#595959", marginBottom: 8 }}>
                   Подготовил: {r.preparedByName || "—"}
                   {r.sourceKind === "forwarded" ? " · письмо направлено руководителю" : ""}
                 </div>
@@ -258,7 +258,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                     <div style={{ marginBottom: 4 }}>
                       <b>Ответственный</b>
                       <Tooltip title="Если не выбран, все исполнители равны.">
-                        <span style={{ color: "#999", marginLeft: 4, cursor: "help" }}>?</span>
+                        <span style={{ color: "#595959", marginLeft: 4, cursor: "help" }}>?</span>
                       </Tooltip>
                     </div>
                     <Select
@@ -309,7 +309,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                   )}
                   <Button loading={busyId === r.id} onClick={() => reject(r.id)}>Вернуть на доработку</Button>
                   <Tooltip title="Отправляет исполнителям аппарат — после утверждения.">
-                    <span style={{ color: "#999", fontSize: 12 }}>отправка — на стороне аппарата</span>
+                    <span style={{ color: "#595959", fontSize: 12 }}>отправка — на стороне аппарата</span>
                   </Tooltip>
                 </Space>
               </Card>

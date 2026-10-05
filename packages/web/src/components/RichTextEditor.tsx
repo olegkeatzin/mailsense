@@ -18,13 +18,15 @@ import Placeholder from "@tiptap/extension-placeholder";
 
 export const EDITOR_CSS = `
 .mailsense-editor { min-height: 200px; max-height: 420px; overflow: auto; padding: 12px; outline: none; }
-.mailsense-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; pointer-events: none; color: #bfbfbf; }
+/* outline: none убирает рамку фокуса — возвращаем её видимой альтернативой (клавиатура). */
+.mailsense-editor:focus-visible { outline: 2px solid #0958d9; outline-offset: -2px; }
+.mailsense-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; pointer-events: none; color: #767676; }
 .mailsense-editor p { margin: 0 0 8px; }
 .mailsense-editor ul, .mailsense-editor ol { padding-left: 22px; margin: 0 0 8px; }
 .mailsense-editor blockquote { border-left: 2px solid #d0d0d0; margin: 8px 0; padding-left: 10px; color: #555; }
-.mailsense-editor a { color: #1677ff; text-decoration: underline; }
+.mailsense-editor a { color: #0958d9; text-decoration: underline; }
 .mailsense-editor .mailsense-signature { color: #555; }
-.mailsense-editor .mailsense-attribution { color: #777; font-size: 12px; }
+.mailsense-editor .mailsense-attribution { color: #595959; font-size: 12px; }
 `;
 
 let cssInjected = false;

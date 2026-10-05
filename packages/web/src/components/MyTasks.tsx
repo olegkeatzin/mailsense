@@ -62,7 +62,17 @@ export function MyTasks() {
       title: "Документ",
       dataIndex: "documentNumber",
       width: 110,
-      render: (v: string, r) => <a onClick={() => message.info(r.documentSummary || "Без описания")}>{v || "—"}</a>
+      // Кнопка, а не <a> без href: ссылка без адреса не берёт фокус и не нажимается с клавиатуры.
+      render: (v: string, r) => (
+        <Button
+          type="link"
+          size="small"
+          style={{ padding: 0, height: "auto" }}
+          onClick={() => message.info(r.documentSummary || "Без описания")}
+        >
+          {v || "—"}
+        </Button>
+      )
     },
     {
       title: "",
@@ -75,7 +85,7 @@ export function MyTasks() {
             Письмо
           </Button>
         ) : (
-          <span style={{ color: "#bbb", fontSize: 12 }}>бумажный</span>
+          <span style={{ color: "#767676", fontSize: 12 }}>бумажный</span>
         )
     },
     {
@@ -103,7 +113,7 @@ export function MyTasks() {
       dataIndex: "deadline",
       width: 170,
       render: (_v, r) => {
-        if (!r.deadline) return <span style={{ color: "#999" }}>не указан</span>;
+        if (!r.deadline) return <span style={{ color: "#595959" }}>не указан</span>;
         const label = dayjs(r.deadline).format("DD.MM.YYYY");
         if (r.overdue) {
           return (
@@ -141,7 +151,7 @@ export function MyTasks() {
             В календарь
           </Button>
         ) : (
-          <span style={{ color: "#bbb", fontSize: 12 }}>нет срока</span>
+          <span style={{ color: "#767676", fontSize: 12 }}>нет срока</span>
         )
     },
     {
@@ -217,13 +227,13 @@ export function MyTasks() {
           onChange={(e) => setReportText(e.target.value)}
           placeholder="Что сделано и с каким результатом"
         />
-        <div style={{ color: "#999", fontSize: 12, marginTop: 8 }}>
+        <div style={{ color: "#595959", fontSize: 12, marginTop: 8 }}>
           Отчёт увидят аппарат и руководитель. Когда отчитается ответственный, поручение закроется.
         </div>
       </Modal>
 
-      <div style={{ marginTop: 12, fontSize: 12, color: "#999" }}>
-        Отчёт об исполнении появится на следующем этапе. Пока о результате сообщайте аппарату письмом.
+      <div style={{ marginTop: 12, fontSize: 12, color: "#595959" }}>
+        Отчёт по задаче сдаётся кнопкой «Отчитаться»: его увидят аппарат и руководитель.
       </div>
     </div>
   );

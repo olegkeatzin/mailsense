@@ -4,6 +4,7 @@ import { DownloadOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/ic
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { api } from "../api";
+import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { AuditEntry } from "../types";
 
 /**
@@ -71,6 +72,8 @@ export default function AuditTab() {
   const [action, setAction] = useState("");
   const [entityType, setEntityType] = useState("");
   const [entityId, setEntityId] = useState("");
+  // Идентификатор объекта вводят руками: запрос ждёт паузы, а не идёт на каждую букву.
+  const entityIdDebounced = useDebouncedValue(entityId, 300);
   const [range, setRange] = useState<[string, string]>(["", ""]);
 
   const load = useCallback(async () => {
@@ -79,7 +82,7 @@ export default function AuditTab() {
       const res = await api.audit({
         action: action || undefined,
         entityType: entityType || undefined,
-        entityId: entityId.trim() || undefined,
+        entityId: entityIdDebounced.trim() || undefined,
         dateFrom: range[0] || undefined,
         dateTo: range[1] || undefined,
         limit: 300
@@ -91,7 +94,7 @@ export default function AuditTab() {
     } finally {
       setLoading(false);
     }
-  }, [action, entityType, entityId, range]);
+  }, [action, entityType, entityIdDebounced, range]);
 
   useEffect(() => {
     void load();
@@ -108,7 +111,7 @@ export default function AuditTab() {
       title: "Кто",
       dataIndex: "userName",
       width: 180,
-      render: (v: string) => v || <span style={{ color: "#bbb" }}>система</span>
+      render: (v: string) => v || <span style={{ color: "#767676" }}>система</span>
     },
     {
       title: "Действие",
@@ -126,7 +129,7 @@ export default function AuditTab() {
         const d = diffText(r);
         if (d) return <span style={{ fontSize: 12 }}>{d}</span>;
         if (r.newValue) return <span style={{ fontSize: 12, color: "#555" }}>{r.newValue.slice(0, 200)}</span>;
-        return <span style={{ color: "#bbb" }}>—</span>;
+        return <span style={{ color: "#767676" }}>—</span>;
       }
     }
   ];
@@ -140,6 +143,7 @@ export default function AuditTab() {
           allowClear
           prefix={<SearchOutlined />}
           placeholder="Идентификатор объекта"
+          aria-label="Идентификатор объекта в аудите"
           style={{ width: 260 }}
           value={entityId}
           onChange={(e) => setEntityId(e.target.value)}
@@ -169,7 +173,7 @@ export default function AuditTab() {
         </Button>
       </Space>
 
-      <div style={{ color: "#888", fontSize: 12 }}>
+      <div style={{ color: "#595959", fontSize: 12 }}>
         Всего записей: {total}. Журнал аудита только дополняется: изменить или удалить запись нельзя.
       </div>
 

@@ -203,7 +203,7 @@ export function ResolutionModal(props: {
           <div style={{ marginBottom: 4 }}>
             <b>Ответственный</b>
             <Tooltip title="Если не выбран, все исполнители равны: задача закрывается, когда отчитались все.">
-              <span style={{ color: "#999", marginLeft: 4, cursor: "help" }}>?</span>
+              <span style={{ color: "#595959", marginLeft: 4, cursor: "help" }}>?</span>
             </Tooltip>
           </div>
           <Select
@@ -225,7 +225,7 @@ export function ResolutionModal(props: {
           <div style={{ marginBottom: 4 }}>
             <b>Срок</b>
             <Tooltip title="Срок вписывает человек: модель его не назначает (Р7).">
-              <span style={{ color: "#999", marginLeft: 4, cursor: "help" }}>?</span>
+              <span style={{ color: "#595959", marginLeft: 4, cursor: "help" }}>?</span>
             </Tooltip>
           </div>
           <Space>

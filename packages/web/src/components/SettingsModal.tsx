@@ -222,12 +222,18 @@ function AccountTab() {
                 key="fetch"
                 size="small"
                 icon={<SyncOutlined />}
-                onClick={() => void api.fetchAccount(a.id).then(() => message.success("Проверено"))}
+                onClick={() =>
+                  void api
+                    .fetchAccount(a.id)
+                    .then(() => message.success("Проверено"))
+                    // Без catch отказ уходил в консоль браузера необработанным промисом.
+                    .catch((e) => message.error("Проверка не удалась: " + (e as Error).message))
+                }
               >
                 Проверить
               </Button>,
               <Popconfirm key="del" title="Удалить аккаунт?" onConfirm={() => void delAccount(a.id)}>
-                <Button size="small" danger icon={<DeleteOutlined />} />
+                <Button size="small" danger icon={<DeleteOutlined />} aria-label={"Удалить аккаунт " + a.username} />
               </Popconfirm>
             ]}
           >
@@ -387,7 +393,10 @@ function AiTab() {
   }, [aiConfig, form]);
 
   useEffect(() => {
-    void api.promptConfig().then(setPrompts);
+    void api
+      .promptConfig()
+      .then(setPrompts)
+      .catch(() => setPrompts(null)); // промпты недоступны — не оставляем необработанный отказ
   }, []);
 
   const loadModelList = async (url: string, apiKey: string): Promise<string[]> => {
@@ -1057,6 +1066,8 @@ export default function SettingsModal() {
   const [activeTab, setActiveTab] = useState("mail");
   // Вкладки администрирования документооборот видны только тем, кто может управлять пользователями.
   const canManageUsers = can("users.manage");
+  /** Настройки сервера (ИИ, «Общие») — тоже администраторские. */
+  const canManageSettings = can("settings.manage");
 
   // Модалка не размонтирует вкладки, поэтому при каждом открытии настроек
   // пересоздаём их: иначе список шаблонов и статус каталога остаются устаревшими.
@@ -1087,10 +1098,12 @@ export default function SettingsModal() {
             : []),
           ...(can("journal.view") ? [{ key: "numbering", label: "Нумерация", children: <NumberingTab key={reloadKey} /> }] : []),
           ...(can("audit.view") ? [{ key: "audit", label: "Аудит", children: <AuditTab /> }] : []),
-          { key: "ai", label: "ИИ", children: <AiTab /> },
+          // Настройки ИИ и «Общие» закрыты правом settings.manage: у остальных ролей
+          // вкладки открывались, а запросы отвечали 403 и сыпались в консоль.
+          ...(canManageSettings ? [{ key: "ai", label: "ИИ", children: <AiTab /> }] : []),
           { key: "templates", label: "Шаблоны", children: <TemplatesTab key={reloadKey} /> },
           { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> },
-          { key: "general", label: "Общие", children: <GeneralTab /> }
+          ...(canManageSettings ? [{ key: "general", label: "Общие", children: <GeneralTab /> }] : [])
         ]}
       />
     </Modal>
