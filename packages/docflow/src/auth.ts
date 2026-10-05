@@ -30,6 +30,7 @@ import {
 } from "./repo.js";
 import type { AuthStatus, AuthUser, LoginInput, LoginResult } from "./types.js";
 import { writeAudit } from "./audit.js";
+import { checkLoginAllowed, noteLoginFailure, noteLoginSuccess } from "./loginThrottle.js";
 
 export const SESSION_COOKIE = "mailsense_sid";
 
@@ -249,10 +250,55 @@ export async function linkManager(userId: string, managerDn: string | null): Pro
   if (mgr) await updateUser(userId, { managerId: mgr.id });
 }
 
+/**
+ * Отказ по учётным данным: попытка считается счётчиком перебора и попадает в аудит.
+ *
+ * Пароль в аудит не пишется никогда — только логин, адрес и причина отказа.
+ * Ошибку записи аудита глушит сам writeAudit: отказ важнее следа.
+ */
+async function deniedCredentials(
+  loginName: string,
+  ip: string,
+  reason: string,
+  message = "Неверный логин или пароль"
+): Promise<never> {
+  const state = noteLoginFailure(loginName, ip);
+  await writeAudit({
+    userId: null,
+    userName: "",
+    action: "login_failed",
+    entityType: "user",
+    entityId: loginName,
+    newValue: { login: loginName, ip, reason, failures: state.failures }
+  });
+  throw new AuthError(message);
+}
+
 export async function login(input: LoginInput): Promise<LoginResult> {
   const loginName = (input.login ?? "").trim();
   if (!loginName) throw new AppError("Укажите логин");
   if (!input.password) throw new AppError("Укажите пароль");
+  const ip = (input.ip ?? "").trim();
+
+  // Перебор пароля останавливаем ДО каталога: иначе сам сервер становится
+  // инструментом блокировки доменных учёток (политика AD по числу попыток).
+  const gate = checkLoginAllowed(loginName, ip);
+  if (gate.blocked) {
+    const minutes = Math.max(1, Math.ceil(gate.retryAfterMs / 60000));
+    await writeAudit({
+      userId: null,
+      userName: "",
+      action: "login_blocked",
+      entityType: "user",
+      entityId: loginName,
+      newValue: { login: loginName, ip, retryAfterMs: gate.retryAfterMs, failures: gate.failures }
+    });
+    throw new AppError(
+      "Слишком много неудачных попыток входа. Повторите через " + minutes + " мин.",
+      429,
+      "too_many_attempts"
+    );
+  }
 
   let userId: string | null = null;
 
@@ -261,7 +307,7 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   if ((await isLocalLoginEnabled()) && localUser && localUser.source === "local") {
     if (localUser.blocked) throw new AuthError("Учётная запись заблокирована администратором");
     if (!verifyPassword(input.password, await getUserPasswordHash(localUser.id))) {
-      throw new AuthError();
+      await deniedCredentials(loginName, ip, "invalid_credentials");
     }
     userId = localUser.id;
   } else {
@@ -280,6 +326,11 @@ export async function login(input: LoginInput): Promise<LoginResult> {
       if (err instanceof LdapError) {
         const text = ldapFailureMessage(err.kind);
         logger.warn({ login: loginName, kind: err.kind }, "Отказ входа в каталоге");
+        // Считаем только отказы по учётным данным. Недоступность контроллера домена
+        // и «каталог настроен неверно» — не перебор, за них блокировать нельзя.
+        if (err.kind === "invalid_credentials" || err.kind === "not_found") {
+          await deniedCredentials(loginName, ip, err.kind, text);
+        }
         throw new AuthError(text);
       }
       throw err;
@@ -301,6 +352,10 @@ export async function login(input: LoginInput): Promise<LoginResult> {
   }
 
   if (!userId) throw new AppError("Не удалось определить пользователя");
+
+  // Учётные данные приняты — счётчик неудач по этому логину больше не нужен.
+  // (Отказ по блокировке или отсутствию роли ниже — уже не перебор пароля.)
+  noteLoginSuccess(loginName, ip);
 
   // 3) Роль администратора выдаётся только явно перечисленным логинам
   // (MAILSENSE_ADMIN_LOGINS). Автоматического «первый вошедший — админ» нет:

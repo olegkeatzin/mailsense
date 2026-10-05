@@ -11,6 +11,7 @@ export * from "./errors.js";
 export * from "./roles.js";
 export * from "./repo.js";
 export * from "./auth.js";
+export * from "./loginThrottle.js";
 export * from "./users.js";
 export * from "./audit.js";
 export * from "./ldapStore.js";

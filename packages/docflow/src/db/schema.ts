@@ -46,6 +46,9 @@ export const users = pgTable(
   (t) => ({
     // NULL в PostgreSQL уникальны по умолчанию — локальные учётки не конфликтуют.
     uidIdx: uniqueIndex("users_ldap_uid_key_idx").on(t.ldapUidKey),
+    // Обычный индекс — для точного поиска. Уникальность адреса обеспечивает
+    // частичный индекс users_email_uniq_idx по lower(email) (миграция v6):
+    // пустой email — законное состояние, таких записей может быть много.
     emailIdx: index("users_email_idx").on(t.email),
     activeIdx: index("users_active_idx").on(t.isActive)
   })

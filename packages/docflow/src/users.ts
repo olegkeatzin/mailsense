@@ -5,6 +5,7 @@ import {
   getRole,
   getUser,
   getUserByDn,
+  getUserByEmail,
   getUserByLdapUid,
   getUserRoles,
   getUserWithRoles,
@@ -18,7 +19,7 @@ import {
 } from "./repo.js";
 import { revokeSessions } from "./auth.js";
 import { getDocflowDb } from "./db/index.js";
-import { AppError, NotFoundError } from "./errors.js";
+import { AppError, NotFoundError, isUniqueViolation } from "./errors.js";
 import type { AuthUser, User, UserWithRoles } from "./types.js";
 
 export { listUsersWithRoles, getUserWithRoles, listRoles };
@@ -29,14 +30,31 @@ function actorName(actor: AuthUser | null): string {
 }
 
 /**
+ * Конфликт email на уровне базы — понятным текстом.
+ *
+ * Проверка «нет ли такого адреса» в коде гонку не закрывает: два одновременных
+ * запроса проходят её оба. Конфликт ловит уникальный индекс (users_email_uniq_idx),
+ * а наружу он должен уходить тем же текстом, что и обычная проверка.
+ */
+function duplicateEmailError(err: unknown, email: string): unknown {
+  return isUniqueViolation(err)
+    ? new AppError("Пользователь с таким email уже есть: " + email, 409, "duplicate_email")
+    : err;
+}
+
+/**
  * Администраторы, которые реально могут войти (не заблокированы).
  *
  * ⚠️ ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ (не баг этой правки, разбирается отдельной задачей):
  * проверки «останется хотя бы один администратор» читают это число ВНЕ транзакции
  * изменения. Два одновременных снятия прав у двух последних администраторов могут
  * оба увидеть «администраторов двое» и пройти — система останется без администратора.
- * Лечится блокировкой строк администраторов (или advisory-локом) внутри транзакции;
- * сознательно не сделано сейчас, чтобы не менять правила выдачи прав без решения.
+ * Лечится так: внутри той же транзакции взять advisory-лок «смена администраторов»
+ * (pg_advisory_xact_lock), затем применить изменение и пересчитать администраторов,
+ * откатив транзакцию при нуле. Строки пользователей блокировать нельзя: полная
+ * синхронизация справочника держит их пачкой в своей транзакции, и разный порядок
+ * блокировок дал бы взаимную блокировку. Сознательно не сделано в этой задаче:
+ * это меняет правила выдачи прав, нужно отдельное решение (см. task-5, п. 7).
  */
 async function countAdmins(): Promise<number> {
   const admins = await listUsersWithRoles({ roleId: "admin", includeInactive: true });
@@ -149,9 +167,11 @@ export interface ManualUserInput {
 export async function createManualUser(input: ManualUserInput, actor: AuthUser | null): Promise<UserWithRoles> {
   const email = (input.email ?? "").trim();
   if (!email) throw new AppError("Укажите email");
-  const all = await listUsersWithRoles({ includeInactive: true });
-  if (all.some((u) => u.email.toLowerCase() === email.toLowerCase())) {
-    throw new AppError("Пользователь с таким email уже есть");
+  // Точечная проверка ради понятного текста; окончательную гарантию даёт уникальный
+  // индекс users_email_uniq_idx — две одновременные заявки проходят проверку обе,
+  // и конфликт ловит база (см. обработку ниже).
+  if (await getUserByEmail(email)) {
+    throw new AppError("Пользователь с таким email уже есть: " + email, 409, "duplicate_email");
   }
 
   const roles: string[] = [];
@@ -161,34 +181,39 @@ export async function createManualUser(input: ManualUserInput, actor: AuthUser |
 
   // Учётка, её роли и след создаются одной транзакцией: «пользователь есть,
   // а кто его завёл — неизвестно» недопустимо.
-  return getDocflowDb().transaction(async (tx) => {
-    const u = await insertUser(
-      {
-        email,
-        fullName: (input.fullName ?? "").trim() || email,
-        department: (input.department ?? "").trim(),
-        position: (input.position ?? "").trim(),
-        phone: (input.phone ?? "").trim(),
-        source: "manual",
-        isActive: true,
-        passwordHash: null
-      },
-      tx
-    );
-    if (roles.length) await setUserRoles(u.id, roles, actor?.id ?? null, tx);
-    await insertAudit(
-      {
-        userId: actor?.id ?? null,
-        userName: actorName(actor),
-        action: "user.create",
-        entityType: "user",
-        entityId: u.id,
-        newValue: { email, fullName: u.fullName, roles }
-      },
-      tx
-    );
-    return { ...u, roles };
-  });
+  try {
+    return await getDocflowDb().transaction(async (tx) => {
+      const u = await insertUser(
+        {
+          email,
+          fullName: (input.fullName ?? "").trim() || email,
+          department: (input.department ?? "").trim(),
+          position: (input.position ?? "").trim(),
+          phone: (input.phone ?? "").trim(),
+          source: "manual",
+          isActive: true,
+          passwordHash: null
+        },
+        tx
+      );
+      if (roles.length) await setUserRoles(u.id, roles, actor?.id ?? null, tx);
+      await insertAudit(
+        {
+          userId: actor?.id ?? null,
+          userName: actorName(actor),
+          action: "user.create",
+          entityType: "user",
+          entityId: u.id,
+          newValue: { email, fullName: u.fullName, roles }
+        },
+        tx
+      );
+      return { ...u, roles };
+    });
+  } catch (err) {
+    // Гонка двух одновременных заявок: проверка выше обе прошла, конфликт поймала база.
+    throw duplicateEmailError(err, email);
+  }
 }
 
 export async function updateManualUser(
@@ -198,30 +223,47 @@ export async function updateManualUser(
 ): Promise<User> {
   const user = await getUser(userId);
   if (!user) throw new NotFoundError("Пользователь не найден");
+
+  // Email правится только на свободный: иначе в справочнике появился бы второй
+  // человек с тем же адресом (адрес — ключ, по которому ищут учётку).
+  const nextEmail = patch.email !== undefined ? (patch.email ?? "").trim() : undefined;
+  const effective = nextEmail === undefined ? patch : { ...patch, email: nextEmail };
+  if (nextEmail) {
+    const owner = await getUserByEmail(nextEmail);
+    if (owner && owner.id !== userId) {
+      throw new AppError("Пользователь с таким email уже есть: " + nextEmail, 409, "duplicate_email");
+    }
+  }
+
   const before = { ...user };
   // Правка и след — одна транзакция.
-  return getDocflowDb().transaction(async (tx) => {
-    const updated = (await updateUser(userId, patch, tx))!;
-    await insertAudit(
-      {
-        userId: actor?.id ?? null,
-        userName: actorName(actor),
-        action: "user.update",
-        entityType: "user",
-        entityId: userId,
-        oldValue: {
-          fullName: before.fullName,
-          department: before.department,
-          position: before.position,
-          phone: before.phone,
-          email: before.email
+  try {
+    return await getDocflowDb().transaction(async (tx) => {
+      const updated = (await updateUser(userId, effective, tx))!;
+      await insertAudit(
+        {
+          userId: actor?.id ?? null,
+          userName: actorName(actor),
+          action: "user.update",
+          entityType: "user",
+          entityId: userId,
+          oldValue: {
+            fullName: before.fullName,
+            department: before.department,
+            position: before.position,
+            phone: before.phone,
+            email: before.email
+          },
+          newValue: effective
         },
-        newValue: patch
-      },
-      tx
-    );
-    return updated;
-  });
+        tx
+      );
+      return updated;
+    });
+  } catch (err) {
+    // Гонка: проверка выше прошла, конфликт с уникальным индексом поймала база.
+    throw duplicateEmailError(err, nextEmail ?? "");
+  }
 }
 
 export interface SyncResult {

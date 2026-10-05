@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { getDocflowDb, type DocflowDb } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
 import type {
@@ -236,10 +236,10 @@ export async function getUserRoles(userId: string, exec?: DocflowExecutor): Prom
 }
 
 /** Роли сразу для набора пользователей — чтобы не делать N запросов в списке. */
-export async function rolesForUsers(userIds: string[]): Promise<Map<string, string[]>> {
+export async function rolesForUsers(userIds: string[], exec?: DocflowExecutor): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
   if (!userIds.length) return map;
-  const rows = await getDocflowDb()
+  const rows = await executor(exec)
     .select({ userId: userRoles.userId, roleId: userRoles.roleId })
     .from(userRoles)
     .where(inArray(userRoles.userId, userIds));
@@ -297,36 +297,56 @@ export interface ListUsersOptions {
   limit?: number;
 }
 
+/**
+ * Справочник пользователей с ролями.
+ *
+ * Фильтры и limit выполняет СУБД. Прежняя версия вытаскивала всю таблицу users
+ * в память, фильтровала и «пагинировала» в JS: на справочнике в тысячи человек
+ * каждый вызов /api/users (и каждая проверка hasAdmin) стоил полной выборки,
+ * а limit не уменьшал ни одной строки в памяти.
+ */
 export async function listUsersWithRoles(
   opts: ListUsersOptions = {},
   exec?: DocflowExecutor
 ): Promise<UserWithRoles[]> {
+  const db = executor(exec);
   const conditions = [];
-  if (!opts.includeInactive) conditions.push(eq(users.isActive, true));
-  const base = executor(exec).select().from(users);
-  const rows = await (conditions.length ? base.where(and(...conditions)) : base).orderBy(
-    asc(users.fullName),
-    asc(users.email)
-  );
 
-  let list = rows.map(mapUser);
-  if (opts.q) {
-    const q = opts.q.toLowerCase();
-    list = list.filter(
-      (u) =>
-        u.fullName.toLowerCase().includes(q) ||
-        u.email.toLowerCase().includes(q) ||
-        (u.ldapUid ?? "").toLowerCase().includes(q) ||
-        u.department.toLowerCase().includes(q) ||
-        u.position.toLowerCase().includes(q)
+  if (!opts.includeInactive) conditions.push(eq(users.isActive, true));
+
+  if (opts.roleId) {
+    // Подзапрос, а не join: пользователь с ролью должен вернуться ровно один раз.
+    conditions.push(
+      inArray(
+        users.id,
+        db.select({ id: userRoles.userId }).from(userRoles).where(eq(userRoles.roleId, opts.roleId))
+      )
     );
   }
 
-  const roleMap = await rolesForUsers(list.map((u) => u.id));
-  let result: UserWithRoles[] = list.map((u) => ({ ...u, roles: roleMap.get(u.id) ?? [] }));
-  if (opts.roleId) result = result.filter((u) => u.roles.includes(opts.roleId!));
-  if (opts.limit && opts.limit > 0) result = result.slice(0, opts.limit);
-  return result;
+  const q = (opts.q ?? "").trim();
+  if (q) {
+    // % и _ — символы поиска, а не шаблоны: иначе запрос «%» показал бы весь справочник.
+    const like = "%" + q.replace(/[\\%_]/g, (ch) => "\\" + ch) + "%";
+    conditions.push(
+      or(
+        ilike(users.fullName, like),
+        ilike(users.email, like),
+        ilike(users.ldapUid, like),
+        ilike(users.department, like),
+        ilike(users.position, like)
+      )
+    );
+  }
+
+  const base = db.select().from(users);
+  const filtered = conditions.length ? base.where(and(...conditions)) : base;
+  const ordered = filtered.orderBy(asc(users.fullName), asc(users.email));
+  const rows = opts.limit && opts.limit > 0 ? await ordered.limit(opts.limit) : await ordered;
+
+  const list = rows.map(mapUser);
+  const roleMap = await rolesForUsers(list.map((u) => u.id), exec);
+  return list.map((u) => ({ ...u, roles: roleMap.get(u.id) ?? [] }));
 }
 
 export async function getUserWithRoles(id: string): Promise<UserWithRoles | null> {

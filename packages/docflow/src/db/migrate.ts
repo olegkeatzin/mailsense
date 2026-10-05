@@ -328,8 +328,38 @@ ON CONFLICT (id) DO NOTHING;`
 -- Отчёт НЕ применяется автоматически: ложное закрытие поручения хуже пропущенного отчёта.
 -- Модель заполняет предложение, аппарат проверяет и подтверждает — тогда report_at
 -- проставляется и срабатывает правило закрытия (Р10).
-ALTER TABLE resolution_assignees ADD COLUMN report_summary TEXT;
-ALTER TABLE resolution_assignees ADD COLUMN report_proposed_at TEXT;`
+--
+-- ⚠️ IF NOT EXISTS обязателен: колонки могли появиться раньше самой миграции (руками
+-- или прерванным прогоном), и тогда обычный ADD COLUMN падал бы и останавливал старт.
+ALTER TABLE resolution_assignees ADD COLUMN IF NOT EXISTS report_summary TEXT;
+ALTER TABLE resolution_assignees ADD COLUMN IF NOT EXISTS report_proposed_at TEXT;`
+  },
+  {
+    // Номер сверен с docflow_migrations ЖИВОЙ базы (mailsense): там 1..5, значит свободен 6.
+    version: 6,
+    name: "unique_user_email",
+    sql: `-- Один и тот же адрес не может принадлежать двум учётным записям: дубль в
+-- справочнике означает, что письмо и поручение уходят не тому человеку.
+--
+-- Индекс ЧАСТИЧНЫЙ: пустой адрес — законное состояние (аварийная локальная учётка
+-- без адреса в каталоге), и таких записей может быть сколько угодно.
+-- Сравнение по lower(email): приложение ищет адрес без учёта регистра
+-- (getUserByEmail), поэтому «Ivanov@x.ru» и «ivanov@x.ru» — один человек.
+--
+-- Если дубли уже есть, миграция обязана объяснить это словами: молча удалять
+-- учётки нельзя, а «could not create unique index» ничего не говорит администратору.
+DO $$
+DECLARE dup TEXT;
+BEGIN
+  SELECT string_agg(e || ' x' || n, ', ') INTO dup FROM (
+    SELECT lower(email) AS e, count(*) AS n FROM users
+    WHERE email <> '' GROUP BY lower(email) HAVING count(*) > 1
+  ) d;
+  IF dup IS NOT NULL THEN
+    RAISE EXCEPTION 'Нельзя включить уникальность email: дубли в справочнике — %', dup;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_uniq_idx ON users (lower(email)) WHERE email <> '';`
   }
 ];
 

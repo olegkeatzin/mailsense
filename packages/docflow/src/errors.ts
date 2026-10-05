@@ -43,3 +43,19 @@ export class NotFoundError extends AppError {
 export function isAppError(err: unknown): err is AppError {
   return err instanceof AppError;
 }
+
+/**
+ * Нарушение уникальности в PostgreSQL (SQLSTATE 23505).
+ *
+ * Нужно там, где гарантию даёт индекс, а не проверка в коде: два одновременных
+ * запроса проходят проверку оба, и конфликт ловит база. Наружу такой конфликт
+ * должен уходить понятным текстом, а не «duplicate key value violates...».
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; cur && depth < 5; depth++) {
+    if ((cur as { code?: string }).code === "23505") return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}

@@ -6,6 +6,7 @@
  * идёт по строковому email_id, потому что почта лежит в базе клиента.
  */
 import { randomUUID } from "node:crypto";
+import type { PoolClient } from "pg";
 import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
 import { getDocflowDb, getDocflowPool } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
@@ -95,8 +96,26 @@ function toRule(r: NumberingRuleRecord): NumberingRule {
   };
 }
 
-export async function listNumberingRules(): Promise<NumberingRuleRecord[]> {
-  const rows = await getDocflowDb().select().from(numberRules);
+/**
+ * Строки запроса — либо через клиента транзакции, либо через пул.
+ *
+ * Внутри ручной транзакции (registerDocument) читать через пул нельзя: это второе
+ * соединение, которое к тому же исчерпывает пул под нагрузкой (10 одновременных
+ * регистраций встают намертво, ожидая соединение у самих себя).
+ */
+async function queryRows<T extends Record<string, unknown>>(
+  client: PoolClient | undefined,
+  text: string,
+  params: unknown[] = []
+): Promise<T[]> {
+  if (client) return (await client.query<T>(text, params)).rows;
+  return (await getDocflowPool().query<T>(text, params)).rows;
+}
+
+/** Правила нумерации в виде домена: из базы плюс умолчания для отсутствующих потоков. */
+function numberingRulesFrom(
+  rows: Array<{ stream: string; prefix: string; reset: string; template: string | null }>
+): NumberingRuleRecord[] {
   const out: NumberingRuleRecord[] = rows.map((r) => ({
     stream: r.stream,
     prefix: r.prefix,
@@ -110,6 +129,14 @@ export async function listNumberingRules(): Promise<NumberingRuleRecord[]> {
     }
   }
   return out;
+}
+
+export async function listNumberingRules(): Promise<NumberingRuleRecord[]> {
+  const rows = await queryRows<{ stream: string; prefix: string; reset: string; template: string | null }>(
+    undefined,
+    "SELECT stream, prefix, reset, template FROM number_rules"
+  );
+  return numberingRulesFrom(rows);
 }
 
 export async function saveNumberingRule(rule: NumberingRuleRecord, actor: Actor): Promise<NumberingRuleRecord> {
@@ -160,14 +187,17 @@ export async function saveNumberingRule(rule: NumberingRuleRecord, actor: Actor)
 }
 
 /** Открытый период (год с документами) и годы, выгруженные в архив. */
-async function loadPeriodState(stream: string): Promise<{ openPeriod: string | null; archivedPeriods: string[] }> {
-  const db = getDocflowDb();
-  const open = await db
-    .select({ period: documents.regPeriod })
-    .from(documents)
-    .orderBy(desc(documents.regPeriod))
-    .limit(1);
-  const arch = await db.select({ period: numberArchives.period }).from(numberArchives).where(eq(numberArchives.stream, stream));
+async function loadPeriodState(
+  stream: string,
+  client?: PoolClient
+): Promise<{ openPeriod: string | null; archivedPeriods: string[] }> {
+  const open = await queryRows<{ period: string }>(
+    client,
+    "SELECT reg_period AS period FROM documents ORDER BY reg_period DESC LIMIT 1"
+  );
+  const arch = await queryRows<{ period: string }>(client, "SELECT period FROM number_archives WHERE stream = $1", [
+    stream
+  ]);
   return { openPeriod: open[0]?.period ?? null, archivedPeriods: arch.map((a) => a.period) };
 }
 
@@ -191,11 +221,6 @@ export async function getNumberingState(period?: string): Promise<NumberingState
  * DO UPDATE блокирует строку и увеличивает значение, поэтому две одновременные
  * регистрации не получат один и тот же номер.
  */
-/** Соединение внутри транзакции (pg-клиент). */
-interface TxClient {
-  query: <T = unknown>(q: string, p?: unknown[]) => Promise<{ rows: T[] }>;
-}
-
 function stringifyAudit(v: unknown): string | null {
   if (v === undefined || v === null) return null;
   if (typeof v === "string") return v;
@@ -223,7 +248,7 @@ export interface AuditTrailEntry {
  * в журнале аудита, либо нет ни того, ни другого. Иначе при сбое записи
  * аудита изменение осталось бы без следов — а искать виноватого будет нечем.
  */
-async function auditInTx(client: TxClient, e: AuditTrailEntry): Promise<void> {
+async function auditInTx(client: PoolClient, e: AuditTrailEntry): Promise<void> {
   await client.query(
     "INSERT INTO audit_log (id, user_id, user_name, action, entity_type, entity_id, old_value, new_value, created_at) " +
       "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
@@ -241,7 +266,7 @@ async function auditInTx(client: TxClient, e: AuditTrailEntry): Promise<void> {
   );
 }
 
-async function takeNextNumber(client: TxClient, stream: string, period: string): Promise<number> {
+async function takeNextNumber(client: PoolClient, stream: string, period: string): Promise<number> {
   const res = await client.query<{ last_number: number }>(
     "INSERT INTO number_counters (stream, period, last_number) VALUES ($1, $2, 1) " +
       "ON CONFLICT (stream, period) DO UPDATE SET last_number = number_counters.last_number + 1 " +
@@ -291,13 +316,19 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
   try {
     await client.query("BEGIN");
 
-    const rules = await listNumberingRules();
+    // Правила и состояние периода читаем ЭТИМ ЖЕ клиентом: второе соединение
+    // из пула означало бы чтение вне транзакции и нехватку соединений под нагрузкой.
+    const ruleRows = await queryRows<{ stream: string; prefix: string; reset: string; template: string | null }>(
+      client,
+      "SELECT stream, prefix, reset, template FROM number_rules"
+    );
+    const rules = numberingRulesFrom(ruleRows);
     const rule = ruleForStream(rules.map(toRule), "incoming");
     const regDate =
       input.regDate && /^\d{4}-\d{2}-\d{2}$/.test(input.regDate) ? input.regDate : todayIso();
     const period = periodKey(new Date(regDate + "T12:00:00"), rule.reset);
 
-    const state = await loadPeriodState("incoming");
+    const state = await loadPeriodState("incoming", client);
     const gate = canOpenPeriod(period, state);
     if (!gate.ok) throw new AppError(gate.reason ?? "Период закрыт", 409, "period_closed");
 
@@ -314,7 +345,7 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
       }
     }
 
-    const num = await takeNextNumber(client as unknown as TxClient, "incoming", period);
+    const num = await takeNextNumber(client, "incoming", period);
     const regNumber = renderNumber(rule, period, num);
     const id = randomUUID();
     const ts = now();
@@ -353,7 +384,7 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
     }
 
     // Аудит — в той же транзакции: изменение без следа невозможно.
-    await auditInTx(client as unknown as TxClient, {
+    await auditInTx(client, {
       userId: actor.id,
       userName: actor.name,
       action: "journal.register",
