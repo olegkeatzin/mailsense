@@ -1,0 +1,1054 @@
+/**
+ * Резолюции: подготовка черновика, утверждение подписантом, отправка исполнителям (этап 3).
+ *
+ * Ключевое правило: решение и диспетчеризация разведены по разным людям (Р8, Р9).
+ * Аппарат готовит и отправляет, подписант утверждает. Состояния переходят только
+ * по разрешённым путям — попытка обойти шаг возвращает понятную ошибку, а не молча
+ * создаёт поручение без подписи.
+ */
+import { randomUUID } from "node:crypto";
+import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
+import { getDocflowDb } from "./db/index.js";
+import { docflowSchema } from "./db/schema.js";
+import { AppError } from "./errors.js";
+import type {
+  ApprovalMethod,
+  ApprovalStep,
+  HistoryMethod,
+  AssigneeKind,
+  ResolutionApprovalEntry,
+  ResolutionAssignee,
+  ResolutionDetail,
+  ResolutionFilter,
+  ResolutionPage,
+  ResolutionPriority,
+  ResolutionRecord,
+  ResolutionStatus,
+  TaskItem
+} from "./types.js";
+import type { Actor } from "./journal.js";
+
+const { resolutions, resolutionAssignees, resolutionApprovals, documents, users, auditLog } = docflowSchema;
+
+const countExpr = sql.raw("count(*)::int");
+
+function now(): string {
+  return new Date().toISOString();
+}
+
+function stringify(v: unknown): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return String(v);
+  }
+}
+
+function mapResolution(row: typeof resolutions.$inferSelect): ResolutionRecord {
+  return {
+    id: row.id,
+    documentId: row.documentId,
+    text: row.text,
+    sourceText: row.sourceText,
+    sourceKind: row.sourceKind as ResolutionRecord["sourceKind"],
+    status: row.status as ResolutionStatus,
+    priority: row.priority as ResolutionPriority,
+    deadline: row.deadline,
+    preparedBy: row.preparedBy,
+    approvedBy: row.approvedBy,
+    approvedAt: row.approvedAt,
+    approvalMethod: (row.approvalMethod as ApprovalMethod | null) ?? null,
+    confirmedBy: row.confirmedBy,
+    confirmedAt: row.confirmedAt,
+    dispatchedBy: row.dispatchedBy,
+    dispatchedAt: row.dispatchedAt,
+    requestEmailId: row.requestEmailId,
+    approvalEmailId: row.approvalEmailId,
+    dispatchEmailId: row.dispatchEmailId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt
+  };
+}
+
+/** Сколько дней осталось до срока: отрицательное — просрочено. */
+export function daysLeft(deadline: string | null, today = new Date()): number | null {
+  if (!deadline) return null;
+  const d = new Date(deadline + "T23:59:59");
+  if (Number.isNaN(d.getTime())) return null;
+  const ms = d.getTime() - today.getTime();
+  return Math.ceil(ms / (24 * 60 * 60 * 1000));
+}
+
+export function isOverdue(deadline: string | null, today = new Date()): boolean {
+  const d = daysLeft(deadline, today);
+  return d !== null && d < 0;
+}
+
+/** Ожидаемые отказы: неверный шаг, нет прав на действие, пустые обязательные поля. */
+function badState(message: string): AppError {
+  return new AppError(message, 409, "bad_state");
+}
+
+// ---------------- Чтение ----------------
+
+/**
+ * Резолюции, ждущие ответа руководителя по пересланному письму.
+ *
+ * Возвращаем вместе с `requestEmailId`: по нему вызывающий код найдёт письмо в почтовой
+ * базе и получит его Message-ID. Сопоставление делает `matchReplies` — здесь только выборка.
+ */
+export async function listAwaitingReplies(): Promise<
+  Array<{ resolutionId: string; requestEmailId: string }>
+> {
+  const rows = await getDocflowDb()
+    .select({ id: resolutions.id, requestEmailId: resolutions.requestEmailId })
+    .from(resolutions)
+    .where(and(eq(resolutions.status, "pending_approval"), eq(resolutions.sourceKind, "forwarded")));
+  return rows
+    .filter((r) => !!r.requestEmailId)
+    .map((r) => ({ resolutionId: r.id, requestEmailId: r.requestEmailId as string }));
+}
+
+export async function getResolution(id: string): Promise<ResolutionRecord | null> {
+  const rows = await getDocflowDb().select().from(resolutions).where(eq(resolutions.id, id)).limit(1);
+  return rows[0] ? mapResolution(rows[0]) : null;
+}
+
+export async function listResolutionAssignees(resolutionId: string): Promise<ResolutionAssignee[]> {
+  const rows = await getDocflowDb()
+    .select({ a: resolutionAssignees, fullName: users.fullName, email: users.email })
+    .from(resolutionAssignees)
+    .leftJoin(users, eq(users.id, resolutionAssignees.userId))
+    .where(eq(resolutionAssignees.resolutionId, resolutionId));
+  return rows
+    .map((r) => ({
+      userId: r.a.userId,
+      fullName: r.fullName ?? "",
+      email: r.email ?? "",
+      kind: r.a.kind as AssigneeKind,
+      receivedAt: r.a.receivedAt,
+      reportText: r.a.reportText,
+      reportAt: r.a.reportAt
+    }))
+    // Ответственный — первым: с него спрос.
+    .sort((a, b) => (a.kind === b.kind ? a.fullName.localeCompare(b.fullName, "ru") : a.kind === "responsible" ? -1 : 1));
+}
+
+export async function listResolutionHistory(resolutionId: string): Promise<ResolutionApprovalEntry[]> {
+  const rows = await getDocflowDb()
+    .select()
+    .from(resolutionApprovals)
+    .where(eq(resolutionApprovals.resolutionId, resolutionId))
+    .orderBy(asc(resolutionApprovals.createdAt));
+  return rows.map((r) => ({
+    id: r.id,
+    step: r.step as ApprovalStep,
+    actorId: r.actorId,
+    actorName: r.actorName,
+    method: (r.method as HistoryMethod | null) ?? null,
+    comment: r.comment,
+    emailId: r.emailId,
+    createdAt: r.createdAt
+  }));
+}
+
+/** Резолюция со всем, что нужно экрану: исполнители, история, документ, ФИО участников. */
+export async function getResolutionDetail(id: string): Promise<ResolutionDetail | null> {
+  const rec = await getResolution(id);
+  if (!rec) return null;
+  const db = getDocflowDb();
+
+  const doc = (await db.select().from(documents).where(eq(documents.id, rec.documentId)).limit(1))[0];
+  const ids = [rec.preparedBy, rec.approvedBy, rec.confirmedBy, rec.dispatchedBy].filter(Boolean) as string[];
+  const names = ids.length
+    ? await db.select({ id: users.id, fullName: users.fullName }).from(users).where(inArray(users.id, ids))
+    : [];
+  const nameOf = (uid: string | null): string => names.find((n) => n.id === uid)?.fullName ?? "";
+
+  return {
+    ...rec,
+    assignees: await listResolutionAssignees(id),
+    history: await listResolutionHistory(id),
+    documentNumber: doc?.regNumber ?? "",
+    documentSummary: doc?.summary ?? doc?.documentName ?? "",
+    documentEmailId: doc?.emailId ?? null,
+    preparedByName: nameOf(rec.preparedBy),
+    approvedByName: nameOf(rec.approvedBy),
+    dispatchedByName: nameOf(rec.dispatchedBy),
+    confirmedByName: nameOf(rec.confirmedBy)
+  };
+}
+// ---------------- Переходы состояний ----------------
+
+/**
+ * Общая часть любого перехода: меняем состояние, пишем шаг в историю и след в аудит —
+ * всё в одной транзакции. Иначе «кто утвердил» могло потеряться, а это главный вопрос
+ * при разборе ошибки.
+ */
+async function applyTransition(
+  id: string,
+  actor: Actor,
+  opts: {
+    from: ResolutionStatus[];
+    to: ResolutionStatus;
+    patch?: Record<string, unknown>;
+    step: ApprovalStep;
+    method?: HistoryMethod | null;
+    comment?: string | null;
+    emailId?: string | null;
+    action: string;
+  }
+): Promise<ResolutionRecord> {
+  const db = getDocflowDb();
+  return db.transaction(async (tx) => {
+    const rows = await tx.select().from(resolutions).where(eq(resolutions.id, id)).limit(1);
+    const current = rows[0];
+    if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+    if (!opts.from.includes(current.status as ResolutionStatus)) {
+      throw badState(
+        "Действие невозможно: резолюция в состоянии «" + current.status + "», ожидалось " + opts.from.join(" или ")
+      );
+    }
+
+    const ts = now();
+    await tx
+      .update(resolutions)
+      .set({ status: opts.to, updatedAt: ts, ...(opts.patch ?? {}) })
+      .where(eq(resolutions.id, id));
+
+    await tx.insert(resolutionApprovals).values({
+      id: randomUUID(),
+      resolutionId: id,
+      step: opts.step,
+      actorId: actor.id,
+      actorName: actor.name,
+      method: opts.method ?? null,
+      comment: opts.comment ?? null,
+      emailId: opts.emailId ?? null,
+      createdAt: ts
+    });
+
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: opts.action,
+      entityType: "resolution",
+      entityId: id,
+      oldValue: stringify({ status: current.status }),
+      newValue: stringify({ status: opts.to, ...(opts.patch ?? {}), comment: opts.comment ?? null }),
+      createdAt: ts
+    });
+
+    const after = await tx.select().from(resolutions).where(eq(resolutions.id, id)).limit(1);
+    return mapResolution(after[0]);
+  });
+}
+
+export interface AssigneeInput {
+  userId: string;
+  kind?: AssigneeKind;
+}
+
+/**
+ * Проверяет список исполнителей: хотя бы один, все существуют, ответственный не дублируется.
+ * Уникальность ответственного дополнительно гарантирует частичный индекс в БД.
+ */
+async function validateAssignees(list: AssigneeInput[]): Promise<void> {
+  if (!list.length) throw new AppError("Укажите хотя бы одного исполнителя", 400, "no_assignees");
+  const ids = list.map((a) => a.userId);
+  if (new Set(ids).size !== ids.length) throw new AppError("Исполнители повторяются", 400, "duplicate_assignee");
+  if (list.filter((a) => a.kind === "responsible").length > 1) {
+    throw new AppError("Ответственный может быть только один", 400, "many_responsible");
+  }
+  const found = await getDocflowDb().select({ id: users.id }).from(users).where(inArray(users.id, ids));
+  const known = new Set(found.map((f) => f.id));
+  const missing = ids.filter((id) => !known.has(id));
+  if (missing.length) throw new AppError("Исполнитель не найден в справочнике: " + missing.join(", "), 400, "unknown_assignee");
+}
+
+export interface CreateResolutionInput {
+  documentId: string;
+  text: string;
+  /** Исходный текст до правок: что предложил ИИ или что написал подписант. */
+  sourceText?: string;
+  sourceKind?: "manual" | "ai" | "email" | "forwarded";
+  priority?: ResolutionPriority;
+  deadline?: string | null;
+  assignees: AssigneeInput[];
+}
+
+/** Создаёт черновик резолюции по документу. Отправка — отдельным шагом. */
+export async function createResolution(input: CreateResolutionInput, actor: Actor): Promise<ResolutionRecord> {
+  const text = (input.text ?? "").trim();
+  if (!text) throw new AppError("Текст резолюции пуст", 400, "empty_text");
+  const doc = await getDocflowDb().select({ id: documents.id }).from(documents).where(eq(documents.id, input.documentId)).limit(1);
+  if (!doc[0]) throw new AppError("Документ не найден", 404, "not_found");
+  await validateAssignees(input.assignees);
+
+  const db = getDocflowDb();
+  const id = randomUUID();
+  const ts = now();
+  await db.transaction(async (tx) => {
+    await tx.insert(resolutions).values({
+      id,
+      documentId: input.documentId,
+      text,
+      sourceText: input.sourceText ?? "",
+      sourceKind: input.sourceKind ?? "manual",
+      status: "draft",
+      priority: input.priority ?? "normal",
+      deadline: input.deadline ?? null,
+      preparedBy: actor.id,
+      createdAt: ts,
+      updatedAt: ts
+    });
+    await tx.insert(resolutionAssignees).values(
+      input.assignees.map((a) => ({
+        resolutionId: id,
+        userId: a.userId,
+        // Первый по умолчанию ответственный — обычная практика (Р10),
+        // но признак можно снять: тогда все равны.
+        kind: (a.kind ?? "coexecutor") as AssigneeKind,
+        createdAt: ts
+      }))
+    );
+    await tx.insert(resolutionApprovals).values({
+      id: randomUUID(),
+      resolutionId: id,
+      step: "requested",
+      actorId: actor.id,
+      actorName: actor.name,
+      method: "manual",
+      comment: "Черновик создан",
+      createdAt: ts
+    });
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.create",
+      entityType: "resolution",
+      entityId: id,
+      newValue: stringify({ documentId: input.documentId, priority: input.priority ?? "normal", assignees: input.assignees }),
+      createdAt: ts
+    });
+  });
+  return (await getResolution(id))!;
+}
+/** Правка черновика. После утверждения текст менять нельзя — это подписанный документ. */
+export async function updateResolution(
+  id: string,
+  patch: { text?: string; priority?: ResolutionPriority; deadline?: string | null; assignees?: AssigneeInput[] },
+  actor: Actor
+): Promise<ResolutionRecord> {
+  const current = await getResolution(id);
+  if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+  if (current.status !== "draft") {
+    throw badState("Резолюция уже отправлена на утверждение — текст менять нельзя");
+  }
+  if (patch.assignees) await validateAssignees(patch.assignees);
+  if (patch.text !== undefined && !patch.text.trim()) throw new AppError("Текст резолюции пуст", 400, "empty_text");
+
+  const db = getDocflowDb();
+  const ts = now();
+  await db.transaction(async (tx) => {
+    const set: Record<string, unknown> = { updatedAt: ts };
+    if (patch.text !== undefined) set.text = patch.text.trim();
+    if (patch.priority !== undefined) set.priority = patch.priority;
+    if (patch.deadline !== undefined) set.deadline = patch.deadline;
+    await tx.update(resolutions).set(set).where(eq(resolutions.id, id));
+
+    if (patch.assignees) {
+      await tx.delete(resolutionAssignees).where(eq(resolutionAssignees.resolutionId, id));
+      await tx.insert(resolutionAssignees).values(
+        patch.assignees.map((a) => ({
+          resolutionId: id,
+          userId: a.userId,
+          kind: (a.kind ?? "coexecutor") as AssigneeKind,
+          createdAt: ts
+        }))
+      );
+    }
+
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.edit",
+      entityType: "resolution",
+      entityId: id,
+      oldValue: stringify({ text: current.text, priority: current.priority, deadline: current.deadline }),
+      newValue: stringify(patch),
+      createdAt: ts
+    });
+  });
+  return (await getResolution(id))!;
+}
+
+/** Черновик → на утверждении. Отправляет аппарат. */
+export async function requestApproval(
+  id: string,
+  actor: Actor,
+  opts: { requestEmailId?: string | null } = {}
+): Promise<ResolutionRecord> {
+  const current = await getResolution(id);
+  if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+  if (current.status !== "draft") throw badState("На утверждение отправляется только черновик");
+  if (!current.text.trim()) throw new AppError("Текст резолюции пуст", 400, "empty_text");
+  const assignees = await listResolutionAssignees(id);
+  if (!assignees.length) throw new AppError("Не указаны исполнители", 400, "no_assignees");
+
+  return applyTransition(id, actor, {
+    from: ["draft"],
+    to: "pending_approval",
+    patch: { requestEmailId: opts.requestEmailId ?? null },
+    step: "requested",
+    method: opts.requestEmailId ? "email" : "app",
+    emailId: opts.requestEmailId ?? null,
+    action: "resolution.request_approval"
+  });
+}
+
+/**
+ * Способ А: подписант утверждает в приложении. Отправка — отдельный шаг аппарата.
+ *
+ * Подписант вправе **здесь же** написать текст и назначить исполнителей: по Р8 решение
+ * принимает он, а не аппарат. Но только в момент утверждения — после текст заморожен,
+ * иначе подписанное можно было бы изменить задним числом.
+ */
+
+/**
+ * Заменяет исполнителей целиком. Отдельно от `updateResolution`, потому что вызывается
+ * и при утверждении подписантом — когда черновик ему не принадлежит.
+ */
+async function replaceAssignees(id: string, list: AssigneeInput[], actor: Actor): Promise<void> {
+  const db = getDocflowDb();
+  const ts = now();
+  const before = await listResolutionAssignees(id);
+  await db.transaction(async (tx) => {
+    await tx.delete(resolutionAssignees).where(eq(resolutionAssignees.resolutionId, id));
+    await tx.insert(resolutionAssignees).values(
+      list.map((a) => ({
+        resolutionId: id,
+        userId: a.userId,
+        kind: (a.kind ?? "coexecutor") as AssigneeKind,
+        createdAt: ts
+      }))
+    );
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.assignees",
+      entityType: "resolution",
+      entityId: id,
+      oldValue: stringify(before.map((a) => ({ userId: a.userId, kind: a.kind }))),
+      newValue: stringify(list),
+      createdAt: ts
+    });
+  });
+}
+
+/**
+ * Аппарат направляет письмо руководителю — первый шаг реального документооборота.
+ *
+ * Это НЕ «отправка на утверждение» готового черновика: резолюции ещё нет, есть только
+ * письмо. Руководитель сам решает, что поручить и кому. Поэтому запись создаётся сразу
+ * в состоянии «на утверждении», с пустым текстом и без исполнителей — их он впишет сам
+ * (в приложении) либо предложит ответом письмом, а аппарат подтвердит.
+ */
+export async function forwardToManager(
+  documentId: string,
+  actor: Actor,
+  opts: { emailId?: string | null; comment?: string | null } = {}
+): Promise<ResolutionRecord> {
+  const doc = await getDocflowDb().select({ id: documents.id }).from(documents).where(eq(documents.id, documentId)).limit(1);
+  if (!doc[0]) throw new AppError("Документ не найден", 404, "not_found");
+
+  // Повторная пересылка создала бы дубль резолюции — не даём, пока по первой нет решения.
+  const existing = await getDocflowDb()
+    .select({ id: resolutions.id, status: resolutions.status })
+    .from(resolutions)
+    .where(and(eq(resolutions.documentId, documentId), eq(resolutions.sourceKind, "forwarded")));
+  const active = existing.find((r) => r.status === "pending_approval" || r.status === "email_approval");
+  if (active) throw badState("Письмо уже направлено руководителю — ждём резолюции");
+
+  const id = randomUUID();
+  const ts = now();
+  const db = getDocflowDb();
+  await db.transaction(async (tx) => {
+    await tx.insert(resolutions).values({
+      id,
+      documentId,
+      // Текст пуст намеренно: его напишет руководитель.
+      text: "",
+      sourceText: opts.comment ?? "",
+      sourceKind: "forwarded",
+      status: "pending_approval",
+      priority: "normal",
+      deadline: null,
+      preparedBy: actor.id,
+      requestEmailId: opts.emailId ?? null,
+      createdAt: ts,
+      updatedAt: ts
+    });
+    await tx.insert(resolutionApprovals).values({
+      id: randomUUID(),
+      resolutionId: id,
+      step: "requested",
+      actorId: actor.id,
+      actorName: actor.name,
+      method: opts.emailId ? "email" : "manual",
+      emailId: opts.emailId ?? null,
+      comment: opts.comment ?? "Письмо направлено руководителю",
+      createdAt: ts
+    });
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.forward",
+      entityType: "resolution",
+      entityId: id,
+      newValue: stringify({ documentId, emailId: opts.emailId ?? null }),
+      createdAt: ts
+    });
+  });
+  return (await getResolution(id))!;
+}
+export async function approveResolution(
+  id: string,
+  actor: Actor,
+  opts: { comment?: string; text?: string; assignees?: AssigneeInput[]; priority?: ResolutionPriority; deadline?: string | null } = {}
+): Promise<ResolutionRecord> {
+  const text = opts.text !== undefined ? opts.text.trim() : undefined;
+  if (text !== undefined && !text) {
+    throw new AppError("Текст резолюции пуст", 400, "empty_text");
+  }
+  if (opts.assignees) await validateAssignees(opts.assignees);
+
+  const patch: Record<string, unknown> = { approvedBy: actor.id, approvedAt: now(), approvalMethod: "app" };
+  if (text !== undefined) patch.text = text;
+  if (opts.priority !== undefined) patch.priority = opts.priority;
+  if (opts.deadline !== undefined) patch.deadline = opts.deadline;
+
+  const result = await applyTransition(id, actor, {
+    from: ["pending_approval"],
+    to: "approved",
+    patch,
+    step: "approved",
+    method: "app",
+    comment: opts.comment ?? null,
+    action: "resolution.approve"
+  });
+
+  // Исполнителей меняем после перехода: так они попадают в тот же след аудита,
+  // но уникальность ответственного проверяется уже по новому набору.
+  if (opts.assignees) await replaceAssignees(id, opts.assignees, actor);
+  return (await getResolution(id)) ?? result;
+}
+
+/**
+ * Способ В, шаг 1: пришёл ответ подписанта письмом.
+ *
+ * Система НЕ отправляет поручение сама: разбор свободного текста не может быть
+ * основанием для официального поручения (Р9). Резолюция ждёт подтверждения аппарата,
+ * а текст ответа сохраняется отдельно — аппарат решит, брать его в резолюцию или нет.
+ */
+export async function markEmailApproval(
+  id: string,
+  input: { emailId: string; replyText: string },
+  actor: Actor
+): Promise<ResolutionRecord> {
+  return applyTransition(id, actor, {
+    from: ["pending_approval"],
+    to: "email_approval",
+    // Подписанта фиксируем СРАЗУ: он уже подписал, ждём лишь подтверждения разбора.
+    // `approvedAt` при этом пуст — утверждённым резолюция ещё не стала.
+    patch: { approvalMethod: "email", approvalEmailId: input.emailId, approvedBy: actor.id },
+    step: "approved",
+    method: "email",
+    emailId: input.emailId,
+    comment: input.replyText,
+    action: "resolution.email_approval"
+  });
+}
+
+/**
+ * Способ В, шаг 2: аппарат проверил ответ и подтверждает.
+ * Без этого шага резолюция исполнителям не уйдёт.
+ */
+export async function confirmEmailApproval(
+  id: string,
+  actor: Actor,
+  opts: {
+    approvedBy?: string | null;
+    comment?: string;
+    /** Аппарат может вписать текст и исполнителей: в письме они пришли свободным текстом. */
+    text?: string;
+    assignees?: AssigneeInput[];
+    priority?: ResolutionPriority;
+    deadline?: string | null;
+  } = {}
+): Promise<ResolutionRecord> {
+  const text = opts.text !== undefined ? opts.text.trim() : undefined;
+  if (text !== undefined && !text) throw new AppError("Текст резолюции пуст", 400, "empty_text");
+  if (opts.assignees) await validateAssignees(opts.assignees);
+
+  const current = await getResolution(id);
+  if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+
+  const patch: Record<string, unknown> = {
+    // Автор решения — подписант. Он уже записан при распознавании ответа; здесь его
+    // НЕ обнуляем (`opts.approvedBy ?? null` терял подпись, и в журнале графа
+    // «Резолюция руководства» оставалась пустой). Аппарат может указать подписанта
+    // вручную — если система не смогла определить его по адресу отправителя.
+    approvedBy: opts.approvedBy ?? current.approvedBy,
+    approvedAt: now(),
+    confirmedBy: actor.id,
+    confirmedAt: now()
+  };
+  if (text !== undefined) patch.text = text;
+  if (opts.priority !== undefined) patch.priority = opts.priority;
+  if (opts.deadline !== undefined) patch.deadline = opts.deadline;
+
+  const result = await applyTransition(id, actor, {
+    from: ["email_approval"],
+    to: "approved",
+    patch,
+    step: "confirmed",
+    method: "email",
+    comment: opts.comment ?? null,
+    action: "resolution.confirm_approval"
+  });
+  if (opts.assignees) await replaceAssignees(id, opts.assignees, actor);
+  return (await getResolution(id)) ?? result;
+}
+
+/** Вернуть на доработку: подписант не согласен либо аппарат нашёл ошибку. */
+export async function rejectResolution(id: string, actor: Actor, comment: string): Promise<ResolutionRecord> {
+  return applyTransition(id, actor, {
+    from: ["pending_approval", "email_approval"],
+    to: "draft",
+    patch: { approvedBy: null, approvedAt: null, approvalMethod: null, confirmedBy: null, confirmedAt: null },
+    step: "rejected",
+    comment,
+    action: "resolution.reject"
+  });
+}
+
+/**
+ * Утверждено → отправлено исполнителям. Всегда аппарат (Р9).
+ * Именно здесь поручение становится задачей: до этого шага исполнители его не видят.
+ */
+export async function dispatchResolution(
+  id: string,
+  actor: Actor,
+  opts: { dispatchEmailId?: string | null; comment?: string } = {}
+): Promise<ResolutionRecord> {
+  // Проверяем ПЕРЕД переходом: поручение без текста или без исполнителя — не поручение.
+  // Особенно важно для пути «письмо руководителю»: там резолюция создаётся пустой.
+  const current = await getResolution(id);
+  if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+  if (!current.text.trim()) throw new AppError("Резолюция без текста — отправлять нечего", 400, "empty_text");
+  const assignees = await listResolutionAssignees(id);
+  if (!assignees.length) throw new AppError("Не назначен ни один исполнитель", 400, "no_assignees");
+
+  return applyTransition(id, actor, {
+    from: ["approved"],
+    to: "sent",
+    patch: {
+      dispatchedBy: actor.id,
+      dispatchedAt: now(),
+      dispatchEmailId: opts.dispatchEmailId ?? null
+    },
+    step: "dispatched",
+    method: opts.dispatchEmailId ? "email" : "manual",
+    emailId: opts.dispatchEmailId ?? null,
+    comment: opts.comment ?? null,
+    action: "resolution.dispatch"
+  });
+}
+
+/** Отмена: ошибка обнаружилась до отправки. Отправленное не отменяем — это уже поручение. */
+export async function cancelResolution(id: string, actor: Actor, comment: string): Promise<ResolutionRecord> {
+  return applyTransition(id, actor, {
+    from: ["draft", "pending_approval", "email_approval", "approved"],
+    to: "cancelled",
+    step: "cancelled",
+    comment,
+    action: "resolution.cancel"
+  });
+}
+// ---------------- Списки и задачи ----------------
+
+export async function listResolutions(filter: ResolutionFilter = {}): Promise<ResolutionPage> {
+  const db = getDocflowDb();
+  const conds = [];
+  if (filter.status) conds.push(eq(resolutions.status, filter.status));
+  if (filter.documentId) conds.push(eq(resolutions.documentId, filter.documentId));
+  if (filter.assigneeId) {
+    const ids = await db
+      .select({ id: resolutionAssignees.resolutionId })
+      .from(resolutionAssignees)
+      .where(eq(resolutionAssignees.userId, filter.assigneeId));
+    const list = ids.map((r) => r.id);
+    // Пустой список — заведомо ложное условие: иначе вернулись бы все резолюции.
+    conds.push(list.length ? inArray(resolutions.id, list) : sql`false`);
+  }
+  const where = conds.length ? and(...conds) : undefined;
+  const limit = Math.min(Math.max(filter.limit ?? 50, 1), 200);
+  const offset = Math.max(filter.offset ?? 0, 0);
+
+  const rows = await db
+    .select({ id: resolutions.id })
+    .from(resolutions)
+    .where(where)
+    .orderBy(desc(resolutions.createdAt))
+    .limit(limit)
+    .offset(offset);
+  const totalRows = await db.select({ n: countExpr }).from(resolutions).where(where);
+
+  const items: ResolutionDetail[] = [];
+  for (const r of rows) {
+    const d = await getResolutionDetail(r.id);
+    if (d) items.push(d);
+  }
+  return { items, total: Number(totalRows[0]?.n ?? 0) };
+}
+
+/**
+ * «Мои задачи» исполнителя. Задачей становится только отправленная резолюция:
+ * до отправки исполнитель о ней не знает.
+ */
+export async function listMyTasks(userId: string): Promise<TaskItem[]> {
+  const db = getDocflowDb();
+  const rows = await db
+    .select({ a: resolutionAssignees, r: resolutions, doc: documents })
+    .from(resolutionAssignees)
+    .innerJoin(resolutions, eq(resolutions.id, resolutionAssignees.resolutionId))
+    .innerJoin(documents, eq(documents.id, resolutions.documentId))
+    .where(and(eq(resolutionAssignees.userId, userId), inArray(resolutions.status, ["sent", "done"])))
+    .orderBy(asc(resolutions.deadline));
+
+  return rows.map((r) => {
+    const deadline = r.r.deadline;
+    const left = daysLeft(deadline);
+    return {
+      resolutionId: r.r.id,
+      kind: r.a.kind as AssigneeKind,
+      text: r.r.text,
+      priority: r.r.priority as ResolutionPriority,
+      deadline,
+      receivedAt: r.a.receivedAt,
+      reportAt: r.a.reportAt,
+      reportText: r.a.reportText,
+      documentId: r.doc.id,
+      documentNumber: r.doc.regNumber,
+      documentSummary: r.doc.summary || r.doc.documentName,
+      // Письмо, которое исполнитель ПОЛУЧИЛ (поручение), а не входящее письмо предприятия:
+      // открывать в своей почте имеет смысл только то, что реально пришло на его адрес.
+      emailId: r.r.dispatchEmailId,
+      // Исполненная задача не бывает просроченной, даже если срок прошёл.
+      overdue: r.a.reportAt === null && isOverdue(deadline),
+      daysLeft: left
+    };
+  });
+}
+
+/**
+ * Отметка о получении документа исполнителем — «расписка» из графы 8 журнала (О6).
+ * Проставляется, когда исполнитель открыл задачу.
+ */
+export async function markTaskReceived(resolutionId: string, userId: string): Promise<void> {
+  const db = getDocflowDb();
+  const rows = await db
+    .select()
+    .from(resolutionAssignees)
+    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
+    .limit(1);
+  // Повторное открытие задачи не должно переписывать время получения:
+  // важно, когда человек получил документ впервые.
+  if (!rows[0] || rows[0].receivedAt) return;
+  await db
+    .update(resolutionAssignees)
+    .set({ receivedAt: now() })
+    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)));
+}
+
+/**
+ * Канбан руководителя (ТЗ п. 5). Колонки — состояния резолюции плюс отдельная
+ * «Просрочено»: это то, на что смотрят в первую очередь.
+ */
+export async function listBoard(): Promise<{ key: string; title: string; items: ResolutionDetail[] }[]> {
+  const page = await listResolutions({ limit: 200 });
+  const columns = [
+    { key: "pending_approval", title: "На утверждении", items: [] as ResolutionDetail[] },
+    { key: "approved", title: "Утверждено, ждёт отправки", items: [] as ResolutionDetail[] },
+    { key: "sent", title: "В работе", items: [] as ResolutionDetail[] },
+    { key: "overdue", title: "Просрочено", items: [] as ResolutionDetail[] },
+    { key: "done", title: "Выполнено", items: [] as ResolutionDetail[] }
+  ];
+  for (const item of page.items) {
+    if (item.status === "email_approval") {
+      columns[0].items.push(item);
+      continue;
+    }
+    const col = columns.find((c) => c.key === item.status);
+    if (col) col.items.push(item);
+    if (item.status === "sent" && isOverdue(item.deadline)) columns[3].items.push(item);
+  }
+  return columns;
+}
+
+
+/**
+ * Отчёт исполнителя об исполнении (этап 4).
+ *
+ * Правило закрытия — по Р10, и оно разное в зависимости от того, назначен ли ответственный:
+ *   - есть ответственный — задачу закрывает ЕГО отчёт, отчёты соисполнителей прикладываются
+ *     к тому же делу (с него спрос, и он же отвечает за результат целиком);
+ *   - ответственного нет (все равны) — задача закрывается, когда отчитались ВСЕ.
+ *
+ * Отчёт можно дополнить: исполнитель вправе уточнить формулировку. Первый отчёт не стирается —
+ * в истории остаётся, кто и когда отчитался.
+ */
+export interface ReportInput {
+  text: string;
+  /** Письмо-отчёт, если исполнитель ответил письмом, а не через приложение. */
+  emailId?: string | null;
+}
+
+export async function reportExecution(
+  resolutionId: string,
+  userId: string,
+  input: ReportInput,
+  actor: Actor
+): Promise<ResolutionRecord> {
+  const text = (input.text ?? "").trim();
+  if (!text) throw new AppError("Отчёт пуст — опишите, что сделано", 400, "empty_report");
+
+  const db = getDocflowDb();
+  const resolution = await getResolution(resolutionId);
+  if (!resolution) throw new AppError("Резолюция не найдена", 404, "not_found");
+  // Отчитаться можно только по выданному поручению: до отправки исполнитель о нём не знает,
+  // после закрытия — отчёт уже не имеет смысла (поправить может аппарат).
+  if (resolution.status !== "sent") {
+    throw badState(
+      resolution.status === "done"
+        ? "Поручение уже исполнено"
+        : "Поручение ещё не отправлено исполнителям"
+    );
+  }
+
+  const rows = await db
+    .select()
+    .from(resolutionAssignees)
+    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
+    .limit(1);
+  const mine = rows[0];
+  if (!mine) throw new AppError("Вы не исполнитель по этому поручению", 403, "not_assignee");
+
+  const ts = now();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(resolutionAssignees)
+      .set({ reportText: text, reportAt: ts, reportEmailId: input.emailId ?? null })
+      .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)));
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.report",
+      entityType: "resolution",
+      entityId: resolutionId,
+      newValue: stringify({ text, emailId: input.emailId ?? null }),
+      createdAt: ts
+    });
+  });
+
+  return applyClosingRule(resolutionId, actor);
+}
+
+/**
+ * Правило закрытия (Р10): есть ответственный — закрывает его отчёт, нет — когда отчитались все.
+ *
+ * Вынесено отдельно, потому что закрыть поручение можно двумя путями: отчётом в приложении
+ * и подтверждением отчёта, пришедшего письмом.
+ */
+async function applyClosingRule(resolutionId: string, actor: Actor): Promise<ResolutionRecord> {
+  const all = await listResolutionAssignees(resolutionId);
+  const withReport = all.filter((a) => a.reportAt);
+  const responsible = all.find((a) => a.kind === "responsible");
+  const shouldClose = responsible ? !!responsible.reportAt : withReport.length === all.length;
+
+  if (shouldClose) {
+    return applyTransition(resolutionId, actor, {
+      from: ["sent"],
+      to: "done",
+      step: "dispatched",
+      comment: responsible
+        ? "Исполнено: отчитался ответственный " + (responsible.fullName || "")
+        : "Исполнено: отчитались все исполнители",
+      action: "resolution.done"
+    });
+  }
+  return (await getResolution(resolutionId))!;
+}
+
+
+
+/**
+ * Письмо, на которое мог быть дан ответ: поручение ждёт утверждения или исполнения.
+ *
+ * ⚠️ Это **не решение**, а материал для подсказки. Система не определяет, чем является письмо —
+ * это отмечает аппарат, открыв письмо в почте. Здесь только кандидаты по треду.
+ */
+export interface ThreadReplyCandidate {
+  resolutionId: string;
+  /** Чего ждёт поручение: утверждения руководителя или отчёта исполнителя. */
+  expects: "approval" | "report";
+  /** Письмо, на которое отвечали: по нему сопоставляем тред. */
+  emailId: string;
+  documentNumber: string;
+  documentSummary: string;
+  taskText: string;
+  /** Исполнители — чтобы подсказать, от кого ждём отчёт. */
+  assignees: Array<{ userId: string; fullName: string; kind: AssigneeKind }>;
+}
+
+export async function listReplyCandidates(): Promise<ThreadReplyCandidate[]> {
+  const db = getDocflowDb();
+  const rows = await db
+    .select({ r: resolutions, doc: documents })
+    .from(resolutions)
+    .leftJoin(documents, eq(documents.id, resolutions.documentId))
+    // `email_approval` тоже берём: поручение могло остаться в этом состоянии (старые данные
+    // или прерванная разметка), и тогда его нечем было бы отметить повторно.
+    .where(inArray(resolutions.status, ["pending_approval", "email_approval", "sent"]));
+
+  const out: ThreadReplyCandidate[] = [];
+  for (const x of rows) {
+    const approval = x.r.status === "pending_approval" || x.r.status === "email_approval";
+    const emailId = approval ? x.r.requestEmailId : x.r.dispatchEmailId;
+    // Без письма сопоставлять нечего: поручение завели в приложении, ответа письмом не ждём.
+    if (!emailId) continue;
+    const assignees = await listResolutionAssignees(x.r.id);
+    out.push({
+      resolutionId: x.r.id,
+      expects: approval ? "approval" : "report",
+      emailId,
+      documentNumber: x.doc?.regNumber ?? "",
+      documentSummary: x.doc?.summary || x.doc?.documentName || "",
+      taskText: x.r.text,
+      assignees: assignees.map((a) => ({ userId: a.userId, fullName: a.fullName, kind: a.kind }))
+    });
+  }
+  return out;
+}
+
+/**
+ * Поручения, ждущие отчёта по письму: отправленные, с сохранённым письмом-поручением.
+ *
+ * Возвращаем `dispatchEmailId`: по нему вызывающий код найдёт Message-ID письма и сопоставит
+ * ответ исполнителя по треду (та же механика, что у ответа руководителя).
+ */
+export async function listAwaitingReports(): Promise<
+  Array<{ resolutionId: string; dispatchEmailId: string; taskText: string; documentNumber: string }>
+> {
+  const rows = await getDocflowDb()
+    .select({
+      id: resolutions.id,
+      dispatchEmailId: resolutions.dispatchEmailId,
+      text: resolutions.text,
+      regNumber: documents.regNumber
+    })
+    .from(resolutions)
+    .leftJoin(documents, eq(documents.id, resolutions.documentId))
+    .where(and(eq(resolutions.status, "sent"), isNotNull(resolutions.dispatchEmailId)));
+  return rows
+    .filter((r) => !!r.dispatchEmailId)
+    .map((r) => ({
+      resolutionId: r.id,
+      dispatchEmailId: r.dispatchEmailId as string,
+      taskText: r.text,
+      documentNumber: r.regNumber ?? ""
+    }));
+}
+
+/**
+ * Аппарат подтверждает распознанный отчёт: текст можно поправить — дальше срабатывает
+ * правило закрытия. Подтверждение и есть акт приёмки исполнения.
+ */
+export async function confirmReport(
+  resolutionId: string,
+  userId: string,
+  input: { text?: string },
+  actor: Actor
+): Promise<ResolutionRecord> {
+  const db = getDocflowDb();
+  const rows = await db
+    .select()
+    .from(resolutionAssignees)
+    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
+    .limit(1);
+  const mine = rows[0];
+  if (!mine) throw new AppError("Исполнитель не найден в поручении", 404, "not_found");
+  if (mine.reportAt) throw badState("Отчёт уже принят");
+  // Предложение модели может отсутствовать: аппарат отмечает отчёт, открыв письмо в почте.
+  // Требовать «распознанного» отчёта нельзя — тогда ручной путь был бы закрыт.
+
+  const text = (input.text ?? mine.reportSummary ?? "").trim();
+  if (!text) throw new AppError("Текст отчёта пуст", 400, "empty_report");
+
+  const resolution = await getResolution(resolutionId);
+  if (!resolution || resolution.status !== "sent") throw badState("Поручение не в работе");
+
+  const ts = now();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(resolutionAssignees)
+      .set({ reportText: text, reportAt: ts })
+      .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)));
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.report_confirmed",
+      entityType: "resolution",
+      entityId: resolutionId,
+      oldValue: stringify({ summary: mine.reportSummary }),
+      newValue: stringify({ text, executorId: userId }),
+      createdAt: ts
+    });
+  });
+
+  return applyClosingRule(resolutionId, actor);
+}
+
+/**
+ * Закрытие поручения аппаратом — когда исполнитель отчитался не в приложении
+ * (письмом или лично), и отчёт вводить вручную не нужно.
+ */
+export async function closeResolution(
+  id: string,
+  actor: Actor,
+  comment: string
+): Promise<ResolutionRecord> {
+  return applyTransition(id, actor, {
+    from: ["sent"],
+    to: "done",
+    step: "dispatched",
+    comment,
+    action: "resolution.done"
+  });
+}
+
+/** Резолюции документа — для карточки документа в журнале. */
+export async function listDocumentResolutions(documentId: string): Promise<ResolutionDetail[]> {
+  const page = await listResolutions({ documentId, limit: 200 });
+  return page.items;
+}
