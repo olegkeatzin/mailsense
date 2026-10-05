@@ -274,8 +274,18 @@ async function main() {
   check("в аудите есть утверждение", actions.includes("resolution.approve"));
   check("в аудите есть отправка", actions.includes("resolution.dispatch"));
   const approveEntry = (audit.body?.entries ?? []).find((a) => a.action === "resolution.approve");
-  check("утвердил именно подписант", (approveEntry?.userName ?? "").length > 0, approveEntry?.userName);
-  check("аппарат НЕ утверждал", approveEntry?.userId !== loginAdmin.body?.user?.id);
+  // Сравниваем с id подписанта и ОТДЕЛЬНО с id аппарата. Раньше вторая проверка смотрела на
+  // администратора, поэтому «утвердил кто угодно, кроме админа» проходило как успех, а пустой
+  // userId (записи нет вовсе) давал undefined !== id — тоже успех. Здесь оба случая краснеют.
+  const signerUser = byLogin(ACCOUNTS.signer.login);
+  const secretaryUser = byLogin(ACCOUNTS.secretary.login);
+  const approveWho = approveEntry
+    ? approveEntry.userId + " (" + approveEntry.userName + ")"
+    : "записи об утверждении нет";
+  check("утвердил именно подписант", !!approveEntry && approveEntry.userId === signerUser?.id,
+    "в аудите " + approveWho + ", подписант " + (signerUser?.id ?? "не найден в справочнике"));
+  check("аппарат НЕ утверждал", !!approveEntry && approveEntry.userId !== secretaryUser?.id,
+    "в аудите " + approveWho + ", аппарат " + (secretaryUser?.id ?? "не найден в справочнике"));
 
   const card = await admin.get("/api/docflow/resolutions/" + rid);
   check("в карточке видно, кто подготовил", !!card.body?.preparedByName, card.body?.preparedByName);

@@ -113,6 +113,9 @@ async function main() {
   const list = Array.isArray(users.body) ? users.body : (users.body?.items ?? []);
   const active = list.filter((u) => u.isActive !== false && !u.blocked);
   check("в справочнике есть действующие пользователи", active.length > 0);
+  // Без двух действующих учёток проверка «исполнителей двое» ниже не имеет смысла:
+  // раньше она в этом случае молча вырождалась в «есть хотя бы один».
+  check("в справочнике не меньше двух действующих", active.length >= 2, "найдено " + active.length);
   if (!active.length) process.exit(1);
 
   const execA = active[0];
@@ -191,7 +194,12 @@ async function main() {
 
   // 13. Карточка: исполнители, история, номер документа.
   const card = await json("/api/docflow/resolutions/" + id);
-  check("исполнителей двое", (card.body?.assignees ?? []).length >= 1, String((card.body?.assignees ?? []).length));
+  // Проверяем, что вернулись ИМЕННО те исполнители, которых просили: «>= 1» считало успехом
+  // карточку с одним ответственным, то есть потеря соисполнителя не замечалась.
+  const cardAssigneeIds = (card.body?.assignees ?? []).map((a) => a.userId);
+  const wantedAssigneeIds = execB.id !== execA.id ? [execA.id, execB.id] : [execA.id];
+  check("исполнителей двое", cardAssigneeIds.length >= 2 && wantedAssigneeIds.every((u) => cardAssigneeIds.includes(u)),
+    "в карточке " + cardAssigneeIds.length + " (" + cardAssigneeIds.join(",") + "), просили " + wantedAssigneeIds.join(","));
   check("ответственный помечен", (card.body?.assignees ?? [])[0]?.kind === "responsible");
   const steps = (card.body?.history ?? []).map((h) => h.step);
   check("история содержит всю цепочку", ["requested", "approved", "dispatched"].every((s) => steps.includes(s)), steps.join(","));
@@ -204,6 +212,9 @@ async function main() {
 
   // 15. Права: сотрудник без прав не видит резолюции.
   const empCookie = await login(EMPLOYEE_LOGIN, EMPLOYEE_PASSWORD);
+  // Проверка ДО ветвления: раньше неудачный вход рядового сотрудника молча выключал весь
+  // негативный контроль прав, и прогон всё равно заканчивался успехом.
+  check("вход сотрудника для проверки прав", !!empCookie, "не удалось войти как " + EMPLOYEE_LOGIN);
   if (empCookie) {
     const forbidden = await json("/api/docflow/resolutions", {}, empCookie);
     check("рядовой сотрудник не видит список резолюций", forbidden.status === 403, "статус " + forbidden.status);
