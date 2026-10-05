@@ -10,6 +10,7 @@ import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
 import { getDocflowDb, getDocflowPool } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
 import { writeAudit } from "./audit.js";
+import { insertAudit } from "./repo.js";
 import { AppError } from "./errors.js";
 import {
   DEFAULT_NUMBERING_RULES,
@@ -373,8 +374,8 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
   } catch (err) {
     await client.query("ROLLBACK").catch(() => undefined);
     // Неудачную попытку тоже фиксируем: «кто пытался и почему не вышло» —
-    // это ровно тот случай, когда ищут виноватого. Пишем уже вне транзакции,
-    // иначе запись откатилась бы вместе с изменением.
+    // это ровно тот случай, когда ищут виноватого. Пишем уже вне транзакции
+    // (изменения нет — откатывать нечего), поэтому здесь writeAudit, а не auditInTx.
     if (err instanceof AppError && (err.code === "duplicate_email" || err.code === "period_closed")) {
       await writeAudit({
         userId: actor.id,
@@ -546,17 +547,24 @@ export async function linkDocumentEmail(
 ): Promise<void> {
   const doc = await getDocument(documentId);
   if (!doc) throw new AppError("Документ не найден", 404, "not_found");
-  await getDocflowDb()
-    .insert(documentEmails)
-    .values({ documentId, emailId, role, linkedAt: now(), linkedBy: actor.id })
-    .onConflictDoNothing();
-  await writeAudit({
-    userId: actor.id,
-    userName: actor.name,
-    action: "journal.link_email",
-    entityType: "document",
-    entityId: documentId,
-    newValue: { emailId, role }
+  // Привязка письма и след — одна транзакция: письмо, привязанное без следа,
+  // невозможно отличить от привязанного вручную мимо системы.
+  await getDocflowDb().transaction(async (tx) => {
+    await tx
+      .insert(documentEmails)
+      .values({ documentId, emailId, role, linkedAt: now(), linkedBy: actor.id })
+      .onConflictDoNothing();
+    await insertAudit(
+      {
+        userId: actor.id,
+        userName: actor.name,
+        action: "journal.link_email",
+        entityType: "document",
+        entityId: documentId,
+        newValue: { emailId, role }
+      },
+      tx
+    );
   });
 }
 
@@ -617,25 +625,32 @@ export async function archivePeriod(
   actor: Actor
 ): Promise<void> {
   const stream = input.stream ?? "incoming";
-  await getDocflowDb()
-    .insert(numberArchives)
-    .values({
-      id: randomUUID(),
-      stream,
-      period: input.period,
-      fileName: input.fileName ?? "",
-      documentCount: input.documentCount ?? 0,
-      createdAt: now(),
-      createdBy: actor.id
-    })
-    .onConflictDoNothing();
-  await writeAudit({
-    userId: actor.id,
-    userName: actor.name,
-    action: "journal.archive_period",
-    entityType: "number_archive",
-    entityId: stream + ":" + input.period,
-    newValue: { period: input.period, fileName: input.fileName ?? "", documentCount: input.documentCount ?? 0 }
+  // Закрытие периода и след — одна транзакция: «год закрыт» без записи в аудите
+  // означало бы, что неизвестно, кто открыл следующий.
+  await getDocflowDb().transaction(async (tx) => {
+    await tx
+      .insert(numberArchives)
+      .values({
+        id: randomUUID(),
+        stream,
+        period: input.period,
+        fileName: input.fileName ?? "",
+        documentCount: input.documentCount ?? 0,
+        createdAt: now(),
+        createdBy: actor.id
+      })
+      .onConflictDoNothing();
+    await insertAudit(
+      {
+        userId: actor.id,
+        userName: actor.name,
+        action: "journal.archive_period",
+        entityType: "number_archive",
+        entityId: stream + ":" + input.period,
+        newValue: { period: input.period, fileName: input.fileName ?? "", documentCount: input.documentCount ?? 0 }
+      },
+      tx
+    );
   });
 }
 
@@ -672,26 +687,32 @@ export async function saveCase(
     createdAt: ts,
     updatedAt: ts
   };
-  await db
-    .insert(caseNomenclature)
-    .values(values)
-    .onConflictDoUpdate({
-      target: caseNomenclature.id,
-      set: {
-        code: values.code,
-        title: values.title,
-        isActive: values.isActive,
-        sortOrder: values.sortOrder,
-        updatedAt: ts
-      }
-    });
-  await writeAudit({
-    userId: actor.id,
-    userName: actor.name,
-    action: "journal.case.save",
-    entityType: "case",
-    entityId: id,
-    newValue: values
+  // Дело и след — одна транзакция.
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(caseNomenclature)
+      .values(values)
+      .onConflictDoUpdate({
+        target: caseNomenclature.id,
+        set: {
+          code: values.code,
+          title: values.title,
+          isActive: values.isActive,
+          sortOrder: values.sortOrder,
+          updatedAt: ts
+        }
+      });
+    await insertAudit(
+      {
+        userId: actor.id,
+        userName: actor.name,
+        action: "journal.case.save",
+        entityType: "case",
+        entityId: id,
+        newValue: values
+      },
+      tx
+    );
   });
   return { id, code: values.code, title: values.title, isActive: values.isActive, sortOrder: values.sortOrder };
 }
@@ -723,16 +744,22 @@ export async function ensureCorrespondent(name: string, actor: Actor): Promise<C
   }
   const ts = now();
   const id = randomUUID();
-  await db
-    .insert(correspondents)
-    .values({ id, name: trimmed, shortName: "", inn: "", isActive: true, createdAt: ts, updatedAt: ts });
-  await writeAudit({
-    userId: actor.id,
-    userName: actor.name,
-    action: "journal.correspondent.create",
-    entityType: "correspondent",
-    entityId: id,
-    newValue: { name: trimmed }
+  // Корреспондент создаётся вместе со следом: справочник не должен пополняться молча.
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(correspondents)
+      .values({ id, name: trimmed, shortName: "", inn: "", isActive: true, createdAt: ts, updatedAt: ts });
+    await insertAudit(
+      {
+        userId: actor.id,
+        userName: actor.name,
+        action: "journal.correspondent.create",
+        entityType: "correspondent",
+        entityId: id,
+        newValue: { name: trimmed }
+      },
+      tx
+    );
   });
   return { id, name: trimmed, shortName: "", inn: "", isActive: true };
 }
@@ -753,26 +780,32 @@ export async function saveCorrespondent(
     createdAt: ts,
     updatedAt: ts
   };
-  await db
-    .insert(correspondents)
-    .values(values)
-    .onConflictDoUpdate({
-      target: correspondents.id,
-      set: {
-        name: values.name,
-        shortName: values.shortName,
-        inn: values.inn,
-        isActive: values.isActive,
-        updatedAt: ts
-      }
-    });
-  await writeAudit({
-    userId: actor.id,
-    userName: actor.name,
-    action: "journal.correspondent.save",
-    entityType: "correspondent",
-    entityId: id,
-    newValue: values
+  // Правка справочника и след — одна транзакция.
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(correspondents)
+      .values(values)
+      .onConflictDoUpdate({
+        target: correspondents.id,
+        set: {
+          name: values.name,
+          shortName: values.shortName,
+          inn: values.inn,
+          isActive: values.isActive,
+          updatedAt: ts
+        }
+      });
+    await insertAudit(
+      {
+        userId: actor.id,
+        userName: actor.name,
+        action: "journal.correspondent.save",
+        entityType: "correspondent",
+        entityId: id,
+        newValue: values
+      },
+      tx
+    );
   });
   return { id, name: values.name, shortName: values.shortName, inn: values.inn, isActive: values.isActive };
 }

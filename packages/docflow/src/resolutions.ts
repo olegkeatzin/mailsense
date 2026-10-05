@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray, isNotNull, sql } from "drizzle-orm";
 import { getDocflowDb } from "./db/index.js";
+import type { DocflowTx } from "./repo.js";
 import { docflowSchema } from "./db/schema.js";
 import { AppError } from "./errors.js";
 import type {
@@ -116,12 +117,13 @@ export async function getResolution(id: string): Promise<ResolutionRecord | null
   return rows[0] ? mapResolution(rows[0]) : null;
 }
 
-export async function listResolutionAssignees(resolutionId: string): Promise<ResolutionAssignee[]> {
-  const rows = await getDocflowDb()
-    .select({ a: resolutionAssignees, fullName: users.fullName, email: users.email })
-    .from(resolutionAssignees)
-    .leftJoin(users, eq(users.id, resolutionAssignees.userId))
-    .where(eq(resolutionAssignees.resolutionId, resolutionId));
+type AssigneeRow = {
+  a: typeof resolutionAssignees.$inferSelect;
+  fullName: string | null;
+  email: string | null;
+};
+
+function mapAssignees(rows: AssigneeRow[]): ResolutionAssignee[] {
   return rows
     .map((r) => ({
       userId: r.a.userId,
@@ -136,12 +138,7 @@ export async function listResolutionAssignees(resolutionId: string): Promise<Res
     .sort((a, b) => (a.kind === b.kind ? a.fullName.localeCompare(b.fullName, "ru") : a.kind === "responsible" ? -1 : 1));
 }
 
-export async function listResolutionHistory(resolutionId: string): Promise<ResolutionApprovalEntry[]> {
-  const rows = await getDocflowDb()
-    .select()
-    .from(resolutionApprovals)
-    .where(eq(resolutionApprovals.resolutionId, resolutionId))
-    .orderBy(asc(resolutionApprovals.createdAt));
+function mapHistory(rows: Array<typeof resolutionApprovals.$inferSelect>): ResolutionApprovalEntry[] {
   return rows.map((r) => ({
     id: r.id,
     step: r.step as ApprovalStep,
@@ -154,31 +151,127 @@ export async function listResolutionHistory(resolutionId: string): Promise<Resol
   }));
 }
 
-/** Резолюция со всем, что нужно экрану: исполнители, история, документ, ФИО участников. */
-export async function getResolutionDetail(id: string): Promise<ResolutionDetail | null> {
-  const rec = await getResolution(id);
-  if (!rec) return null;
+export async function listResolutionAssignees(resolutionId: string): Promise<ResolutionAssignee[]> {
+  const rows = await getDocflowDb()
+    .select({ a: resolutionAssignees, fullName: users.fullName, email: users.email })
+    .from(resolutionAssignees)
+    .leftJoin(users, eq(users.id, resolutionAssignees.userId))
+    .where(eq(resolutionAssignees.resolutionId, resolutionId));
+  return mapAssignees(rows);
+}
+
+/**
+ * Исполнители сразу для набора резолюций — ОДИН запрос вместо запроса на строку.
+ * Нужен спискам и канбану: там на каждой строке висят исполнители.
+ */
+async function assigneesForResolutions(ids: string[]): Promise<Map<string, ResolutionAssignee[]>> {
+  const out = new Map<string, ResolutionAssignee[]>();
+  if (!ids.length) return out;
+  const rows = await getDocflowDb()
+    .select({ a: resolutionAssignees, fullName: users.fullName, email: users.email })
+    .from(resolutionAssignees)
+    .leftJoin(users, eq(users.id, resolutionAssignees.userId))
+    .where(inArray(resolutionAssignees.resolutionId, ids));
+  const grouped = new Map<string, AssigneeRow[]>();
+  for (const r of rows) {
+    const arr = grouped.get(r.a.resolutionId) ?? [];
+    arr.push(r);
+    grouped.set(r.a.resolutionId, arr);
+  }
+  for (const [resId, list] of grouped) out.set(resId, mapAssignees(list));
+  return out;
+}
+
+/** История шагов сразу для набора резолюций — один запрос вместо запроса на строку. */
+async function historyForResolutions(ids: string[]): Promise<Map<string, ResolutionApprovalEntry[]>> {
+  const out = new Map<string, ResolutionApprovalEntry[]>();
+  if (!ids.length) return out;
+  const rows = await getDocflowDb()
+    .select()
+    .from(resolutionApprovals)
+    .where(inArray(resolutionApprovals.resolutionId, ids))
+    .orderBy(asc(resolutionApprovals.createdAt));
+  const grouped = new Map<string, Array<typeof resolutionApprovals.$inferSelect>>();
+  for (const r of rows) {
+    const arr = grouped.get(r.resolutionId) ?? [];
+    arr.push(r);
+    grouped.set(r.resolutionId, arr);
+  }
+  for (const [resId, list] of grouped) out.set(resId, mapHistory(list));
+  return out;
+}
+
+export async function listResolutionHistory(resolutionId: string): Promise<ResolutionApprovalEntry[]> {
+  const rows = await getDocflowDb()
+    .select()
+    .from(resolutionApprovals)
+    .where(eq(resolutionApprovals.resolutionId, resolutionId))
+    .orderBy(asc(resolutionApprovals.createdAt));
+  return mapHistory(rows);
+}
+
+/**
+ * Детали набора резолюций — ПАКЕТНО, фиксированным числом запросов.
+ *
+ * Раньше каждая строка списка стоила пяти запросов (резолюция, документ, участники,
+ * исполнители, история): канбан на 200 записей давал около тысячи обращений к базе.
+ * Здесь пять запросов на всю выдачу, и их число не зависит от числа строк.
+ */
+async function resolutionDetails(ids: string[]): Promise<Map<string, ResolutionDetail>> {
+  const out = new Map<string, ResolutionDetail>();
+  if (!ids.length) return out;
   const db = getDocflowDb();
 
-  const doc = (await db.select().from(documents).where(eq(documents.id, rec.documentId)).limit(1))[0];
-  const ids = [rec.preparedBy, rec.approvedBy, rec.confirmedBy, rec.dispatchedBy].filter(Boolean) as string[];
-  const names = ids.length
-    ? await db.select({ id: users.id, fullName: users.fullName }).from(users).where(inArray(users.id, ids))
-    : [];
-  const nameOf = (uid: string | null): string => names.find((n) => n.id === uid)?.fullName ?? "";
+  const recs = await db.select().from(resolutions).where(inArray(resolutions.id, ids));
+  if (!recs.length) return out;
 
-  return {
-    ...rec,
-    assignees: await listResolutionAssignees(id),
-    history: await listResolutionHistory(id),
-    documentNumber: doc?.regNumber ?? "",
-    documentSummary: doc?.summary ?? doc?.documentName ?? "",
-    documentEmailId: doc?.emailId ?? null,
-    preparedByName: nameOf(rec.preparedBy),
-    approvedByName: nameOf(rec.approvedBy),
-    dispatchedByName: nameOf(rec.dispatchedBy),
-    confirmedByName: nameOf(rec.confirmedBy)
-  };
+  const docIds = [...new Set(recs.map((r) => r.documentId))];
+  const docs = await db.select().from(documents).where(inArray(documents.id, docIds));
+  const docById = new Map(docs.map((d) => [d.id, d]));
+
+  const userIds = [
+    ...new Set(
+      recs
+        .flatMap((r) => [r.preparedBy, r.approvedBy, r.confirmedBy, r.dispatchedBy])
+        .filter((v): v is string => !!v)
+    )
+  ];
+  const names = userIds.length
+    ? await db.select({ id: users.id, fullName: users.fullName }).from(users).where(inArray(users.id, userIds))
+    : [];
+  const nameById = new Map(names.map((n) => [n.id, n.fullName]));
+
+  const assignees = await assigneesForResolutions(ids);
+  const history = await historyForResolutions(ids);
+
+  for (const rec of recs) {
+    const doc = docById.get(rec.documentId);
+    const nameOf = (uid: string | null): string => (uid ? nameById.get(uid) ?? "" : "");
+    out.set(rec.id, {
+      ...mapResolution(rec),
+      assignees: assignees.get(rec.id) ?? [],
+      history: history.get(rec.id) ?? [],
+      documentNumber: doc?.regNumber ?? "",
+      documentSummary: doc?.summary ?? doc?.documentName ?? "",
+      documentEmailId: doc?.emailId ?? null,
+      preparedByName: nameOf(rec.preparedBy),
+      approvedByName: nameOf(rec.approvedBy),
+      dispatchedByName: nameOf(rec.dispatchedBy),
+      confirmedByName: nameOf(rec.confirmedBy)
+    });
+  }
+  return out;
+}
+
+/** Резолюция со всем, что нужно экрану: исполнители, история, документ, ФИО участников. */
+export async function getResolutionDetail(id: string): Promise<ResolutionDetail | null> {
+  return (await resolutionDetails([id])).get(id) ?? null;
+}
+
+/** Детали нескольких резолюций — в порядке переданных id. */
+async function resolutionDetailsInOrder(ids: string[]): Promise<ResolutionDetail[]> {
+  const map = await resolutionDetails(ids);
+  return ids.map((id) => map.get(id)).filter((d): d is ResolutionDetail => !!d);
 }
 // ---------------- Переходы состояний ----------------
 
@@ -199,11 +292,19 @@ async function applyTransition(
     comment?: string | null;
     emailId?: string | null;
     action: string;
+    /**
+     * Дополнительная проверка ВНУТРИ транзакции — уже после блокировки строки.
+     * Нужна переходам, у которых есть условие помимо состояния резолюции:
+     * снаружи транзакции его можно обойти гонкой.
+     */
+    guard?: (tx: DocflowTx) => Promise<void>;
   }
 ): Promise<ResolutionRecord> {
   const db = getDocflowDb();
   return db.transaction(async (tx) => {
-    const rows = await tx.select().from(resolutions).where(eq(resolutions.id, id)).limit(1);
+    // FOR UPDATE — иначе два одновременных перехода читают одно и то же состояние
+    // и оба «проходят»: поручение уходит дважды, а в истории две записи об отправке.
+    const rows = await tx.select().from(resolutions).where(eq(resolutions.id, id)).limit(1).for("update");
     const current = rows[0];
     if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
     if (!opts.from.includes(current.status as ResolutionStatus)) {
@@ -211,6 +312,7 @@ async function applyTransition(
         "Действие невозможно: резолюция в состоянии «" + current.status + "», ожидалось " + opts.from.join(" или ")
       );
     }
+    if (opts.guard) await opts.guard(tx);
 
     const ts = now();
     await tx
@@ -673,6 +775,111 @@ export async function dispatchResolution(
   });
 }
 
+/**
+ * Записывает письмо-поручение, которым поручение ушло исполнителям.
+ *
+ * Отдельным шагом после перехода в `sent`, потому что id письма известен только
+ * после отправки: сначала захват поручения (переход), затем письмо, затем эта запись.
+ * До неё поручение уже «в работе», но в журнале не видно, каким письмом оно ушло.
+ *
+ * ⚠️ Письмо ровно одно: второе означало бы поручение, ушедшее дважды. Повторный
+ * вызов с тем же id — не ошибка (сеть/повтор запроса), с другим — отказ.
+ */
+export async function attachDispatchEmail(
+  resolutionId: string,
+  emailId: string,
+  actor: Actor
+): Promise<ResolutionRecord> {
+  const email = (emailId ?? "").trim();
+  if (!email) throw new AppError("Не указано письмо-поручение", 400, "bad_email");
+
+  return getDocflowDb().transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(resolutions)
+      .where(eq(resolutions.id, resolutionId))
+      .limit(1)
+      .for("update");
+    const current = rows[0];
+    if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+    if (current.status !== "sent") {
+      throw badState(
+        "Письмо-поручение записывается только по отправленному поручению: резолюция в состоянии «" +
+          current.status +
+          "»"
+      );
+    }
+    if (current.dispatchEmailId === email) return mapResolution(current);
+    if (current.dispatchEmailId) {
+      throw badState(
+        "Письмо-поручение уже записано (" + current.dispatchEmailId + ") — второе означало бы поручение, ушедшее дважды"
+      );
+    }
+
+    const ts = now();
+    await tx
+      .update(resolutions)
+      .set({ dispatchEmailId: email, updatedAt: ts })
+      .where(eq(resolutions.id, resolutionId));
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.dispatch_email",
+      entityType: "resolution",
+      entityId: resolutionId,
+      oldValue: stringify({ dispatchEmailId: null }),
+      newValue: stringify({ dispatchEmailId: email }),
+      createdAt: ts
+    });
+    const after = await tx.select().from(resolutions).where(eq(resolutions.id, resolutionId)).limit(1);
+    return mapResolution(after[0]);
+  });
+}
+
+/**
+ * Откат неудачной отправки: sent → approved.
+ *
+ * Порядок отправки: переход в sent (он же захват поручения) → письмо → `attachDispatchEmail`.
+ * Если письмо отправить не удалось, оставлять поручение «в работе» нельзя: исполнители
+ * его не получали, а в журнале оно выглядело бы выданным. Возвращаем в approved,
+ * чтобы аппарат повторил отправку.
+ *
+ * ⚠️ Записанное письмо НЕ стирается: письмо могло реально уйти (сбой уже после отправки),
+ * и по dispatchEmailId его находят в почте. Следующая отправка перезапишет поле новым письмом.
+ *
+ * ⚠️ Отчёт хотя бы одного исполнителя — стоп: работа по поручению идёт, и повторная
+ * отправка была бы вторым письмом по одному и тому же поручению. Проверка идёт внутри
+ * транзакции перехода (guard), иначе её обходила бы гонка с отчётом.
+ *
+ * «Расписки» исполнителей (receivedAt) не трогаем: это факт того, что человек документ
+ * получил, — задним числом такие факты не переписываются.
+ */
+export async function revertDispatch(id: string, actor: Actor, reason: string): Promise<ResolutionRecord> {
+  const comment = (reason ?? "").trim();
+  if (!comment) throw new AppError("Укажите причину отката отправки", 400, "no_reason");
+
+  return applyTransition(id, actor, {
+    from: ["sent"],
+    to: "approved",
+    // Письмо (dispatchEmailId) намеренно не трогаем — см. выше.
+    patch: { dispatchedBy: null, dispatchedAt: null },
+    step: "dispatch_failed",
+    comment,
+    action: "resolution.dispatch_failed",
+    guard: async (tx) => {
+      const reported = await tx
+        .select({ userId: resolutionAssignees.userId })
+        .from(resolutionAssignees)
+        .where(and(eq(resolutionAssignees.resolutionId, id), isNotNull(resolutionAssignees.reportAt)))
+        .limit(1);
+      if (reported.length) {
+        throw badState("По поручению уже отчитался исполнитель — откат открыл бы повторную отправку");
+      }
+    }
+  });
+}
+
 /** Отмена: ошибка обнаружилась до отправки. Отправленное не отменяем — это уже поручение. */
 export async function cancelResolution(id: string, actor: Actor, comment: string): Promise<ResolutionRecord> {
   return applyTransition(id, actor, {
@@ -712,11 +919,8 @@ export async function listResolutions(filter: ResolutionFilter = {}): Promise<Re
     .offset(offset);
   const totalRows = await db.select({ n: countExpr }).from(resolutions).where(where);
 
-  const items: ResolutionDetail[] = [];
-  for (const r of rows) {
-    const d = await getResolutionDetail(r.id);
-    if (d) items.push(d);
-  }
+  // Детали собираются пакетно: раньше на каждую строку приходилось по пять запросов.
+  const items = await resolutionDetailsInOrder(rows.map((r) => r.id));
   return { items, total: Number(totalRows[0]?.n ?? 0) };
 }
 
@@ -930,24 +1134,30 @@ export async function listReplyCandidates(): Promise<ThreadReplyCandidate[]> {
     // или прерванная разметка), и тогда его нечем было бы отметить повторно.
     .where(inArray(resolutions.status, ["pending_approval", "email_approval", "sent"]));
 
-  const out: ThreadReplyCandidate[] = [];
-  for (const x of rows) {
-    const approval = x.r.status === "pending_approval" || x.r.status === "email_approval";
-    const emailId = approval ? x.r.requestEmailId : x.r.dispatchEmailId;
+  const candidates = rows
+    .map((x) => {
+      const approval = x.r.status === "pending_approval" || x.r.status === "email_approval";
+      return {
+        x,
+        approval,
+        emailId: (approval ? x.r.requestEmailId : x.r.dispatchEmailId) as string | null
+      };
+    })
     // Без письма сопоставлять нечего: поручение завели в приложении, ответа письмом не ждём.
-    if (!emailId) continue;
-    const assignees = await listResolutionAssignees(x.r.id);
-    out.push({
-      resolutionId: x.r.id,
-      expects: approval ? "approval" : "report",
-      emailId,
-      documentNumber: x.doc?.regNumber ?? "",
-      documentSummary: x.doc?.summary || x.doc?.documentName || "",
-      taskText: x.r.text,
-      assignees: assignees.map((a) => ({ userId: a.userId, fullName: a.fullName, kind: a.kind }))
-    });
-  }
-  return out;
+    .filter((c) => !!c.emailId);
+
+  // Исполнители — одним запросом на весь список, а не по одному на строку.
+  const assignees = await assigneesForResolutions(candidates.map((c) => c.x.r.id));
+
+  return candidates.map((c) => ({
+    resolutionId: c.x.r.id,
+    expects: c.approval ? "approval" : "report",
+    emailId: c.emailId as string,
+    documentNumber: c.x.doc?.regNumber ?? "",
+    documentSummary: c.x.doc?.summary || c.x.doc?.documentName || "",
+    taskText: c.x.r.text,
+    assignees: (assignees.get(c.x.r.id) ?? []).map((a) => ({ userId: a.userId, fullName: a.fullName, kind: a.kind }))
+  }));
 }
 
 /**

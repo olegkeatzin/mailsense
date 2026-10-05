@@ -25,7 +25,8 @@ import {
   setUserRoles,
   touchLastLogin,
   touchSession,
-  updateUser
+  updateUser,
+  type DocflowExecutor
 } from "./repo.js";
 import type { AuthStatus, AuthUser, LoginInput, LoginResult } from "./types.js";
 import { writeAudit } from "./audit.js";
@@ -183,9 +184,15 @@ export async function logout(token: string | null | undefined): Promise<void> {
   await deleteSession(hashToken(token));
 }
 
-/** Разрывает все сессии пользователя (увольнение, смена ролей, отключение). */
-export async function revokeSessions(userId: string): Promise<number> {
-  return deleteSessionsForUser(userId);
+/**
+ * Разрывает все сессии пользователя (увольнение, смена ролей, отключение).
+ *
+ * Принимает транзакцию: смена прав и разрыв старых сессий обязаны быть одной
+ * операцией — иначе пользователь остался бы с устаревшим набором прав либо
+ * потерял сессии без изменения самих прав.
+ */
+export async function revokeSessions(userId: string, exec?: DocflowExecutor): Promise<number> {
+  return deleteSessionsForUser(userId, exec);
 }
 
 // ---------------- Вход ----------------

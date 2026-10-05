@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
-import { getDocflowDb } from "./db/index.js";
+import { getDocflowDb, type DocflowDb } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
 import type {
   AuditEntry,
@@ -13,6 +13,21 @@ import type {
 } from "./types.js";
 
 const { users, roles, userRoles, sessions, auditLog } = docflowSchema;
+
+/**
+ * Исполнитель запроса: сама база или транзакция.
+ *
+ * Изменение и его след в аудите обязаны быть одной транзакцией (AGENTS.md, п. 4):
+ * если след не записался, изменения быть не должно. Поэтому операции репозитория
+ * принимают необязательный исполнитель — внутри транзакции он передаётся дальше.
+ */
+export type DocflowTx = Parameters<Parameters<DocflowDb["transaction"]>[0]>[0];
+export type DocflowExecutor = DocflowDb | DocflowTx;
+
+/** База или переданная транзакция. */
+function executor(exec?: DocflowExecutor): DocflowExecutor {
+  return exec ?? getDocflowDb();
+}
 
 /**
  * count(*) в PostgreSQL приходит как bigint (строкой), поэтому приводим к int
@@ -58,8 +73,8 @@ export async function countUsers(): Promise<number> {
   return rows[0]?.n ?? 0;
 }
 
-export async function getUser(id: string): Promise<User | null> {
-  const rows = await getDocflowDb().select().from(users).where(eq(users.id, id)).limit(1);
+export async function getUser(id: string, exec?: DocflowExecutor): Promise<User | null> {
+  const rows = await executor(exec).select().from(users).where(eq(users.id, id)).limit(1);
   return rows[0] ? mapUser(rows[0]) : null;
 }
 
@@ -68,10 +83,10 @@ export async function getUser(id: string): Promise<User | null> {
  * Сравнение идёт по нормализованному ключу: логины AD кириллические («Иванов_ИИ»),
  * а регистронезависимость средствами СУБД зависит от локали.
  */
-export async function getUserByLdapUid(ldapUid: string): Promise<User | null> {
+export async function getUserByLdapUid(ldapUid: string, exec?: DocflowExecutor): Promise<User | null> {
   const key = uidKey(ldapUid);
   if (!key) return null;
-  const rows = await getDocflowDb().select().from(users).where(eq(users.ldapUidKey, key)).limit(1);
+  const rows = await executor(exec).select().from(users).where(eq(users.ldapUidKey, key)).limit(1);
   return rows[0] ? mapUser(rows[0]) : null;
 }
 
@@ -87,9 +102,9 @@ export async function getUserByEmail(email: string): Promise<User | null> {
   return rows[0] ? mapUser(rows[0]) : null;
 }
 
-export async function getUserByDn(dn: string): Promise<User | null> {
+export async function getUserByDn(dn: string, exec?: DocflowExecutor): Promise<User | null> {
   if (!dn) return null;
-  const rows = await getDocflowDb().select().from(users).where(eq(users.ldapDn, dn)).limit(1);
+  const rows = await executor(exec).select().from(users).where(eq(users.ldapDn, dn)).limit(1);
   return rows[0] ? mapUser(rows[0]) : null;
 }
 
@@ -109,10 +124,10 @@ export interface InsertUserInput {
   blocked?: boolean;
 }
 
-export async function insertUser(u: InsertUserInput): Promise<User> {
+export async function insertUser(u: InsertUserInput, exec?: DocflowExecutor): Promise<User> {
   const id = randomUUID();
   const ts = now();
-  await getDocflowDb()
+  await executor(exec)
     .insert(users)
     .values({
       id,
@@ -134,7 +149,7 @@ export async function insertUser(u: InsertUserInput): Promise<User> {
       createdAt: ts,
       updatedAt: ts
     });
-  return (await getUser(id))!;
+  return (await getUser(id, exec))!;
 }
 
 export interface UpdateUserPatch {
@@ -166,15 +181,19 @@ export async function getUserPasswordHash(userId: string): Promise<string | null
   return rows[0]?.passwordHash ?? null;
 }
 
-export async function updateUser(id: string, patch: UpdateUserPatch): Promise<User | null> {
+export async function updateUser(
+  id: string,
+  patch: UpdateUserPatch,
+  exec?: DocflowExecutor
+): Promise<User | null> {
   const set: Record<string, unknown> = { updatedAt: now() };
   for (const [k, v] of Object.entries(patch)) {
     if (v !== undefined) set[k] = v;
   }
   // Ключ поиска пересчитываем вместе с логином, иначе поиск разъедется с данными.
   if (patch.ldapUid !== undefined) set.ldapUidKey = uidKey(patch.ldapUid);
-  await getDocflowDb().update(users).set(set).where(eq(users.id, id));
-  return getUser(id);
+  await executor(exec).update(users).set(set).where(eq(users.id, id));
+  return getUser(id, exec);
 }
 
 export async function touchLastLogin(id: string): Promise<void> {
@@ -208,8 +227,8 @@ export async function getRole(id: string): Promise<Role | null> {
   return rows[0] ? mapRole(rows[0]) : null;
 }
 
-export async function getUserRoles(userId: string): Promise<string[]> {
-  const rows = await getDocflowDb()
+export async function getUserRoles(userId: string, exec?: DocflowExecutor): Promise<string[]> {
+  const rows = await executor(exec)
     .select({ roleId: userRoles.roleId })
     .from(userRoles)
     .where(eq(userRoles.userId, userId));
@@ -232,11 +251,20 @@ export async function rolesForUsers(userIds: string[]): Promise<Map<string, stri
   return map;
 }
 
-/** Полная замена набора ролей пользователя. */
-export async function setUserRoles(userId: string, roleIds: string[], grantedBy?: string | null): Promise<string[]> {
-  const db = getDocflowDb();
+/**
+ * Полная замена набора ролей пользователя.
+ *
+ * Без переданной транзакции создаёт свою; внутри чужой — работает в ней, чтобы
+ * смена ролей и её след в аудите откатывались вместе.
+ */
+export async function setUserRoles(
+  userId: string,
+  roleIds: string[],
+  grantedBy?: string | null,
+  exec?: DocflowExecutor
+): Promise<string[]> {
   const ts = now();
-  await db.transaction(async (tx) => {
+  const run = async (tx: DocflowExecutor): Promise<void> => {
     await tx.delete(userRoles).where(eq(userRoles.userId, userId));
     for (const roleId of [...new Set(roleIds)]) {
       await tx
@@ -244,8 +272,13 @@ export async function setUserRoles(userId: string, roleIds: string[], grantedBy?
         .values({ userId, roleId, grantedAt: ts, grantedBy: grantedBy ?? null })
         .onConflictDoNothing();
     }
-  });
-  return getUserRoles(userId);
+  };
+  if (exec) {
+    await run(exec);
+  } else {
+    await getDocflowDb().transaction(run);
+  }
+  return getUserRoles(userId, exec);
 }
 
 export async function grantRole(userId: string, roleId: string, grantedBy?: string | null): Promise<void> {
@@ -264,10 +297,13 @@ export interface ListUsersOptions {
   limit?: number;
 }
 
-export async function listUsersWithRoles(opts: ListUsersOptions = {}): Promise<UserWithRoles[]> {
+export async function listUsersWithRoles(
+  opts: ListUsersOptions = {},
+  exec?: DocflowExecutor
+): Promise<UserWithRoles[]> {
   const conditions = [];
   if (!opts.includeInactive) conditions.push(eq(users.isActive, true));
-  const base = getDocflowDb().select().from(users);
+  const base = executor(exec).select().from(users);
   const rows = await (conditions.length ? base.where(and(...conditions)) : base).orderBy(
     asc(users.fullName),
     asc(users.email)
@@ -338,9 +374,9 @@ export async function deleteSession(id: string): Promise<void> {
   await getDocflowDb().delete(sessions).where(eq(sessions.id, id));
 }
 
-export async function deleteSessionsForUser(userId: string): Promise<number> {
-  const rows = await getDocflowDb().select({ n: countExpr }).from(sessions).where(eq(sessions.userId, userId));
-  await getDocflowDb().delete(sessions).where(eq(sessions.userId, userId));
+export async function deleteSessionsForUser(userId: string, exec?: DocflowExecutor): Promise<number> {
+  const rows = await executor(exec).select({ n: countExpr }).from(sessions).where(eq(sessions.userId, userId));
+  await executor(exec).delete(sessions).where(eq(sessions.userId, userId));
   return rows[0]?.n ?? 0;
 }
 
@@ -363,7 +399,7 @@ function stringify(v: unknown): string | null {
   }
 }
 
-export async function insertAudit(a: AuditInput): Promise<AuditEntry> {
+export async function insertAudit(a: AuditInput, exec?: DocflowExecutor): Promise<AuditEntry> {
   const id = randomUUID();
   const ts = now();
   const entry: AuditEntry = {
@@ -377,7 +413,7 @@ export async function insertAudit(a: AuditInput): Promise<AuditEntry> {
     newValue: stringify(a.newValue),
     createdAt: ts
   };
-  await getDocflowDb().insert(auditLog).values(entry);
+  await executor(exec).insert(auditLog).values(entry);
   return entry;
 }
 

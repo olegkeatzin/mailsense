@@ -328,7 +328,7 @@ export const resolutionApprovals = pgTable(
     resolutionId: text("resolution_id")
       .notNull()
       .references(() => resolutions.id, { onDelete: "cascade" }),
-    /** requested | approved | rejected | confirmed | dispatched */
+    /** requested | approved | rejected | confirmed | dispatched | cancelled | dispatch_failed */
     step: text("step").notNull(),
     actorId: text("actor_id"),
     actorName: text("actor_name").notNull().default(""),

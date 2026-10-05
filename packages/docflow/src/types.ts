@@ -305,8 +305,21 @@ export const PRIORITY_TITLES: Record<ResolutionPriority, string> = {
 /** Роль исполнителя в резолюции (Р10). */
 export type AssigneeKind = "responsible" | "coexecutor";
 
-/** Шаг утверждения — вся история движения резолюции. */
-export type ApprovalStep = "requested" | "approved" | "rejected" | "confirmed" | "dispatched" | "cancelled";
+/**
+ * Шаг утверждения — вся история движения резолюции.
+ *
+ * `dispatch_failed` — отправка не удалась, поручение возвращено в «утверждено»
+ * (письмо ушло не всем либо не ушло вовсе). Отличается от `rejected`: там решение
+ * не принято, здесь решение в силе, но диспетчеризация сорвалась.
+ */
+export type ApprovalStep =
+  | "requested"
+  | "approved"
+  | "rejected"
+  | "confirmed"
+  | "dispatched"
+  | "cancelled"
+  | "dispatch_failed";
 
 /** Способ утверждения резолюции (Р9): только два — иначе подпись неотличима от правки. */
 export type ApprovalMethod = "app" | "email";
