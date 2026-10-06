@@ -82,6 +82,7 @@ export function docflowMockModule(): Record<string, unknown> {
   // Список статусов документа — продуктовый: берём настоящий, чтобы проверка на сервере
   // не разошлась с тем, что принимает журнал.
   const types = jest.requireActual("@mailsense/docflow/types") as Record<string, unknown>;
+  const replies = jest.requireActual("@mailsense/docflow/approvalReplies") as Record<string, unknown>;
 
   const stub = (value: unknown) => jest.fn(async () => value);
 
@@ -138,7 +139,13 @@ export function docflowMockModule(): Record<string, unknown> {
     updateDocument: jest.fn(async (id: string) => ({ id, regNumber: "вх1" })),
     documentStatusCounts: stub({}),
     peekNextNumber: stub({ number: "вх1" }),
-    getNumberingState: stub({}),
+    // Открытый период по умолчанию — текущий год: закрывать можно только его.
+    getNumberingState: stub({
+      rules: [],
+      openPeriod: String(new Date().getFullYear()),
+      archivedPeriods: [],
+      blockedReason: null
+    }),
     saveNumberingRule: stub({}),
     archivePeriod: stub(undefined),
     listArchivedPeriods: stub([]),
@@ -161,11 +168,18 @@ export function docflowMockModule(): Record<string, unknown> {
       documentNumber: "вх1",
       text: "Подготовить ответ",
       deadline: "2026-11-01",
+      status: "pending_approval",
+      preparedBy: null,
+      approvedBy: null,
+      confirmedBy: null,
+      dispatchedBy: null,
+      // ⚠️ Исполнитель по умолчанию — ДРУГОЙ человек: на этой записи проверяется,
+      // что чужое поручение не отдаётся (доступ участнику проверяет маршрут).
       assignees: [
         {
-          userId: "u-executor",
+          userId: "u-assignee",
           fullName: "Исполнитель",
-          email: "u-executor@stand.test",
+          email: "u-assignee@stand.test",
           kind: "responsible"
         }
       ]
@@ -190,6 +204,16 @@ export function docflowMockModule(): Record<string, unknown> {
       status: "sent",
       dispatchEmailId: emailId
     })),
+    /** Запись письма-запроса резолюции: без неё ответ руководителя не сопоставляется. */
+    attachRequestEmail: jest.fn(async (id: string, emailId: string) => ({
+      id,
+      status: "pending_approval",
+      requestEmailId: emailId
+    })),
+    /** Настоящее сопоставление ответов по треду (In-Reply-To/References). */
+    matchReplies: replies.matchReplies,
+    /** Кандидаты на утверждение/отчёт: в бою их даёт docflow по requestEmailId/dispatchEmailId. */
+    listReplyCandidates: stub([]),
     /** Откат отправки: поручение снова ждёт отправки. */
     revertDispatch: jest.fn(async (id: string) => ({ id, status: "approved", dispatchEmailId: null })),
 

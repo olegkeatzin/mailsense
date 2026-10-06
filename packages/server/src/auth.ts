@@ -149,9 +149,118 @@ export function requirePermission(permission: Permission) {
   };
 }
 
+/**
+ * Проверка «подходит любое из прав».
+ *
+ * Нужна там, где действие разрешено двум разным ролям по разным основаниям: справочник
+ * исполнителей нужен и тому, кто создаёт поручения (аппарат, руководитель), и тому, кто
+ * их подписывает (он вправе назначить исполнителя прямо при утверждении, Р8).
+ */
+export function requireAnyPermission(...permissions: Permission[]) {
+  return async (req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> => {
+    const enabled = await docflowOn(res);
+    if (enabled === null) return;
+    if (!enabled) return next();
+    if (req.authLookupError) {
+      res.status(503).json({ error: "База документооборота недоступна: " + req.authLookupError.message });
+      return;
+    }
+    if (!req.user) {
+      res.status(401).json({ error: "Требуется вход в систему" });
+      return;
+    }
+    if (!permissions.some((permission) => hasPermission(req.user, permission))) {
+      res.status(403).json({ error: "Недостаточно прав для этого действия" });
+      return;
+    }
+    next();
+  };
+}
+
 /** Требует администратора (право управления пользователями). */
 export const requireAdmin = requirePermission("users.manage");
 
+
+/**
+ * Кэш проверенных сессий режима клиента: токен → время последней удачной проверки.
+ *
+ * Живёт в модуле, а не в экземпляре middleware: сессии принадлежат процессу, и после
+ * падения удалённого сервера уже подтверждённая сессия должна продолжать работать —
+ * почта-то локальная.
+ */
+const remoteVerified = new Map<string, number>();
+/** Сколько держать положительный ответ: иначе каждый запрос к почте ходил бы на сервер. */
+const REMOTE_CHECK_TTL_MS = 5000;
+const REMOTE_CHECK_TIMEOUT_MS = 3000;
+/** Предел кэша: сессий примерно столько, сколько пользователей, но бережёмся. */
+const REMOTE_CACHE_MAX = 200;
+
+/** Спрашивает удалённый СЭД, жива ли сессия. «unknown» — сервер не ответил. */
+async function checkRemoteSession(baseUrl: string, token: string): Promise<"valid" | "invalid" | "unknown"> {
+  try {
+    const res = await fetch(baseUrl + "/api/auth/me", {
+      headers: { authorization: "Bearer " + token },
+      signal: AbortSignal.timeout(REMOTE_CHECK_TIMEOUT_MS)
+    });
+    if (res.status >= 500) return "unknown";
+    if (res.status !== 200) return "invalid";
+    const body = (await res.json().catch(() => null)) as { user?: unknown } | null;
+    return body && body.user ? "valid" : "invalid";
+  } catch {
+    return "unknown";
+  }
+}
+
+function rememberRemoteSession(token: string, at: number): void {
+  remoteVerified.delete(token);
+  remoteVerified.set(token, at);
+  while (remoteVerified.size > REMOTE_CACHE_MAX) {
+    const oldest = remoteVerified.keys().next().value;
+    if (oldest === undefined) break;
+    remoteVerified.delete(oldest);
+  }
+}
+
+/**
+ * Аутентификация локальных маршрутов в режиме клиента (почта локальная, СЭД удалённый).
+ *
+ * ⚠️ Здесь локальной базы документооборота нет по определению, поэтому requirePermission
+ * считает СЭД выключенным и пропускает всех: без этой проверки любой, кто дотянется до порта,
+ * читал бы почту и вложения, отправлял письма и забирал ключ модели из /api/ai/config.
+ *
+ * Сессию подтверждает тот сервер, который её выдал. Если он недоступен: сессию, которую
+ * уже подтверждали, пропускаем (локальная почта обязана работать без сервера), незнакомую —
+ * нет: иначе достаточно «уронить» сервер, чтобы обойти проверку.
+ */
+export function requireRemoteSession(options: { baseUrl: string }): express.RequestHandler {
+  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  return async (req, res, next) => {
+    if (!req.path.startsWith("/api/")) return next();
+    if (PUBLIC_PATHS.has(req.path)) return next();
+    const token = req.sessionToken;
+    if (!token) {
+      res.status(401).json({ error: "Требуется вход в систему" });
+      return;
+    }
+    const now = Date.now();
+    const verifiedAt = remoteVerified.get(token);
+    if (verifiedAt !== undefined && now - verifiedAt < REMOTE_CHECK_TTL_MS) return next();
+
+    const verdict = await checkRemoteSession(baseUrl, token);
+    if (verdict === "valid") {
+      rememberRemoteSession(token, now);
+      return next();
+    }
+    if (verdict === "invalid") {
+      remoteVerified.delete(token);
+      res.status(401).json({ error: "Сессия недействительна — войдите заново" });
+      return;
+    }
+    // Сервер недоступен: сессию, подтверждённую раньше, пропускаем — почта локальная.
+    if (verifiedAt !== undefined) return next();
+    res.status(503).json({ error: "Не удалось проверить сессию: сервер документооборота недоступен" });
+  };
+}
 export function sessionCookieOptions(req: express.Request, maxAgeMs: number) {
   const secure = req.secure || (req.headers["x-forwarded-proto"] ?? "").toString().includes("https");
   return {

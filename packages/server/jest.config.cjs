@@ -23,7 +23,10 @@ module.exports = {
     // чтобы матрица «маршрут × роль» проверяла реальные права, а не их копию в тесте.
     "^@mailsense/docflow/roles$": "<rootDir>/../docflow/src/roles.ts",
     "^@mailsense/docflow/errors$": "<rootDir>/../docflow/src/errors.ts",
-    "^@mailsense/docflow/types$": "<rootDir>/../docflow/src/types.ts"
+    "^@mailsense/docflow/types$": "<rootDir>/../docflow/src/types.ts",
+    // Сопоставление ответа по треду — чистая функция: в тестах берём настоящую,
+    // чтобы проверять штатный путь «ответ руководителя письмом», а не её копию.
+    "^@mailsense/docflow/approvalReplies$": "<rootDir>/../docflow/src/approvalReplies.ts"
   },
   moduleFileExtensions: ["ts", "js", "json"],
   testMatch: ["**/*.test.ts"],

@@ -25,6 +25,24 @@ const mockedCore = core as unknown as Record<string, jest.Mock>;
 
 const token = (role: string) => "token:" + role;
 
+/** Карточка поручения: по умолчанию — ЧУЖОЕ поручение, ждущее подписи. */
+const resolutionDetail = (patch: Record<string, unknown> = {}) => ({
+  id: "res-1",
+  documentId: "doc-1",
+  documentNumber: "вх1",
+  text: "Подготовить ответ",
+  deadline: "2026-11-01",
+  status: "pending_approval",
+  preparedBy: null,
+  approvedBy: null,
+  confirmedBy: null,
+  dispatchedBy: null,
+  assignees: [
+    { userId: "u-assignee", fullName: "Исполнитель", email: "u-assignee@stand.test", kind: "responsible" }
+  ],
+  ...patch
+});
+
 interface RouteCase {
   /** Что именно защищаем — формулировка требования. */
   what: string;
@@ -142,7 +160,7 @@ const CASES: RouteCase[] = [
     what: "POST /api/docflow/resolutions/:id/report/confirm — принять отчёт может только аппарат",
     method: "POST",
     path: "/api/docflow/resolutions/res-1/report/confirm",
-    body: { userId: "u-executor" },
+    body: { userId: "u-assignee" },
     allowed: ["admin", "secretary"]
   },
   {
@@ -156,7 +174,7 @@ const CASES: RouteCase[] = [
     what: "POST /api/docflow/numbering/archive — закрытие года только с правом архивации",
     method: "POST",
     path: "/api/docflow/numbering/archive",
-    body: { period: "2026" },
+    body: { period: String(new Date().getFullYear()) },
     allowed: ["admin", "secretary"]
   },
   {
@@ -194,8 +212,131 @@ const CASES: RouteCase[] = [
     method: "GET",
     path: "/api/docflow/resolutions/board",
     allowed: ["admin", "secretary", "manager"]
+  },
+  {
+    what: "GET /api/docflow/resolutions/by-document/:id — поручения документа только управляющим",
+    method: "GET",
+    path: "/api/docflow/resolutions/by-document/doc-1",
+    allowed: ["admin", "secretary", "manager"]
+  },
+  {
+    what: "GET /api/docflow/resolutions/:id — чужое поручение не отдаётся (подписанту — то, что ждёт подписи)",
+    method: "GET",
+    path: "/api/docflow/resolutions/res-1",
+    allowed: ["admin", "secretary", "manager", "signer"]
+  },
+  {
+    what: "POST /api/docflow/resolutions/forward — письмо руководителю направляет только аппарат",
+    method: "POST",
+    path: "/api/docflow/resolutions/forward",
+    body: { documentId: "doc-1", toUserId: "u-manager" },
+    allowed: ["admin", "secretary"],
+    ok: 201
+  },
+  {
+    what: "POST /api/docflow/resolutions/draft — черновик текста готовит тот, кто создаёт поручения",
+    method: "POST",
+    path: "/api/docflow/resolutions/draft",
+    body: { documentId: "doc-1" },
+    allowed: ["admin", "secretary", "manager"]
+  },
+  {
+    what: "GET /api/docflow/resolutions/suggest-assignees — подсказка исполнителей: поручающим и подписывающим",
+    method: "GET",
+    path: "/api/docflow/resolutions/suggest-assignees",
+    allowed: ["admin", "secretary", "manager", "signer"]
+  },
+  {
+    what: "GET /api/docflow/resolutions/executor-candidates — справочник людей: поручающим и подписывающим",
+    method: "GET",
+    path: "/api/docflow/resolutions/executor-candidates",
+    allowed: ["admin", "secretary", "manager", "signer"]
+  },
+  {
+    what: "GET /api/docflow/resolutions/my-tasks — свои задачи исполнителя",
+    method: "GET",
+    path: "/api/docflow/resolutions/my-tasks",
+    allowed: [...ROLES]
+  },
+  {
+    what: "GET /api/docflow/resolutions/for-confirmation — очередь аппарата «ждёт подтверждения»",
+    method: "GET",
+    path: "/api/docflow/resolutions/for-confirmation",
+    allowed: ["admin", "secretary"]
+  },
+  {
+    what: "GET /api/docflow/resolutions/for-approval — очередь подписанта",
+    method: "GET",
+    path: "/api/docflow/resolutions/for-approval",
+    allowed: ["admin", "manager", "signer"]
+  },
+  {
+    what: "GET /api/docflow/resolutions — список поручений только управляющим",
+    method: "GET",
+    path: "/api/docflow/resolutions",
+    allowed: ["admin", "secretary", "manager"]
+  },
+  {
+    what: "PATCH /api/docflow/resolutions/:id — правка поручения до утверждения",
+    method: "PATCH",
+    path: "/api/docflow/resolutions/res-1",
+    body: { text: "уточнение" },
+    allowed: ["admin", "secretary", "manager"]
+  },
+  {
+    what: "POST /api/docflow/resolutions/:id/request-approval — на утверждение отправляет аппарат",
+    method: "POST",
+    path: "/api/docflow/resolutions/res-1/request-approval",
+    body: {},
+    allowed: ["admin", "secretary", "manager"]
+  },
+  {
+    what: "POST /api/docflow/resolutions/:id/email-approval — отметить ответ подписанта письмом",
+    method: "POST",
+    path: "/api/docflow/resolutions/res-1/email-approval",
+    body: { emailId: "e-1" },
+    allowed: ["admin", "secretary"]
+  },
+  {
+    what: "POST /api/docflow/resolutions/:id/reject — вернуть на доработку",
+    method: "POST",
+    path: "/api/docflow/resolutions/res-1/reject",
+    body: { comment: "не согласовано" },
+    allowed: ["admin", "secretary"]
+  },
+  {
+    what: "POST /api/docflow/resolutions/:id/cancel — отменить поручение",
+    method: "POST",
+    path: "/api/docflow/resolutions/res-1/cancel",
+    body: { comment: "отбой" },
+    allowed: ["admin", "secretary"]
+  },
+  {
+    what: "GET /api/docflow/resolutions/:id/ics — задача в календарь участника",
+    method: "GET",
+    path: "/api/docflow/resolutions/res-1/ics",
+    allowed: ["admin", "secretary", "manager", "signer"]
+  },
+  {
+    what: "POST /api/docflow/resolutions/:id/close — закрыть поручение аппаратом",
+    method: "POST",
+    path: "/api/docflow/resolutions/res-1/close",
+    body: { comment: "исполнено лично" },
+    allowed: ["admin", "secretary"]
+  },
+  {
+    what: "POST /api/docflow/resolutions/:id/received — расписка исполнителя о получении",
+    method: "POST",
+    path: "/api/docflow/resolutions/res-1/received",
+    allowed: [...ROLES]
   }
 ];
+
+/**
+ * Маршруты резолюций, которых нет в матрице. Успех здесь требует живого письма-источника
+ * и подписанта в каталоге — это отдельный сценарий, а не проверка прав.
+ */
+const MATRIX_EXCEPTIONS = new Set(["POST /api/docflow/resolutions/:id/mark-approval"]);
 
 let expressApp: express.Express;
 let app: RunningApp;
@@ -421,6 +562,377 @@ describe("отправка поручения: захват → письмо →
     expect(res.status).toBe(500);
     expect(res.text).not.toContain("SMTP");
     expect(res.text).not.toContain("отчитался");
+  });
+});
+
+describe("пересылка руководителю: сначала захват, потом письмо", () => {
+  it("резолюция создаётся ДО отправки письма", async () => {
+    const order: string[] = [];
+    mockedDocflow.forwardToManager.mockImplementationOnce(async () => {
+      order.push("захват");
+      return { id: "res-1", status: "pending_approval" };
+    });
+    mockedCore.sendEmail.mockImplementationOnce(async () => {
+      order.push("письмо");
+      return { emailId: "sent-1", messageId: "<sent-1@stand.test>" };
+    });
+    mockedDocflow.attachRequestEmail.mockImplementationOnce(async (id: string, emailId: string) => {
+      order.push("запись письма");
+      return { id, status: "pending_approval", requestEmailId: emailId };
+    });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", toUserId: "u-manager" }
+    });
+
+    expect(res.status).toBe(201);
+    expect(order).toEqual(["захват", "письмо", "запись письма"]);
+    // Письмо-запрос записано тем самым письмом, которое ушло руководителю.
+    expect(mockedDocflow.attachRequestEmail).toHaveBeenCalledWith(
+      "res-1",
+      "sent-1",
+      expect.objectContaining({ id: "u-secretary" })
+    );
+    expect(res.body).toMatchObject({ requestEmailId: "sent-1" });
+  });
+
+  it("после сбоя отправки пересылку можно повторить — захват откатился", async () => {
+    mockedCore.sendEmail.mockRejectedValueOnce(new Error("SMTP 550: ящик отверг письмо"));
+
+    const failed = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", toUserId: "u-manager" }
+    });
+
+    expect(failed.status).toBe(500);
+    expect(mockedDocflow.cancelResolution).toHaveBeenCalledTimes(1);
+    expect(mockedDocflow.attachRequestEmail).not.toHaveBeenCalled();
+
+    // Отменённая запись повторную пересылку не блокирует: письмо уходит со второго раза.
+    mockedCore.sendEmail.mockResolvedValueOnce({ emailId: "sent-2", messageId: "<sent-2@stand.test>" });
+    const retry = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", toUserId: "u-manager" }
+    });
+
+    expect(retry.status).toBe(201);
+    expect(retry.body).toMatchObject({ requestEmailId: "sent-2" });
+  });
+
+  it("двойной клик отправляет руководителю ровно одно письмо", async () => {
+    const AppError = (docflow as unknown as { AppError: new (m: string, s: number, c: string) => Error }).AppError;
+    mockedDocflow.forwardToManager
+      .mockImplementationOnce(async () => ({ id: "res-1", status: "pending_approval" }))
+      .mockImplementationOnce(async () => {
+        throw new AppError("Письмо уже направлено руководителю", 409, "bad_state");
+      });
+
+    const [first, second] = await Promise.all([
+      request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+        token: token("secretary"),
+        body: { documentId: "doc-1", toUserId: "u-manager" }
+      }),
+      request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+        token: token("secretary"),
+        body: { documentId: "doc-1", toUserId: "u-manager" }
+      })
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([201, 409]);
+    expect(mockedCore.sendEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it("письмо не ушло — пересылка откатывается, наружу исходная ошибка", async () => {
+    mockedCore.sendEmail.mockRejectedValueOnce(new Error("SMTP 550: ящик отверг письмо"));
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", toUserId: "u-manager" }
+    });
+
+    expect(res.status).toBe(500);
+    expect(res.text).not.toContain("SMTP");
+    expect(mockedDocflow.cancelResolution).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ответ руководителя письмом снова сопоставляется с поручением", () => {
+  it("письмо из пересылки находится в списке ожидающих утверждения", async () => {
+    // 1) Аппарат переслал письмо руководителю: запись создана, письмо записано.
+    mockedCore.sendEmail.mockResolvedValueOnce({ emailId: "sent-1", messageId: "<sent-1@stand.test>" });
+    const forwarded = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", toUserId: "u-manager" }
+    });
+    expect(forwarded.status).toBe(201);
+    const sentEmailId = (forwarded.body as { sentEmailId: string }).sentEmailId;
+    expect(sentEmailId).toBe("sent-1");
+
+    // 2) docflow отдаёт это письмо кандидатом на утверждение (его тесты это гарантируют).
+    mockedDocflow.listReplyCandidates.mockResolvedValueOnce([
+      {
+        resolutionId: "res-1",
+        expects: "approval",
+        emailId: sentEmailId,
+        documentNumber: "вх1",
+        documentSummary: "Письмо от поставщика",
+        taskText: "",
+        assignees: []
+      }
+    ]);
+
+    // 3) Руководитель ответил в треде: аппарат видит подсказку по этому поручению.
+    mockedCore.getEmailView.mockImplementation((id: string) =>
+      id === sentEmailId
+        ? { id: sentEmailId, messageId: "<sent-1@stand.test>" }
+        : {
+            id: "reply-1",
+            messageId: "<reply-1@stand.test>",
+            inReplyTo: "<sent-1@stand.test>",
+            references: ["<sent-1@stand.test>"]
+          }
+    );
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/emails/reply-1/reply-context", {
+      token: token("secretary")
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([
+      expect.objectContaining({ resolutionId: "res-1", expects: "approval", documentNumber: "вх1" })
+    ]);
+  });
+
+  it("ответ без признаков треда поручением не считается", async () => {
+    mockedDocflow.listReplyCandidates.mockResolvedValueOnce([
+      {
+        resolutionId: "res-1",
+        expects: "approval",
+        emailId: "sent-1",
+        documentNumber: "вх1",
+        documentSummary: "",
+        taskText: "",
+        assignees: []
+      }
+    ]);
+    mockedCore.getEmailView.mockImplementation((id: string) =>
+      id === "sent-1"
+        ? { id: "sent-1", messageId: "<sent-1@stand.test>" }
+        : { id: "reply-2", messageId: "<reply-2@stand.test>", inReplyTo: null, references: [] }
+    );
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/emails/reply-2/reply-context", {
+      token: token("secretary")
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+});
+
+describe("чужое поручение не отдаётся, своё открывается", () => {
+  it("исполнитель получает 403 на чужое поручение", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1", {
+      token: token("executor")
+    });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: "not_participant" });
+  });
+
+  it("исполнитель открывает СВОЮ задачу из «Моих задач»", async () => {
+    mockedDocflow.getResolutionDetail.mockResolvedValueOnce(
+      resolutionDetail({
+        assignees: [
+          { userId: "u-executor", fullName: "Петрова М.А.", email: "p@stand.test", kind: "responsible" }
+        ]
+      })
+    );
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1", {
+      token: token("executor")
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("подписант открывает то, что ждёт подписи (очередь «На утверждении»)", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1", {
+      token: token("signer")
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("подписант не открывает уже отправленное чужое поручение", async () => {
+    mockedDocflow.getResolutionDetail.mockResolvedValueOnce(resolutionDetail({ status: "sent" }));
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1", {
+      token: token("signer")
+    });
+
+    expect(res.status).toBe(403);
+  });
+
+  it("подписант открывает своё поручение и после отправки", async () => {
+    mockedDocflow.getResolutionDetail.mockResolvedValueOnce(
+      resolutionDetail({ status: "sent", approvedBy: "u-signer" })
+    );
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1", {
+      token: token("signer")
+    });
+
+    expect(res.status).toBe(200);
+  });
+
+  it("аппарат открывает любое поручение", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1", {
+      token: token("secretary")
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("по документу список отдаётся только управляющим", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/by-document/doc-1", {
+      token: token("executor")
+    });
+
+    expect(res.status).toBe(403);
+    expect(mockedDocflow.listDocumentResolutions).not.toHaveBeenCalled();
+  });
+
+  it("календарь (:id/ics) тоже не отдаёт чужое поручение", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1/ics", {
+      token: token("executor")
+    });
+    expect(res.status).toBe(403);
+  });
+});
+
+describe("справочник исполнителей: поручающим и подписывающим, не рядовому", () => {
+  const paths = [
+    "/api/docflow/resolutions/executor-candidates",
+    "/api/docflow/resolutions/suggest-assignees"
+  ];
+
+  it("подписант получает справочник — он назначает исполнителя при утверждении (Р8)", async () => {
+    for (const path of paths) {
+      const res = await request(app.baseUrl, "GET", path, { token: token("signer") });
+      expect([path, res.status]).toEqual([path, 200]);
+    }
+  });
+
+  it("аппарат получает справочник — он поручает", async () => {
+    for (const path of paths) {
+      const res = await request(app.baseUrl, "GET", path, { token: token("secretary") });
+      expect([path, res.status]).toEqual([path, 200]);
+    }
+  });
+
+  it("исполнитель не получает ФИО и адреса всех сотрудников — 403 и без выборки", async () => {
+    for (const path of paths) {
+      const res = await request(app.baseUrl, "GET", path, { token: token("executor") });
+      expect([path, res.status]).toEqual([path, 403]);
+    }
+    expect(mockedDocflow.listUsersWithRoles).not.toHaveBeenCalled();
+  });
+});
+
+describe("покрытие маршрутов резолюций", () => {
+  it("все маршруты резолюций есть в матрице или в списке исключений", () => {
+    // В стеке Express пути с параметрами (/:id), в матрице — с конкретными идентификаторами,
+    // поэтому сравниваем по шаблону маршрута.
+    const matches = (pattern: string, path: string) =>
+      new RegExp("^" + pattern.replace(/:[A-Za-z0-9_]+/g, "[^/]+") + "$").test(path);
+
+    const routes = routesOf(expressApp).filter((route) =>
+      route.path.startsWith("/api/docflow/resolutions")
+    );
+    const missing = routes
+      .filter(
+        (route) =>
+          !CASES.some((c) => c.method === route.method && matches(route.path, c.path)) &&
+          !MATRIX_EXCEPTIONS.has(route.method + " " + route.path)
+      )
+      .map((route) => route.method + " " + route.path);
+
+    expect(missing).toEqual([]);
+    // Если разбор стека сломается, тест обязан заметить это, а не «пройти» на пустом списке.
+    expect(routes.length).toBeGreaterThanOrEqual(25);
+  });
+});
+
+describe("закрыть можно только открытый год", () => {
+  const year = String(new Date().getFullYear());
+
+  it("архивация открытого года проходит", async () => {
+    mockedDocflow.getNumberingState.mockResolvedValueOnce({
+      rules: [],
+      openPeriod: year,
+      archivedPeriods: [],
+      blockedReason: null
+    });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
+      token: token("secretary"),
+      body: { period: year }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedDocflow.archivePeriod).toHaveBeenCalledTimes(1);
+  });
+
+  it("будущий год при открытом текущем отклонён — иначе он закроется навсегда", async () => {
+    mockedDocflow.getNumberingState.mockResolvedValueOnce({
+      rules: [],
+      openPeriod: year,
+      archivedPeriods: [],
+      blockedReason: null
+    });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
+      token: token("secretary"),
+      body: { period: String(Number(year) + 1) }
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "not_open_period" });
+    expect(String((res.body as { error?: string }).error)).toContain(year);
+    expect(mockedDocflow.archivePeriod).not.toHaveBeenCalled();
+  });
+
+  it("закрывается открытый период, а не год по календарю", async () => {
+    mockedDocflow.getNumberingState.mockResolvedValueOnce({
+      rules: [],
+      openPeriod: "2024",
+      archivedPeriods: [],
+      blockedReason: null
+    });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
+      token: token("secretary"),
+      body: { period: "2025" }
+    });
+
+    expect(res.status).toBe(400);
+    expect(mockedDocflow.archivePeriod).not.toHaveBeenCalled();
+  });
+
+  it("пустой журнал: закрывать нечего", async () => {
+    mockedDocflow.getNumberingState.mockResolvedValueOnce({
+      rules: [],
+      openPeriod: null,
+      archivedPeriods: [],
+      blockedReason: null
+    });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
+      token: token("secretary"),
+      body: { period: year }
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "empty_journal" });
   });
 });
 

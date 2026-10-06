@@ -92,7 +92,16 @@ import {
   type AuthUser,
   type UserWithRoles
 } from "@mailsense/docflow";
-import { attachUser, parseCookies, requireAdmin, requireAuth, requirePermission, sessionCookieOptions } from "./auth.js";
+import {
+  attachUser,
+  parseCookies,
+  requireAdmin,
+  requireAnyPermission,
+  requireAuth,
+  requirePermission,
+  requireRemoteSession,
+  sessionCookieOptions
+} from "./auth.js";
 import { mountJournalRoutes } from "./journalRoutes.js";
 import { mountResolutionRoutes } from "./resolutionRoutes.js";
 import { createDocflowProxy } from "./proxy.js";
@@ -121,6 +130,24 @@ function asyncHandler(
   return (req: express.Request, res: express.Response, next: express.NextFunction) => {
     fn(req, res, next).catch(next);
   };
+}
+
+/**
+ * Вложения приходят из интерфейса уже готовыми: base64 подставляется в момент
+ * отправки/сохранения черновика. Шаблон пересылки отдаёт только ссылки на файлы,
+ * и если клиент их не подтянул, вложение окажется пустым. Молча отправить такое
+ * письмо нельзя: человек видит файл в окне и уверен, что он уйдёт.
+ */
+function attachmentsError(list: unknown): string | null {
+  if (!Array.isArray(list)) return null;
+  for (const raw of list) {
+    const att = (raw ?? {}) as Record<string, unknown>;
+    if (typeof att.data !== "string") {
+      const name = typeof att.filename === "string" && att.filename ? att.filename : "(без имени)";
+      return "Вложение «" + name + "» не загружено — приложите файл заново";
+    }
+  }
+  return null;
 }
 
 function accountDto(a: {
@@ -266,7 +293,15 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   // Пользователь сессии + обязательный вход (когда документооборот ведётся локально).
   app.use(attachUser);
-  if (!proxyMode) app.use(requireAuth);
+  if (proxyMode) {
+    // ⚠️ В режиме клиента локальной базы СЭД нет: requirePermission считает документооборот
+    // выключенным и пропускает всех. Поэтому локальные маршруты (почта, вложения, настройки,
+    // ключ модели) проверяют сессию у того сервера, который её выдал. Пути документооборота
+    // сюда не доходят — их обслуживает прокси выше, а авторизует удалённый сервер.
+    app.use(requireRemoteSession({ baseUrl: options.docflowServerUrl! }));
+  } else {
+    app.use(requireAuth);
+  }
 
   // -------- health / settings --------
   app.get("/api/health", (_req, res) => {
@@ -578,7 +613,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   app.post(
     "/api/emails/send",
     asyncHandler(async (req, res) => {
-      const compose = req.body as ComposeInput;
+      const compose = (req.body ?? {}) as ComposeInput;
+      const bad = attachmentsError(compose.attachments);
+      if (bad) return res.status(400).json({ error: bad });
       const result = await sendEmail(compose);
       res.status(201).json(result);
     })
@@ -599,6 +636,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post("/api/drafts", (req, res) => {
     const d = req.body ?? {};
+    const bad = attachmentsError(d.attachments);
+    if (bad) return res.status(400).json({ error: bad });
     const draft = insertDraft({
       accountId: d.accountId,
       to: d.to ?? [],
@@ -617,6 +656,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.put("/api/drafts/:id", (req, res) => {
     const d = req.body ?? {};
+    const bad = attachmentsError(d.attachments);
+    if (bad) return res.status(400).json({ error: bad });
     const draft = updateDraft(req.params.id, {
       to: d.to,
       cc: d.cc,
@@ -1037,7 +1078,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   // -------- Документооборот: журнал регистрации (этап 2) --------
   mountJournalRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
-  mountResolutionRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+  mountResolutionRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });
 
   // Ответ руководителя распознаётся сразу после синхронизации ящика: письмо приходит
   // в тред, резолюция переходит в «ждёт подтверждения», аппарат видит её в своей очереди.

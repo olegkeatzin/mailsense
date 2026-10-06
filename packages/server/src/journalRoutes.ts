@@ -153,6 +153,28 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       const b = req.body ?? {};
       const period = String(b.period ?? "");
       if (!/^\d{4}$/.test(period)) throw new AppError("Укажите год выгрузки", 400, "bad_period");
+      // ⚠️ Закрыть можно только открытый период: записи архива удалять нечем, поэтому
+      // выгруженный год закрыт навсегда. Раньше принимался любой год — случайная выгрузка
+      // «2027» при открытом 2026 закрывала год, в котором ещё никто не работал, и открыть
+      // его было уже нельзя.
+      const state = await getNumberingState();
+      const open = state.openPeriod;
+      if (!open) {
+        throw new AppError("В журнале ещё нет документов — закрывать нечего", 400, "empty_journal");
+      }
+      if (period !== open) {
+        throw new AppError(
+          "Закрыть можно только открытый год (" +
+            open +
+            "): " +
+            period +
+            " закроется навсегда. Выгрузите журнал за " +
+            open +
+            ".",
+          400,
+          "not_open_period"
+        );
+      }
       const docs = await listDocuments({ period, limit: 1 });
       const file = String(b.fileName ?? exportFileName("journal-" + period));
       await archivePeriod({ period, fileName: file, documentCount: docs.total }, actorOf(req));

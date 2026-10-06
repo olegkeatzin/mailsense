@@ -14,6 +14,7 @@ import {
   AppError,
   approveResolution,
   attachDispatchEmail,
+  attachRequestEmail,
   cancelResolution,
   closeResolution,
   confirmEmailApproval,
@@ -43,6 +44,7 @@ import {
   type Actor,
   type AssigneeKind,
   type Permission,
+  type ResolutionDetail,
   type ResolutionPriority,
   type ResolutionStatus
 } from "@mailsense/docflow";
@@ -56,6 +58,8 @@ import {
 export interface ResolutionDeps {
   requireDocflowDb: express.RequestHandler;
   requirePermission: (permission: Permission) => express.RequestHandler;
+  /** Право «любое из списка»: справочник исполнителей нужен и создающему, и подписанту. */
+  requireAnyPermission: (...permissions: Permission[]) => express.RequestHandler;
   asyncHandler: (
     fn: (req: express.Request, res: express.Response) => Promise<unknown>
   ) => express.RequestHandler;
@@ -90,6 +94,43 @@ function assigneesFrom(v: unknown): Array<{ userId: string; kind: AssigneeKind }
  * поэтому право проверяет сервер: иначе в графе «Резолюция руководства» окажется любой,
  * чей идентификатор попал в тело запроса.
  */
+/**
+ * Участник поручения: исполнитель, автор, подписант, подтвердивший разбор или отправивший.
+ *
+ * ⚠️ Список — это ровно те, кому поручение адресовано или кто его вёл. «Коллега с правом
+ * видеть журнал» участником не становится: чужие сроки, тексты и соисполнители ему ни к чему
+ * (решение заказчика 2026-10-05).
+ */
+function isResolutionParticipant(detail: ResolutionDetail, userId: string): boolean {
+  return (
+    detail.assignees.some((a) => a.userId === userId) ||
+    detail.preparedBy === userId ||
+    detail.approvedBy === userId ||
+    detail.confirmedBy === userId ||
+    detail.dispatchedBy === userId
+  );
+}
+
+/**
+ * Пропускает к карточке поручения только участника или того, кто поручениями управляет.
+ *
+ * Проверка на сервере, а не в интерфейсе: право journal.view есть у всех ролей, включая
+ * исполнителя, поэтому одной этой проверки на маршруте мало — карточка обходила решение
+ * заказчика в два запроса (список документов → карточка поручения).
+ */
+function assertResolutionVisible(req: express.Request, detail: ResolutionDetail): void {
+  const user = req.user;
+  if (!user) throw new AppError("Требуется вход", 401, "unauthorized");
+  if (user.permissions.includes("resolution.create")) return;
+  // Подписанту нужно открыть то, что ждёт его подписи: очередь «На утверждении» отдаёт
+  // ему эти поручения списком, и карточка не должна оказаться закрытой.
+  const awaitingSignature =
+    user.permissions.includes("resolution.approve") &&
+    (detail.status === "pending_approval" || detail.status === "email_approval");
+  if (awaitingSignature) return;
+  if (isResolutionParticipant(detail, user.id)) return;
+  throw new AppError("Поручение не ваше: карточка доступна участнику поручения", 403, "not_participant");
+}
 async function assertSignRight(userId: string, message = "У пользователя нет права подписи"): Promise<void> {
   const user = await getUser(userId);
   if (!user) throw new AppError("Утверждающий не найден", 400, "no_signer");
@@ -98,12 +139,16 @@ async function assertSignRight(userId: string, message = "У пользоват�
 }
 
 export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps): void {
-  const { requireDocflowDb, requirePermission, asyncHandler } = deps;
+  const { requireDocflowDb, requireAnyPermission, requirePermission, asyncHandler } = deps;
   const prepare = [requireDocflowDb, requirePermission("resolution.create")];
   const approve = [requireDocflowDb, requirePermission("resolution.approve")];
   const dispatch = [requireDocflowDb, requirePermission("resolution.dispatch")];
   const view = [requireDocflowDb, requirePermission("journal.view")];
   const tasks = [requireDocflowDb, requirePermission("task.view")];
+  // Справочник людей — управленческий вид: тот, кто поручает (resolution.create), и тот,
+  // кто подписывает (resolution.approve, он назначает исполнителя при утверждении, Р8).
+  // Исполнителю он не нужен: там ФИО и адреса всех сотрудников предприятия.
+  const assignees = [requireDocflowDb, requireAnyPermission("resolution.create", "resolution.approve")];
   // Отчёт — отдельное право: задачу видеть мало, отчитываться должен тот, кому поручено.
   const report = [requireDocflowDb, requirePermission("task.report")];
 
@@ -195,21 +240,46 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         "Аппарат генерального директора"
       ].filter((line) => line !== "").join("\n");
 
-      const sent = await sendEmail({
-        accountId: account.id,
-        to: [{ address: recipient.email, name: recipient.fullName }],
-        subject,
-        bodyText,
-        inReplyToEmailId: source?.id ?? null,
-        inReplyToMessageId: source?.messageId ?? null,
-        references: source?.messageId ? [source.messageId] : []
-      });
-
+      // ⚠️ Порядок как в /dispatch: сначала захват (forwardToManager — он же запрещает
+      // повторную пересылку), и только потом письмо. Раньше двойной клик отправлял
+      // руководителю ДВА письма, а записывалось одно: человек видел ошибку и был уверен,
+      // что не отправилось.
       const created = await forwardToManager(documentId, actorOf(req), {
-        emailId: sent.emailId,
         comment: b.comment ? String(b.comment) : "Письмо направлено: " + recipient.fullName
       });
-      res.status(201).json({ ...created, sentTo: recipient.email, sentEmailId: sent.emailId });
+
+      let sent: { emailId: string };
+      try {
+        sent = await sendEmail({
+          accountId: account.id,
+          to: [{ address: recipient.email, name: recipient.fullName }],
+          subject,
+          bodyText,
+          inReplyToEmailId: source?.id ?? null,
+          inReplyToMessageId: source?.messageId ?? null,
+          references: source?.messageId ? [source.messageId] : []
+        });
+      } catch (err) {
+        // Письмо не ушло — снимаем пересылку, иначе аппарат не сможет повторить:
+        // поручение осталось бы «на утверждении», которого руководитель не видел.
+        await cancelResolution(
+          created.id,
+          actorOf(req),
+          "Письмо руководителю не отправлено: " + (err as Error).message
+        ).catch((rollbackError: Error) => {
+          logger.warn(
+            { err: rollbackError.message, resolutionId: created.id },
+            "Не удалось снять пересылку после сбоя отправки"
+          );
+        });
+        throw err;
+      }
+
+      // Шаг 3: письмо ушло — записываем его идентификатор. Без этой записи requestEmailId
+      // пуст, и ответ руководителя письмом не сопоставляется с поручением: кандидатов
+      // listReplyCandidates ищет именно по нему, а шаг истории остаётся «manual».
+      const withEmail = await attachRequestEmail(created.id, sent.emailId, actorOf(req));
+      res.status(201).json({ ...withEmail, sentTo: recipient.email, sentEmailId: sent.emailId });
     })
   );
 
@@ -222,7 +292,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
    */
   app.get(
     "/api/docflow/resolutions/suggest-assignees",
-    ...view,
+    ...assignees,
     asyncHandler(async (req, res) => {
       const page = await listResolutions({ limit: 1 });
       res.json({
@@ -240,12 +310,12 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
    * Кандидаты в исполнители: активные пользователи с ФИО и адресом.
    *
    * ⚠️ Отдельный маршрут, а не `/api/users`: тот доступен только администратору, и экраны
-   * аппарата и руководителя падали с «Недостаточно прав», оставаясь пустыми. Здесь же ровно
-   * те данные, которые и так видны в журнале (кому поручено), — ничего лишнего не раскрываем.
+   * аппарата и руководителя падали с «Недостаточно прав», оставаясь пустыми. Доступ — тем,
+   * кто поручает или подписывает: исполнителю ФИО и адреса всех сотрудников не нужны.
    */
   app.get(
     "/api/docflow/resolutions/executor-candidates",
-    ...view,
+    ...assignees,
     asyncHandler(async (_req, res) => {
       const list = await listUsersWithRoles({ includeInactive: false });
       res.json(
@@ -370,9 +440,12 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     })
   );
 
+  // ⚠️ Поручения документа — управленческий вид (карточка документа в журнале).
+  // Права journal.view тут мало: оно есть у всех, и исполнитель получал список чужих
+  // поручений вместе с текстами и сроками, обходя решение заказчика.
   app.get(
     "/api/docflow/resolutions/by-document/:documentId",
-    ...view,
+    ...prepare,
     asyncHandler(async (req, res) => {
       res.json(await listDocumentResolutions(req.params.documentId));
     })
@@ -425,6 +498,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     asyncHandler(async (req, res) => {
       const detail = await getResolutionDetail(req.params.id);
       if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
+      // Карточка отдаёт текст поручения, срок, историю с комментариями и адреса всех
+      // исполнителей — чужому человеку здесь нечего делать.
+      assertResolutionVisible(req, detail);
       res.json(detail);
     })
   );
@@ -632,6 +708,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     asyncHandler(async (req, res) => {
       const detail = await getResolutionDetail(req.params.id);
       if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
+      // Файл календаря несёт текст поручения, срок и номер документа: то же правило,
+      // что и у карточки, иначе чужое поручение утекает через .ics.
+      assertResolutionVisible(req, detail);
       if (!detail.deadline) throw new AppError("У задачи не указан срок — в календарь нечего ставить", 400, "no_deadline");
 
       const day = detail.deadline.replace(/-/g, "");
