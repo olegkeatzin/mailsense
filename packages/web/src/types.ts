@@ -279,6 +279,8 @@ export type Permission =
   | "journal.register"
   | "journal.edit"
   | "journal.archive"
+  /** Отмена закрытия года: только администратор. */
+  | "journal.reopen"
   | "resolution.create"
   | "resolution.edit"
   | "resolution.approve"
@@ -446,6 +448,12 @@ export interface NumberingState {
   openPeriod: string | null;
   archivedPeriods: string[];
   blockedReason: string | null;
+  /** Сколько занимают вложения открытого года (null — размер неизвестен: предупреждать нечем). */
+  archiveSizeBytes?: number | null;
+  /** Предел архива без Zip64 — предупреждение о превышении. */
+  archiveLimitBytes?: number;
+  /** Готовое предупреждение о объёме архива (текст формирует сервер). */
+  archiveWarning?: { level: "ok" | "near" | "over"; text: string | null } | null;
 }
 
 export interface CaseRecord {

@@ -325,6 +325,40 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ period, fileName })
     }),
+  /**
+   * Ссылка на выгрузку АРХИВА года (ZIP с журналом и вложениями). Именно ССЫЛКА:
+   * файл может быть большим, и браузер качает его потоком сам, не занимая память страницы.
+   * (Excel-выгрузка журнала — journalExportUrl выше, это разные вещи.)
+   */
+  journalArchiveUrl: (year: string) => "/api/journal/export?year=" + encodeURIComponent(year),
+  /**
+   * Импорт архива года. Тело — сам ZIP, поэтому обычный request() (он ставит
+   * Content-Type: application/json) здесь не годится.
+   * ⚠️ Операция ПИШЕТ в журнал: вызывающий обязан предупредить пользователя.
+   */
+  importJournalArchive: async (file: File) => {
+    const res = await fetch(BASE + "/api/journal/import", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/zip" },
+      body: file
+    });
+    let body: { error?: string } & Record<string, unknown> = {};
+    try {
+      body = await res.json();
+    } catch {
+      /* тело может быть пустым */
+    }
+    if (!res.ok) throw new Error(body?.error ?? res.statusText);
+    return body as unknown as {
+      ok: boolean;
+      period: string;
+      inserted: Record<string, number>;
+      skipped: Record<string, number>;
+      attachments: number;
+    };
+  },
+
   cases: (onlyActive = false) =>
     request<CaseRecord[]>("/api/docflow/cases" + (onlyActive ? "?active=1" : "")),
   saveCase: (c: Partial<CaseRecord> & { code: string }) =>

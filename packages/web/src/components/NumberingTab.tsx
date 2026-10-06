@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Descriptions, Form, Input, Modal, Select, Space, Tag, message } from "antd";
 import { ExportOutlined, SaveOutlined } from "@ant-design/icons";
 import { api } from "../api";
@@ -17,6 +17,9 @@ export default function NumberingTab() {
   const [template, setTemplate] = useState("");
   const [reset, setReset] = useState<"year" | "never">("year");
   const [saving, setSaving] = useState(false);
+  const [exportYear, setExportYear] = useState(String(new Date().getFullYear()));
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   const editable = can("settings.manage");
 
@@ -73,6 +76,45 @@ export default function NumberingTab() {
     });
   };
 
+  /** Год выгрузки: открытый год журнала и текущий календарный. */
+  const yearOptions = Array.from(
+    new Set([state?.openPeriod, String(new Date().getFullYear())].filter((y): y is string => !!y))
+  ).map((y) => ({ value: y, label: y }));
+
+  const exportUrl = api.journalArchiveUrl(exportYear);
+  // Текст предупреждения готовит сервер (docflow): при досрочном выходе из обхода
+  // сумма — нижняя граница, и там честно написано «не менее».
+  const volumeWarning = state?.archiveWarning?.text ?? null;
+
+  const pickImport = (file: File | null) => {
+    if (!file) return;
+    Modal.confirm({
+      title: "Импортировать архив " + file.name + "?",
+      content:
+        "Операция ПИШЕТ в журнал: недостающие записи (документы, поручения, история шагов, " +
+        "следы аудита) будут добавлены. Существующие записи не изменяются и не дублируются. " +
+        "Отменить импорт нельзя.",
+      okText: "Импортировать",
+      cancelText: "Отмена",
+      onOk: async () => {
+        setImporting(true);
+        try {
+          const res = await api.importJournalArchive(file);
+          message.success(
+            "Архив " + res.period + " импортирован: добавлено документов " +
+              (res.inserted.documents ?? 0) + ", пропущено существующих " + (res.skipped.documents ?? 0)
+          );
+          await load();
+        } catch (err) {
+          message.error("Импорт отклонён: " + (err as Error).message);
+        } finally {
+          setImporting(false);
+          if (fileRef.current) fileRef.current.value = "";
+        }
+      }
+    });
+  };
+
   const example = (template || "{prefix}{n}")
     .split("{prefix}").join(prefix || "вх")
     .split("{year}").join(String(new Date().getFullYear()))
@@ -121,6 +163,44 @@ export default function NumberingTab() {
           Префикс и шаблон нельзя менять, пока в текущем году есть документы: иначе в одном журнале
           окажутся номера разного вида. Периодичность сброса менять можно — она влияет только на будущее.
         </div>
+      </Card>
+
+      <Card size="small" title="Архив года одним файлом">
+        <Space direction="vertical" size="small" style={{ width: "100%" }}>
+          <Space wrap>
+            <Select style={{ width: 120 }} value={exportYear} onChange={setExportYear} options={yearOptions} />
+            {/*
+              Скачивание — обычной ссылкой: файл может быть большим, браузер качает его
+              потоком и показывает ход сам. Кнопка с href и есть эта ссылка.
+            */}
+            <Button icon={<ExportOutlined />} href={exportUrl} target="_blank" rel="noreferrer">
+              Выгрузить журнал за год
+            </Button>
+            <Button loading={importing} onClick={() => fileRef.current?.click()}>
+              Импортировать архив…
+            </Button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".zip,application/zip"
+              style={{ display: "none" }}
+              onChange={(e) => pickImport(e.target.files?.[0] ?? null)}
+            />
+          </Space>
+
+          {volumeWarning && (
+            <Alert
+              type={state?.archiveWarning?.level === "over" ? "error" : "warning"}
+              showIcon
+              message="Объём архива года"
+              description={volumeWarning}
+            />
+          )}
+          <div style={{ color: "#595959", fontSize: 12 }}>
+            Выгрузка идёт потоком: сервер не собирает архив в памяти, а браузер сохраняет файл по готовности —
+            для большого года это занимает время. Импорт пишет записи в журнал и требует права архивации.
+          </div>
+        </Space>
       </Card>
 
       <Card size="small" title="Годы журнала">
