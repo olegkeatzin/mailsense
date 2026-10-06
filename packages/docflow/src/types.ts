@@ -22,6 +22,8 @@ export type Permission =
   | "journal.register"
   | "journal.edit"
   | "journal.archive"
+  /** Отмена закрытия года (изменение задним числом): только администратор. */
+  | "journal.reopen"
   | "resolution.create"
   | "resolution.edit"
   /** Утверждение резолюции: подписант ставит решение (Р8, Р9). */
@@ -240,6 +242,11 @@ export interface NumberingState {
   /** Год, в котором уже есть документы; null — журнал пуст. */
   openPeriod: string | null;
   archivedPeriods: string[];
+  /**
+   * Годы, закрытие которых ещё можно отменить: в новом году нет ни одного документа.
+   * Подсказка для интерфейса; окончательно решает транзакция переоткрытия.
+   */
+  reopenablePeriods: string[];
   /** Что мешает зарегистрировать документ прямо сейчас (если мешает). */
   blockedReason: string | null;
 }

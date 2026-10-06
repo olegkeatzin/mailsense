@@ -79,11 +79,20 @@ export interface PeriodGate {
  * иначе часть документов ушедшего года осталась бы без выгрузки навсегда.
  */
 export function canOpenPeriod(period: string, state: PeriodState): PeriodGate {
+  // ⚠️ Проверка архива — ПЕРВОЙ. Пока она стояла после «openPeriod === period», в закрытый
+  // год можно было зарегистрировать документ: после выгрузки 2026 самый поздний год журнала
+  // всё ещё 2026, и ворота пускали. Такой документ не попадал в уже снятый архив, то есть
+  // год считался закрытым, а данные года — неполными. Сначала архив, потом всё остальное.
+  if (state.archivedPeriods.includes(period)) {
+    return {
+      ok: false,
+      reason:
+        "Период " + period + " уже выгружен в архив и закрыт: новые документы в него не регистрируются. " +
+        "Если письмо всё-таки за " + period + " год — отмените закрытие года (администратор)."
+    };
+  }
   if (state.openPeriod === period) return { ok: true };
   if (state.openPeriod === null) return { ok: true }; // журнал ещё пуст — открываем любой год
-  if (state.archivedPeriods.includes(period)) {
-    return { ok: false, reason: "Период " + period + " уже выгружен в архив и закрыт" };
-  }
   const prev = previousPeriodKey(period);
   if (prev && state.openPeriod === prev) {
     return state.archivedPeriods.includes(prev)
@@ -103,4 +112,34 @@ export function canOpenPeriod(period: string, state: PeriodState): PeriodGate {
 /** Год считается закрытым, если по нему есть выгрузка. */
 export function isPeriodClosed(period: string, archivedPeriods: string[]): boolean {
   return archivedPeriods.includes(period);
+}
+
+/**
+ * Можно ли ОТМЕНИТЬ закрытие года (переоткрыть его).
+ *
+ * Безопасно ровно пока в новом году нет ни одного документа: номера ещё не выдавались,
+ * столкнуться нечему. Как только первый документ нового года зарегистрирован, отмена
+ * запрещена — и причина называет год, чтобы человек мог это проверить, а не поверить на слово.
+ */
+export function canReopenPeriod(period: string, state: PeriodState): PeriodGate {
+  if (!state.archivedPeriods.includes(period)) {
+    return { ok: false, reason: "Год " + period + " не закрыт — отменять нечего" };
+  }
+  // openPeriod — САМЫЙ ПОЗДНИЙ год с документами. Если он позже переоткрываемого,
+  // значит в новом году уже выдавали номера.
+  if (state.openPeriod && Number(state.openPeriod) > Number(period)) {
+    return {
+      ok: false,
+      reason:
+        "В " + state.openPeriod + " году уже зарегистрированы документы: номера выданы, отменить закрытие " +
+        period +
+        " года нельзя. Отмена возможна только до первого документа нового года."
+    };
+  }
+  return { ok: true };
+}
+
+/** Годы из архива, закрытие которых ещё можно отменить (подсказка для интерфейса). */
+export function reopenablePeriods(state: PeriodState): string[] {
+  return state.archivedPeriods.filter((p) => canReopenPeriod(p, state).ok);
 }

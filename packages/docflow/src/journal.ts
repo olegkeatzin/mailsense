@@ -16,8 +16,10 @@ import { AppError, isUniqueViolation } from "./errors.js";
 import {
   DEFAULT_NUMBERING_RULES,
   canOpenPeriod,
+  canReopenPeriod,
   periodKey,
   renderNumber,
+  reopenablePeriods,
   ruleForStream,
   type NumberingRule
 } from "./numbering.js";
@@ -212,6 +214,10 @@ export async function getNumberingState(period?: string): Promise<NumberingState
     rules,
     openPeriod: state.openPeriod,
     archivedPeriods: state.archivedPeriods,
+    // Годы, закрытие которых ещё можно отменить: интерфейс показывает это ДО нажатия,
+    // но решает всё равно транзакция переоткрытия (между показом и нажатием могли
+    // зарегистрировать документ).
+    reopenablePeriods: reopenablePeriods(state),
     blockedReason: gate.ok ? null : gate.reason ?? null
   };
 }
@@ -276,6 +282,27 @@ async function takeNextNumber(client: PoolClient, stream: string, period: string
   return res.rows[0].last_number;
 }
 
+/**
+ * Берёт строку счётчика периода ПЕРВОЙ — до чтения состояния периода.
+ *
+ * ⚠️ \`SELECT ... FOR UPDATE\` по НЕсуществующей строке не блокирует НИЧЕГО (rules §4.2),
+ * поэтому сначала обеспечиваем существование строки, и только потом блокируем её.
+ * Строка с last_number = 0 ни на что не влияет: подсказка номера показывает «следующий 1»,
+ * а выдача номера начинает счёт с единицы.
+ *
+ * Один и тот же первый захват во всех путях — регистрация, закрытие года, отмена закрытия:
+ * разный порядок блокировок даёт взаимную блокировку, а без общего якоря закрытие года
+ * и регистрация разъезжаются (документ попадает в закрытый год, не попав в архив).
+ */
+async function lockCounterRow(client: PoolClient, stream: string, period: string): Promise<void> {
+  await client.query(
+    "INSERT INTO number_counters (stream, period, last_number) VALUES ($1, $2, 0) " +
+      "ON CONFLICT (stream, period) DO NOTHING",
+    [stream, period]
+  );
+  await client.query("SELECT 1 FROM number_counters WHERE stream = $1 AND period = $2 FOR UPDATE", [stream, period]);
+}
+
 // ---------------- Регистрация ----------------
 
 export interface RegisterInput extends DocumentInput {
@@ -327,6 +354,10 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
     const regDate =
       input.regDate && /^\d{4}-\d{2}-\d{2}$/.test(input.regDate) ? input.regDate : todayIso();
     const period = periodKey(new Date(regDate + "T12:00:00"), rule.reset);
+
+    // Строку счётчика берём ДО чтения состояния: тот же первый захват, что у закрытия
+    // и отмены закрытия года. Иначе закрытие года не увидит эту регистрацию.
+    await lockCounterRow(client, "incoming", period);
 
     const state = await loadPeriodState("incoming", client);
     const gate = canOpenPeriod(period, state);
@@ -672,39 +703,197 @@ export async function findDuplicates(input: {
 
 // ---------------- Архив периода ----------------
 
-/** Выгрузка журнала в архив: закрывает год, после чего открывается следующий. */
-export async function archivePeriod(
-  input: { stream?: string; period: string; fileName?: string; documentCount?: number },
-  actor: Actor
-): Promise<void> {
+export interface ArchivePeriodInput {
+  stream?: string;
+  period: string;
+  fileName?: string;
+  documentCount?: number;
+}
+
+/**
+ * Запись архива и след — в ОДНОЙ транзакции: «год закрыт» без записи в аудите означало бы,
+ * что неизвестно, кто открыл следующий.
+ */
+async function insertArchiveRecord(client: PoolClient, input: ArchivePeriodInput, actor: Actor): Promise<void> {
   const stream = input.stream ?? "incoming";
-  // Закрытие периода и след — одна транзакция: «год закрыт» без записи в аудите
-  // означало бы, что неизвестно, кто открыл следующий.
-  await getDocflowDb().transaction(async (tx) => {
-    await tx
-      .insert(numberArchives)
-      .values({
-        id: randomUUID(),
-        stream,
-        period: input.period,
-        fileName: input.fileName ?? "",
-        documentCount: input.documentCount ?? 0,
-        createdAt: now(),
-        createdBy: actor.id
-      })
-      .onConflictDoNothing();
-    await insertAudit(
-      {
-        userId: actor.id,
-        userName: actor.name,
-        action: "journal.archive_period",
-        entityType: "number_archive",
-        entityId: stream + ":" + input.period,
-        newValue: { period: input.period, fileName: input.fileName ?? "", documentCount: input.documentCount ?? 0 }
-      },
-      tx
-    );
+  await client.query(
+    "INSERT INTO number_archives (id, stream, period, file_name, document_count, created_at, created_by) " +
+      "VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (stream, period) DO NOTHING",
+    [
+      randomUUID(),
+      stream,
+      input.period,
+      input.fileName ?? "",
+      input.documentCount ?? 0,
+      now(),
+      actor.id
+    ]
+  );
+  await auditInTx(client, {
+    userId: actor.id,
+    userName: actor.name,
+    action: "journal.archive_period",
+    entityType: "number_archive",
+    entityId: stream + ":" + input.period,
+    newValue: { period: input.period, fileName: input.fileName ?? "", documentCount: input.documentCount ?? 0 }
   });
+}
+
+/** Выгрузка журнала в архив: закрывает год, после чего открывается следующий. */
+export async function archivePeriod(input: ArchivePeriodInput, actor: Actor): Promise<void> {
+  const client = await getDocflowPool().connect();
+  try {
+    await client.query("BEGIN");
+    await insertArchiveRecord(client, input, actor);
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export interface ClosePeriodInput extends ArchivePeriodInput {
+  /**
+   * Сколько документов было в снимке. Если в базе уже больше — значит во время выгрузки
+   * зарегистрировали документ, архив неполный, и закрывать год по нему нельзя.
+   */
+  documentCount?: number;
+}
+
+export interface ClosePeriodResult {
+  period: string;
+  fileName: string;
+  documentCount: number;
+}
+
+/**
+ * Закрывает год — строгая версия archivePeriod для маршрута закрытия.
+ *
+ * Отличия от archivePeriod (та осталась для служебных вызовов и тестов):
+ *  • строка счётчика года берётся ПЕРВОЙ, поэтому регистрация документа в этом же году
+ *    не может проскользнуть между проверкой и записью архива;
+ *  • год обязан быть открытым и ещё не выгруженным (повторное закрытие — отказ, а не тихий «успех»);
+ *  • число документов сверяется со снимком: если оно изменилось, закрытие отклоняется —
+ *    иначе в закрытом году остался бы документ, которого нет в архиве;
+ *  • запись архива и след пишутся в той же транзакции.
+ */
+export async function closePeriod(input: ClosePeriodInput, actor: Actor): Promise<ClosePeriodResult> {
+  const stream = input.stream ?? "incoming";
+  const period = input.period;
+  if (!/^\d{4}$/.test(period)) throw new AppError("Укажите год в виде ГГГГ", 400, "bad_period");
+
+  const client = await getDocflowPool().connect();
+  try {
+    await client.query("BEGIN");
+    await lockCounterRow(client, stream, period);
+
+    const state = await loadPeriodState(stream, client);
+    if (state.archivedPeriods.includes(period)) {
+      throw new AppError("Год " + period + " уже выгружен в архив", 409, "already_archived");
+    }
+    if (!state.openPeriod) {
+      throw new AppError("В журнале ещё нет документов — закрывать нечего", 400, "empty_journal");
+    }
+    if (state.openPeriod !== period) {
+      throw new AppError(
+        "Закрыть можно только открытый год (" +
+          state.openPeriod +
+          "): " +
+          period +
+          " закроется навсегда. Выгрузите журнал за " +
+          state.openPeriod +
+          ".",
+        409,
+        "not_open_period"
+      );
+    }
+
+    const counted = await client.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM documents WHERE reg_period = $1",
+      [period]
+    );
+    const actual = Number(counted.rows[0]?.n ?? 0);
+    if (typeof input.documentCount === "number" && input.documentCount !== actual) {
+      throw new AppError(
+        "Во время выгрузки в " +
+          period +
+          " году появились новые документы (" +
+          actual +
+          " вместо " +
+          input.documentCount +
+          "): архив неполный. Выгрузите год заново.",
+        409,
+        "period_changed"
+      );
+    }
+
+    await insertArchiveRecord(client, { ...input, documentCount: actual }, actor);
+    await client.query("COMMIT");
+    return { period, fileName: input.fileName ?? "", documentCount: actual };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export interface ReopenPeriodInput {
+  stream?: string;
+  period: string;
+  /** Почему отменяем: отмена закрытия года — объяснимое действие, но не молчаливое. */
+  reason: string;
+}
+
+/**
+ * Отменяет закрытие года — ровно пока в новом году нет ни одного документа.
+ *
+ * Проверка и удаление записи архива — в ОДНОЙ транзакции, и первой берётся строка счётчика
+ * НОВОГО года: её же берёт регистрация документа нового года. Без этого между проверкой
+ * «в новом году пусто» и отменой кто-то успел бы зарегистрировать документ, и мы получили бы
+ * ту же дыру с другой стороны.
+ */
+export async function reopenPeriod(input: ReopenPeriodInput, actor: Actor): Promise<{ period: string }> {
+  const stream = input.stream ?? "incoming";
+  const period = input.period;
+  if (!/^\d{4}$/.test(period)) throw new AppError("Укажите год в виде ГГГГ", 400, "bad_period");
+  const reason = (input.reason ?? "").trim();
+  if (!reason) throw new AppError("Укажите причину отмены закрытия года", 400, "bad_reason");
+
+  const client = await getDocflowPool().connect();
+  try {
+    await client.query("BEGIN");
+    await lockCounterRow(client, stream, String(Number(period) + 1));
+
+    const state = await loadPeriodState(stream, client);
+    if (!state.archivedPeriods.includes(period)) {
+      throw new AppError("Год " + period + " не закрыт — отменять нечего", 409, "not_archived");
+    }
+    const gate = canReopenPeriod(period, state);
+    if (!gate.ok) {
+      throw new AppError(gate.reason ?? "Отменить закрытие года нельзя", 409, "reopen_not_allowed");
+    }
+
+    await client.query("DELETE FROM number_archives WHERE stream = $1 AND period = $2", [stream, period]);
+    await auditInTx(client, {
+      userId: actor.id,
+      userName: actor.name,
+      action: "journal.reopen_period",
+      entityType: "number_archive",
+      entityId: stream + ":" + period,
+      oldValue: { period, archived: true },
+      newValue: { period, reason, reopenedBy: actor.name }
+    });
+    await client.query("COMMIT");
+    return { period };
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listArchivedPeriods(stream = "incoming"): Promise<string[]> {

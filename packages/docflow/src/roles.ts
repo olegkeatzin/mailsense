@@ -27,6 +27,9 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
       "journal.register",
       "journal.edit",
       "journal.archive",
+      // Отмена закрытия года — изменение задним числом, и цена ошибки выше, чем у закрытия.
+      // Поэтому есть у администратора и нет у аппарата: кто действует и кто отменяет — разные люди.
+      "journal.reopen",
       "resolution.create",
       "resolution.edit",
       "resolution.approve",

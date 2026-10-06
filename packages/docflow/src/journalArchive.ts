@@ -77,6 +77,8 @@ export function archiveDirectory(): string {
 /** Вложение письма: как оно называется в архиве и как прочитать его байты. */
 export interface JournalAttachment {
   name: string;
+  /** Размер из метаданных: предупреждение о размере считается без чтения файла. */
+  size?: number;
   open: () => Readable;
 }
 
@@ -198,10 +200,7 @@ export async function exportJournalYear(opts: ExportOptions): Promise<ExportResu
         }
         for (const att of list) {
           files.push(
-            await writer.add(
-              ATTACHMENT_PREFIX + safeName(link.emailId) + "/" + safeName(att.name),
-              att.open()
-            )
+            await writer.add(ATTACHMENT_PREFIX + safeName(link.emailId) + "/" + safeName(att.name), att.open())
           );
           counts.attachments++;
         }
@@ -442,6 +441,20 @@ async function* auditPass(
     counts.audit += rows.rows.length;
     lastId = String(rows.rows[rows.rows.length - 1].id);
   }
+}
+
+/**
+ * Письма документов года — по ним берутся вложения.
+ *
+ * Экспортируется намеренно: предупреждение о размере архива обязано считать ТЕМ ЖЕ
+ * обходом, что и выгрузка, иначе оно разойдётся с фактом.
+ */
+export async function* yearEmailLinks(
+  client: PoolClient,
+  year: string,
+  pageSize = 200
+): AsyncGenerator<{ emailId: string }> {
+  yield* emailLinksPass(client, year, pageSize);
 }
 
 /** Письма документов года — по ним берутся вложения. */
