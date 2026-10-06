@@ -7,7 +7,8 @@ import { assignThread } from "./threadService.js";
 import { buildSmtpTransport, sendSmtp, wrapMessageId } from "../mail/smtpSender.js";
 import { classifyKind } from "../mail/parser.js";
 import { saveAttachmentFile } from "../attachments/store.js";
-import type { Account, ComposeInput, EmailAddress } from "../types.js";
+import { DraftAttachmentError, readDraftAttachment } from "./draftService.js";
+import type { Account, ComposeAttachment, ComposeInput, EmailAddress } from "../types.js";
 
 export interface SendResult {
   emailId: string;
@@ -20,6 +21,21 @@ function addressTo(a: EmailAddress): string {
 
 function bareMessageId(id: string): string {
   return id.startsWith("<") && id.endsWith(">") ? id.slice(1, -1) : id;
+}
+
+/**
+ * Содержимое вложения: данные из запроса либо файл черновика по ссылке.
+ *
+ * ⚠️ Если вложения нет — это ошибка, а не «письмо без файла»: человек видит вложение
+ * в окне и уверен, что оно уйдёт. Поэтому содержимое собирается ДО отправки.
+ */
+function attachmentContent(att: ComposeAttachment): Buffer {
+  if (typeof att.data === "string") return Buffer.from(att.data, "base64");
+  if (att.ref && att.draftId) {
+    const content = readDraftAttachment(att.draftId, att.ref);
+    if (content) return content;
+  }
+  throw new DraftAttachmentError("Вложение «" + att.filename + "» не найдено — приложите файл заново");
 }
 
 async function appendToSent(account: Account, raw: Buffer): Promise<void> {
@@ -56,6 +72,13 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
       ? compose.references.map((r) => wrapMessageId(r)).join(" ")
       : undefined;
 
+  // Вложения читаем заранее: письмо не должно уйти без файла, который человек видит.
+  const outgoing = (compose.attachments ?? []).map((a) => ({
+    filename: a.filename,
+    mimeType: a.mimeType,
+    content: attachmentContent(a)
+  }));
+
   const { raw } = await sendSmtp(account, smtpPassword, {
     from: fromHeader,
     to: compose.to.map(addressTo),
@@ -64,10 +87,10 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
     subject: compose.subject,
     text: compose.bodyText,
     html: compose.bodyHtml || undefined,
-    attachments: (compose.attachments ?? []).map((a) => ({
+    attachments: outgoing.map((a) => ({
       filename: a.filename,
       contentType: a.mimeType,
-      content: Buffer.from(a.data, "base64")
+      content: a.content
     })),
     inReplyTo,
     references,
@@ -97,9 +120,9 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
   // вложений у неё не было вообще: открыв отправленное письмо, человек не видел файлов,
   // которые ушли адресату. Файл уже есть в памяти — кладём его на диск, как во входящих.
   // OCR не зовём: отправителю незачем извлекать текст из собственного вложения.
-  for (const att of compose.attachments ?? []) {
+  for (const att of outgoing) {
     try {
-      const content = Buffer.from(att.data, "base64");
+      const content = att.content;
       // Имена вложений не уникальны (два «акт.pdf» в одном письме) — saveAttachmentFile
       // подбирает свободное имя и никогда не перезаписывает существующий файл.
       const storagePath = saveAttachmentFile(getContext().config.dataDir, email.id, att.filename, content);

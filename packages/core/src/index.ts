@@ -15,6 +15,7 @@ export * from "./services/accountService.js";
 export * from "./services/mailService.js";
 export * from "./services/sendService.js";
 export * from "./services/composeService.js";
+export * from "./services/draftService.js";
 export * from "./services/directoryService.js";
 // Каталог — публичная часть core: им пользуется и адресная книга почты, и вход
 // в серверную часть (документооборот живёт отдельным пакетом и берёт LDAP отсюда).

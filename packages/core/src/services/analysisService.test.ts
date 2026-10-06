@@ -156,7 +156,7 @@ function makeEmail(over: { subject?: string; date?: string; messageId?: string }
     from: { name: "Отправитель", address: "sender@test.local" },
     to: [],
     cc: [],
-    replyTo: null,
+    replyTo: [],
     inReplyTo: null,
     references: [],
     date: over.date ?? "2026-01-15T10:00:00.000Z",
@@ -182,6 +182,37 @@ async function drain(): Promise<void> {
   for (let i = 0; i < 100 && queueLength() > 0; i++) await new Promise((r) => setTimeout(r, 10));
   await new Promise((r) => setTimeout(r, 20));
 }
+
+describe("пустая дата события", () => {
+  test("event_date = \"\" от модели кладёт в базу NULL", async () => {
+    const email = makeEmail();
+    mockAnalyze.mockResolvedValue(ok({ event_date: "" }));
+
+    await runAnalysis(email.id);
+
+    // Пустая строка — это «даты нет». Иначе письмо попадает в фильтр
+    // «есть дата события» и от него строится событие календаря.
+    expect(getAnalysis(email.id)!.eventDate).toBeNull();
+  });
+
+  test("строка из пробелов тоже не сохраняется как дата", async () => {
+    const email = makeEmail();
+    mockAnalyze.mockResolvedValue(ok({ event_date: "  " }));
+
+    await runAnalysis(email.id);
+
+    expect(getAnalysis(email.id)!.eventDate).toBeNull();
+  });
+
+  test("настоящая дата сохраняется как раньше", async () => {
+    const email = makeEmail();
+    mockAnalyze.mockResolvedValue(ok({ event_date: "2026-03-05" }));
+
+    await runAnalysis(email.id);
+
+    expect(getAnalysis(email.id)!.eventDate).toBe("2026-03-05");
+  });
+});
 
 describe("успешный анализ", () => {
   test("результат сохраняется, статус становится «Готово»", async () => {

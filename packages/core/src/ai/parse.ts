@@ -1,12 +1,23 @@
 import { z } from "zod";
 
+/**
+ * Необязательный текст: пустая строка (в том числе из пробелов) — это отсутствие
+ * значения. Модель часто отвечает "event_date": "", и раньше пустая строка
+ * доезжала до базы как «дата», попадая в фильтр «есть дата события».
+ */
+const optionalText = z
+  .string()
+  .nullable()
+  .default(null)
+  .transform((v) => (v && v.trim() ? v : null));
+
 export const analysisSchema = z.object({
   summary: z.string().default(""),
   tags: z.array(z.string()).default([]),
   priority: z.number().int().min(1).max(5).default(3),
   urgent: z.boolean().default(false),
-  event_date: z.string().nullable().default(null),
-  external_number: z.string().nullable().default(null),
+  event_date: optionalText,
+  external_number: optionalText,
   external_number_source: z
     .object({
       filename: z.string(),
@@ -14,7 +25,7 @@ export const analysisSchema = z.object({
     })
     .nullable()
     .default(null),
-  send_date: z.string().nullable().default(null),
+  send_date: optionalText,
   category: z.enum(["work", "personal", "spam"]).default("personal"),
   attachments: z.array(z.object({ name: z.string(), description: z.string() })).default([])
 });

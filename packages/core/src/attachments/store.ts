@@ -2,6 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
+ * Имена устройств Windows: файл с таким именем система создать не даёт,
+ * причём расширение не спасает — «CON.txt» для Win32 всё то же устройство CON.
+ */
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/**
  * Приводит имя файла к безопасному виду, сохраняя его читаемым.
  *
  * ⚠️ Раньше здесь стоял класс \w (ASCII): «акт выполненных работ.pdf»
@@ -11,12 +17,6 @@ import path from "node:path";
  * (и любой другой алфавит), а всё опасное — слэши, обратные слэши,
  * управляющие символы, *?<>| — по-прежнему заменяется подчёркиванием.
  */
-/**
- * Имена устройств Windows: файл с таким именем система создать не даёт,
- * причём расширение не спасает — «CON.txt» для Win32 всё то же устройство CON.
- */
-const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
-
 export function sanitizeFilename(name: string): string {
   // basename отсекает каталоги: «../../etc/passwd» → «passwd».
   const base = path.basename(name)
@@ -48,7 +48,14 @@ export function saveAttachmentFile(
   filename: string,
   content: Buffer
 ): string {
-  const dir = path.join(dataDir, "attachments", emailId);
+  return saveFileIn(path.join(dataDir, "attachments", emailId), filename, content);
+}
+
+/**
+ * Кладёт файл в произвольный каталог, подбирая свободное имя (см. saveAttachmentFile).
+ * Нужен там, где файлы живут не по письму, а по черновику: <dataDir>/drafts/<draftId>.
+ */
+export function saveFileIn(dir: string, filename: string, content: Buffer): string {
   fs.mkdirSync(dir, { recursive: true });
   const safe = sanitizeFilename(filename);
   const ext = path.extname(safe);

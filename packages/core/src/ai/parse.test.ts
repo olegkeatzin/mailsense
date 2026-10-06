@@ -40,4 +40,18 @@ describe("parseAnalysis", () => {
   test("отклоняет неверную категорию", () => {
     expect(() => parseAnalysis('{"category":"unknown"}')).toThrow();
   });
+
+  test("пустые строки в необязательных полях — это отсутствие значения", () => {
+    // Модель охотно отвечает "event_date": "" — пустая строка не должна
+    // становиться «датой» ни в базе, ни в фильтре «есть дата события».
+    const r = parseAnalysis('{"summary":"x","event_date":"","external_number":"","send_date":""}');
+    expect(r.event_date).toBeNull();
+    expect(r.external_number).toBeNull();
+    expect(r.send_date).toBeNull();
+  });
+
+  test("строка из пробелов тоже не значение", () => {
+    const r = parseAnalysis('{"summary":"x","event_date":"   "}');
+    expect(r.event_date).toBeNull();
+  });
 });

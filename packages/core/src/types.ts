@@ -170,11 +170,22 @@ export interface Thread {
   updatedAt: string;
 }
 
+/**
+ * Вложение черновика. Содержимое живёт ФАЙЛОМ в <dataDir>/drafts/<draftId>/,
+ * а в JSON черновика остаётся ссылка на него.
+ *
+ * ⚠️ Раньше здесь лежал сам файл в base64: автосохранение раз в 15 секунд
+ * отправляло эти мегабайты заново. Теперь data приходит только один раз —
+ * когда файл раскладывается на диске.
+ */
 export interface DraftAttachment {
   filename: string;
   mimeType: string;
   size: number;
-  data: string; // base64
+  /** Имя файла в каталоге черновика. */
+  ref?: string;
+  /** base64 — только у свежего вложения, до первой раскладки в файл. */
+  data?: string;
 }
 
 export interface Draft {
@@ -252,11 +263,19 @@ export interface Template {
   updatedAt: string;
 }
 
-/** Вложение, приходящее из UI (base64). */
+/**
+ * Вложение, приходящее из UI. Либо данные (base64), либо ссылка на файл:
+ * у пересылки это вложение письма — тогда клиент тянет файл по требованию;
+ * у черновика — файл в его каталоге, и его читает сервер.
+ */
 export interface ComposeAttachment {
   filename: string;
   mimeType: string;
-  data: string; // base64
+  data?: string; // base64
+  /** Файл вложения черновика (вместе с draftId). */
+  ref?: string;
+  /** Черновик, в каталоге которого лежит файл. */
+  draftId?: string;
 }
 
 export interface ComposeInput {

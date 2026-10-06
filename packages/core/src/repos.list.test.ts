@@ -13,15 +13,20 @@ import path from "node:path";
  * намеренно остаются в JS: SQLite умеет складывать регистр только по ASCII,
  * и «иван» перестал бы находить «Иванов» (см. searchContactsCache в repos.ts).
  */
+import { eq } from "drizzle-orm";
 import { initApp } from "./init.js";
 import { closeDb, getDb } from "./db/index.js";
+import { analysisResults } from "./db/schema.js";
 import {
+  countAttachmentsByEmail,
   getAnalysis,
   insertAccount,
+  insertAttachment,
   insertEmail,
   listEmailsWithAnalysis,
   listEmailsWithAnalysisByThreadIds,
   setEmailStatus,
+  setExternalNumber,
   setSendDate,
   upsertAnalysis
 } from "./repos.js";
@@ -181,6 +186,114 @@ describe("listEmailsWithAnalysis: число запросов", () => {
     for (const item of listEmailsWithAnalysis({ accountId, folder: "INBOX" })) {
       expect(item.analysis).toEqual(getAnalysis(item.id));
     }
+  });
+});
+
+describe("пустая строка вместо даты события", () => {
+  test("запись анализа с event_date = \"\" кладёт в базу NULL", () => {
+    const email = addEmail({ folder: "HasEvent", subject: "Пустая дата" });
+
+    addAnalysis(email.id, { eventDate: "" });
+
+    // Пустая строка — не дата. Иначе она уходит в базу и живёт там как значение.
+    expect(getAnalysis(email.id)!.eventDate).toBeNull();
+  });
+
+  test("строка из пробелов тоже сохраняется как отсутствие даты", () => {
+    const email = addEmail({ folder: "HasEvent", subject: "Пробелы вместо даты" });
+
+    addAnalysis(email.id, { eventDate: "   " });
+
+    expect(getAnalysis(email.id)!.eventDate).toBeNull();
+  });
+
+  test("фильтр «есть дата события» не считает пустую строку датой", () => {
+    const email = addEmail({ folder: "HasEvent", subject: "Наследие: пустая дата" });
+    addAnalysis(email.id, { eventDate: "2026-04-01" });
+    // Симулируем запись, сделанную до правки: пустая строка уже лежит в базе.
+    // Нормализация при записи такие строки больше не создаёт, но старые данные
+    // остаются — фильтр обязан их игнорировать.
+    getDb()
+      .update(analysisResults)
+      .set({ eventDate: "" })
+      .where(eq(analysisResults.emailId, email.id))
+      .run();
+
+    const items = listEmailsWithAnalysis({ accountId, folder: "HasEvent", hasEvent: true });
+
+    expect(items.some((i) => i.id === email.id)).toBe(false);
+  });
+
+  test("настоящая дата в фильтр попадает", () => {
+    const email = addEmail({ folder: "HasEvent", subject: "С датой" });
+    addAnalysis(email.id, { eventDate: "2026-04-02" });
+
+    const items = listEmailsWithAnalysis({ accountId, folder: "HasEvent", hasEvent: true });
+
+    expect(items.some((i) => i.id === email.id)).toBe(true);
+  });
+
+  test("соседние необязательные поля тоже не хранят пустую строку", () => {
+    const email = addEmail({ folder: "HasEvent", subject: "Пустые поля" });
+
+    setExternalNumber(email.id, "");
+    setSendDate(email.id, "");
+
+    const saved = listEmailsWithAnalysis({ accountId, folder: "HasEvent" }).find((i) => i.id === email.id)!;
+    expect(saved.externalNumber).toBeNull();
+    expect(saved.sendDate).toBeNull();
+  });
+});
+
+describe("countAttachmentsByEmail", () => {
+  function addAttachment(emailId: string, filename: string) {
+    return insertAttachment({
+      emailId,
+      filename,
+      mimeType: "text/plain",
+      size: 3,
+      storagePath: null,
+      extractedText: null,
+      contentId: null,
+      kind: "text",
+      handled: true
+    });
+  }
+
+  test("считает вложения по каждому письму одним запросом", () => {
+    const two = addEmail({ folder: "Counts", subject: "С двумя вложениями" });
+    addAttachment(two.id, "a.txt");
+    addAttachment(two.id, "b.txt");
+    const one = addEmail({ folder: "Counts", subject: "С одним" });
+    addAttachment(one.id, "c.txt");
+    const none = addEmail({ folder: "Counts", subject: "Без вложений" });
+
+    const { result, queries } = countQueries(() =>
+      countAttachmentsByEmail([two.id, one.id, none.id])
+    );
+
+    expect(result.get(two.id)).toBe(2);
+    expect(result.get(one.id)).toBe(1);
+    // Письма без вложений в мапе нет — вызывающий приводит к нулю.
+    expect(result.has(none.id)).toBe(false);
+    // Три письма — один запрос, а не три (это была бы та самая N+1).
+    expect(queries).toHaveLength(1);
+  });
+
+  test("пустой список писем не ходит в базу", () => {
+    const { result, queries } = countQueries(() => countAttachmentsByEmail([]));
+    expect(result.size).toBe(0);
+    expect(queries).toEqual([]);
+  });
+
+  test("чужие идентификаторы не влияют на счёт", () => {
+    const email = addEmail({ folder: "Counts", subject: "Одно" });
+    addAttachment(email.id, "d.txt");
+
+    const res = countAttachmentsByEmail([email.id, "нет-такого-письма"]);
+
+    expect(res.size).toBe(1);
+    expect(res.get(email.id)).toBe(1);
   });
 });
 

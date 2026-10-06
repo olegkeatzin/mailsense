@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { and, desc, eq, gte, inArray, isNotNull, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb } from "./db/index.js";
 import { schema } from "./db/schema.js";
 import { normalizeMessageId } from "./mail/parser.js";
@@ -24,6 +24,15 @@ const { accounts, emails, attachments, analysisResults, deletedEmails, threads, 
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Пустая строка (в том числе из пробелов) — это отсутствие значения, а не значение.
+ * ⚠️ Модель охотно отвечает "event_date": "", а PATCH может прислать пустое поле:
+ * раньше такая строка уходила в базу как «дата» и попадала в фильтр «есть дата события».
+ */
+function nullIfBlank(value: string | null | undefined): string | null {
+  return value && value.trim() ? value : null;
 }
 
 function jparse<T>(s: string | null | undefined, fallback: T): T {
@@ -288,7 +297,7 @@ export function insertEmail(e: {
       inReplyTo: e.inReplyTo ?? null,
       references: JSON.stringify(e.references ?? []),
       date: e.date,
-      externalNumber: e.externalNumber ?? null,
+      externalNumber: nullIfBlank(e.externalNumber),
       numberSourceAttachmentId: null,
       numberSourcePage: 1,
       sendDate: null,
@@ -362,7 +371,11 @@ function emailListConditions(filter: EmailListFilter) {
     conditions.push(inArray(analysisResults.category, filter.categories));
   }
   if (filter.minPriority) conditions.push(gte(analysisResults.priority, filter.minPriority));
-  if (filter.hasEvent) conditions.push(isNotNull(analysisResults.eventDate));
+  // Пустая строка — это «даты нет»: в базе могли остаться записи, сделанные до
+  // нормализации, и isNotNull их бы посчитал датой.
+  if (filter.hasEvent) {
+    conditions.push(and(isNotNull(analysisResults.eventDate), ne(analysisResults.eventDate, ""))!);
+  }
   // Даты — обычные ISO-строки, поэтому сравнение в SQL совпадает с прежним
   // сравнением в JS. Без даты письмо не проходит только нижнюю границу —
   // как и раньше: пустая строка меньше любой даты.
@@ -490,7 +503,11 @@ export function setEmailFolder(id: string, folder: string): void {
 }
 
 export function setExternalNumber(id: string, externalNumber: string | null): void {
-  getDb().update(emails).set({ externalNumber, updatedAt: now() }).where(eq(emails.id, id)).run();
+  getDb()
+    .update(emails)
+    .set({ externalNumber: nullIfBlank(externalNumber), updatedAt: now() })
+    .where(eq(emails.id, id))
+    .run();
 }
 
 export function setNumberSource(id: string, attachmentId: string | null, page: number): void {
@@ -502,7 +519,11 @@ export function setNumberSource(id: string, attachmentId: string | null, page: n
 }
 
 export function setSendDate(id: string, sendDate: string | null): void {
-  getDb().update(emails).set({ sendDate, updatedAt: now() }).where(eq(emails.id, id)).run();
+  getDb()
+    .update(emails)
+    .set({ sendDate: nullIfBlank(sendDate), updatedAt: now() })
+    .where(eq(emails.id, id))
+    .run();
 }
 
 export function setEmailsFolder(ids: string[], folder: string): void {
@@ -603,6 +624,26 @@ export function listAttachments(emailId: string): Attachment[] {
     .map(mapAttachment);
 }
 
+/**
+ * Количество вложений для каждого письма — одним запросом.
+ *
+ * ⚠️ Нужен там, где список писем длинный (например «Входящие на регистрацию»):
+ * звать listAttachments на каждое письмо — это N+1, до сотен запросов на один
+ * вызов. Писем без вложений в мапе нет — вызывающий приводит отсутствие к нулю.
+ */
+export function countAttachmentsByEmail(emailIds: string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  if (emailIds.length === 0) return counts;
+  const rows = getDb()
+    .select({ emailId: attachments.emailId, count: sql<number>`count(*)` })
+    .from(attachments)
+    .where(inArray(attachments.emailId, emailIds))
+    .groupBy(attachments.emailId)
+    .all();
+  for (const r of rows) counts.set(r.emailId, Number(r.count));
+  return counts;
+}
+
 export function setAttachmentDescription(id: string, description: string): void {
   getDb().update(attachments).set({ aiDescription: description }).where(eq(attachments.id, id)).run();
 }
@@ -659,7 +700,7 @@ export function upsertAnalysis(a: {
         tags: JSON.stringify(a.tags),
         priority: a.priority,
         urgent: a.urgent,
-        eventDate: a.eventDate,
+        eventDate: nullIfBlank(a.eventDate),
         category: a.category,
         rawResponse: a.rawResponse,
         modelUsed: a.modelUsed,
@@ -678,7 +719,7 @@ export function upsertAnalysis(a: {
       tags: JSON.stringify(a.tags),
       priority: a.priority,
       urgent: a.urgent,
-      eventDate: a.eventDate,
+      eventDate: nullIfBlank(a.eventDate),
       category: a.category,
       rawResponse: a.rawResponse,
       modelUsed: a.modelUsed,
@@ -830,6 +871,44 @@ export function resetReadyWithoutAnalysis(): number {
   return n;
 }
 
+/**
+ * Одноразовая чистка данных: пустая строка (в том числе из пробелов) в
+ * необязательном поле — это отсутствие значения.
+ *
+ * Нормализация при записи (nullIfBlank) новые такие значения не создаёт, но в
+ * базе остаются записанные раньше. Фильтры их уже игнорируют, однако следующий
+ * фильтр может и не знать про эту особенность — поэтому чистим сами данные.
+ * Возвращает число исправленных записей.
+ */
+export function normalizeBlankValues(): number {
+  const db = getDb();
+  const ts = now();
+  let fixed = 0;
+
+  // Дата события: пустая строка считалась датой в фильтре «есть дата события».
+  fixed += db
+    .update(analysisResults)
+    .set({ eventDate: null, updatedAt: ts })
+    .where(and(isNotNull(analysisResults.eventDate), sql`trim(${analysisResults.eventDate}) = ''`))
+    .run().changes;
+
+  // Внешний номер письма.
+  fixed += db
+    .update(emails)
+    .set({ externalNumber: null, updatedAt: ts })
+    .where(and(isNotNull(emails.externalNumber), sql`trim(${emails.externalNumber}) = ''`))
+    .run().changes;
+
+  // Дата отправки.
+  fixed += db
+    .update(emails)
+    .set({ sendDate: null, updatedAt: ts })
+    .where(and(isNotNull(emails.sendDate), sql`trim(${emails.sendDate}) = ''`))
+    .run().changes;
+
+  return fixed;
+}
+
 export function listThreads(accountId: string): Thread[] {
   return getDb()
     .select()
@@ -893,6 +972,8 @@ export function getDraft(id: string): Draft | null {
 }
 
 export function insertDraft(d: {
+  /** Идентификатор можно задать заранее: по нему раскладываются файлы вложений. */
+  id?: string;
   accountId: string;
   to: EmailAddress[];
   cc?: EmailAddress[];
@@ -906,7 +987,7 @@ export function insertDraft(d: {
   references?: string[];
 }): Draft {
   const db = getDb();
-  const id = randomUUID();
+  const id = d.id ?? randomUUID();
   const ts = now();
   db.insert(drafts)
     .values({
