@@ -16,7 +16,9 @@
  * Почему JSONL, а не Excel: значения хранятся как есть. Excel превратил бы «01-15»
  * в дату, а длинные номера потерял бы в точности. Excel остаётся для отчётов.
  *
- * Почему потоково: архив на 10 ГБ обязан собираться, не занимая 10 ГБ памяти.
+ * Почему потоково: архив года может оказаться БОЛЬШЕ, чем оперативной памяти (вложения —
+ * сканы и PDF). Буферизация (jszip) на таком архиве просто упала бы, поэтому сборка идёт
+ * потоком: память ограничена страницей чтения, а не размером года.
  * Чтение идёт страницами по ключу (keyset), запись — потоком в ZIP (zipStream.ts).
  * Выгрузка читает журнал ОДНИМ снапшотом (REPEATABLE READ READ ONLY): год не меняется
  * под руками, блокировок на таблицах при этом нет.
@@ -200,7 +202,13 @@ export async function exportJournalYear(opts: ExportOptions): Promise<ExportResu
         }
         for (const att of list) {
           files.push(
-            await writer.add(ATTACHMENT_PREFIX + safeName(link.emailId) + "/" + safeName(att.name), att.open())
+            await writer.add(
+              ATTACHMENT_PREFIX + safeName(link.emailId) + "/" + safeName(att.name),
+              att.open(),
+              // Вложения — БЕЗ сжатия (STORE): PDF и сканы уже сжаты, deflate на них только
+              // жжёт процессор и время закрытия года. JSONL журнала сжимаем как раньше.
+              { store: true }
+            )
           );
           counts.attachments++;
         }

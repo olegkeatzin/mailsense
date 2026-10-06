@@ -35,9 +35,6 @@ const numberingState = (over: Partial<NumberingState> = {}): NumberingState =>
     archivedPeriods: [],
     reopenablePeriods: [],
     blockedReason: null,
-    archiveSizeBytes: 1024,
-    archiveLimitBytes: 4 * 1024 ** 3,
-    archiveWarning: null,
     ...over
   }) as unknown as NumberingState;
 
@@ -116,18 +113,6 @@ describe("закрытие года подтверждается вводом г
     fireEvent.click(screen.getByRole("button", { name: /^Закрыть год$/ }));
 
     await waitFor(() => expect(api.archivePeriod).toHaveBeenCalledWith("2026", "2026"));
-  });
-
-  it("предупреждение об объёме показывается ТЕКСТОМ СЕРВЕРА, а не собранным в клиенте", async () => {
-    (api.numbering as jest.Mock).mockResolvedValue(
-      numberingState({
-        archiveWarning: { level: "near", text: "⚠️ Вложения за 2026 год занимают не менее 4,0 ГБ — ответ сервера" }
-      })
-    );
-
-    render(<NumberingTab />);
-
-    expect(await screen.findByText(/ответ сервера/)).toBeTruthy();
   });
 
   it("отказ сервера показывается как есть: «год НЕ закрыт» и причина", async () => {

@@ -453,12 +453,9 @@ export interface NumberingState {
    */
   reopenablePeriods: string[];
   blockedReason: string | null;
-  /** Сколько занимают вложения открытого года (null — размер неизвестен: предупреждать нечем). */
-  archiveSizeBytes?: number | null;
-  /** Предел архива без Zip64 — предупреждение о превышении. */
-  archiveLimitBytes?: number;
-  /** Готовое предупреждение о объёме архива (текст формирует сервер). */
-  archiveWarning?: { level: "ok" | "near" | "over"; text: string | null } | null;
+  // Полей про объём/предел архива здесь больше нет: предел 4 ГБ снят (Zip64),
+  // а предупреждение о несуществующем пределе было бы враньём. Объявленный, но не
+  // работающий контракт хуже отсутствующего: следующий читатель решил бы, что он есть.
 }
 
 export interface CaseRecord {

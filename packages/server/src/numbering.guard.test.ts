@@ -192,9 +192,11 @@ describe("состояние нумерации отдаёт подсказки 
     const res = await request(app.baseUrl, "GET", "/api/docflow/numbering", { token: token("admin") });
 
     expect(res.status).toBe(200);
-    const body = res.body as { reopenablePeriods: string[]; archiveLimitBytes: number; archiveSizeBytes: number | null };
+    // Предела 4 ГБ больше нет (Zip64), поэтому и полей про предел/предупреждение нет:
+    // предупреждать о несуществующем пределе — врать.
+    const body = res.body as { reopenablePeriods: string[]; archiveLimitBytes?: number; archiveWarning?: unknown };
     expect(body.reopenablePeriods).toEqual([YEAR]);
-    expect(body.archiveLimitBytes).toBe(4 * 1024 ** 3);
-    expect(body).toHaveProperty("archiveSizeBytes");
+    expect(body.archiveLimitBytes).toBeUndefined();
+    expect(body.archiveWarning).toBeUndefined();
   });
 });

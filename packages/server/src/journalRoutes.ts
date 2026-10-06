@@ -39,18 +39,14 @@ import {
   type Permission
 } from "@mailsense/docflow";
 import {
-  ARCHIVE_LIMIT_BYTES,
   archiveFailureText,
-  archiveVolumeWarning,
   closePeriod,
   exportJournalYear,
   exportPeriodArchive,
   getDocflowPool,
   importJournalArchive,
   reopenPeriod,
-  setJournalAttachmentStore,
-  sumAttachmentBytes,
-  yearEmailLinks
+  setJournalAttachmentStore
 } from "@mailsense/docflow";
 
 /**
@@ -196,35 +192,9 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     asyncHandler(async (req, res) => {
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
       const state = await getNumberingState(period);
-      // Сколько займут вложения открытого года — предупреждение до закрытия года.
-      // Считаем ТЕМ ЖЕ обходом ссылок, что и выгрузка (yearEmailLinks), иначе цифра
-      // разойдётся с фактом, а неверное предупреждение хуже отсутствующего.
-      let archiveSizeBytes: number | null = null;
-      // Текст предупреждения формирует docflow: он же знает, что при досрочном выходе
-      // из обхода сумма — НИЖНЯЯ граница («не менее 4,0 ГБ», а не «≈4,0 ГБ»).
-      let archiveWarning: { level: string; text: string | null } | null = null;
-      if (state.openPeriod) {
-        const client = await getDocflowPool().connect();
-        try {
-          const summary = await sumAttachmentBytes({
-            links: yearEmailLinks(client, state.openPeriod),
-            store: journalAttachmentStore() ?? { list: async () => [] },
-            limitBytes: ARCHIVE_LIMIT_BYTES
-          });
-          // Размер неизвестен хотя бы у одного вложения — честно «неизвестно», без догадок.
-          archiveSizeBytes = summary.unknownSizes > 0 ? null : summary.bytes;
-          if (archiveSizeBytes !== null) {
-            archiveWarning = archiveVolumeWarning(archiveSizeBytes, state.openPeriod, {
-              truncated: summary.truncated
-            });
-          }
-        } catch {
-          archiveSizeBytes = null;
-        } finally {
-          client.release();
-        }
-      }
-      res.json({ ...state, archiveSizeBytes, archiveLimitBytes: ARCHIVE_LIMIT_BYTES, archiveWarning });
+      // Предела архива больше нет (Zip64), поэтому и предупреждения о нём нет:
+      // предупреждать о несуществующем пределе — врать.
+      res.json(state);
     })
   );
 

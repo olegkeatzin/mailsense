@@ -1,20 +1,15 @@
 import {
-  ARCHIVE_DANGER_BYTES,
-  ARCHIVE_LIMIT_BYTES,
-  ARCHIVE_WARN_BYTES,
   archiveFailureText,
-  archiveVolumeWarning,
   formatArchiveSize,
   sumAttachmentBytes,
   type SizedAttachment
 } from "./archiveVolume.js";
 
 /**
- * Предупреждение о пределе архива считается ДО закрытия года.
+ * Оценка объёма вложений года и текст отказа при неудачном снимке.
  *
- * Смысл проверок: текст обязан (а) появляться вовремя, (б) не врать про размер,
- * (в) в отказе прямо говорить, что год НЕ закрыт. Плюс подсчёт не должен открывать файлы
- * и не должен читать весь год, если предел уже превышен.
+ * Предупреждения о пределе 4 ГБ здесь больше нет: архив поддерживает Zip64, предел снят,
+ * и предупреждать о несуществующем пределе было бы враньём (решение Lead).
  */
 const GiB = 1024 ** 3;
 
@@ -30,54 +25,6 @@ describe("размер для человека", () => {
     expect(formatArchiveSize(3 * GiB)).toBe("3,0 ГБ");
     expect(formatArchiveSize(3.24 * GiB)).toBe("3,2 ГБ");
     expect(formatArchiveSize(0)).toBe("0,0 ГБ");
-  });
-});
-
-describe("предупреждение о пределе архива", () => {
-  test("ниже 3 ГБ — молчим: предупреждение на каждый год обесценивает себя", () => {
-    expect(archiveVolumeWarning(ARCHIVE_WARN_BYTES - 1, "2026")).toEqual({ level: "ok", text: null });
-  });
-
-  test("ровно 3 ГБ — уже предупреждаем (граница включительно)", () => {
-    const w = archiveVolumeWarning(ARCHIVE_WARN_BYTES, "2026");
-    expect(w.level).toBe("near");
-    expect(w.text).toContain("3,0 ГБ");
-    expect(w.text).toContain("2026");
-  });
-
-  test("в «near» есть и размер, и что случится, и что делать", () => {
-    const w = archiveVolumeWarning(3.2 * GiB, "2026");
-    expect(w.level).toBe("near");
-    expect(w.text).toContain("≈3,2 ГБ");
-    expect(w.text).toContain("не поддерживает файлы больше 4 ГБ");
-    expect(w.text).toContain("год останется открытым");
-    expect(w.text).toContain("Освободите объём");
-  });
-
-  test("3,5 ГБ — «скорее всего, не удастся», и сказано, что данные не изменятся", () => {
-    const w = archiveVolumeWarning(ARCHIVE_DANGER_BYTES, "2026");
-    expect(w.level).toBe("over");
-    expect(w.text).toContain("не удастся");
-    expect(w.text).toContain("год останется открытым — данные журнала не изменятся");
-  });
-
-  test("выше предела — по-прежнему «over», без выдуманных цифр", () => {
-    const w = archiveVolumeWarning(5 * GiB, "2026");
-    expect(w.level).toBe("over");
-    expect(w.text).toContain("≈5,0 ГБ");
-  });
-
-  test("при досрочном выходе сумма — нижняя граница: «не менее», а не «≈»", () => {
-    // Иначе при вложениях на 10 ГБ форма показала бы «≈4,0 ГБ» — враньё в меньшую сторону.
-    const w = archiveVolumeWarning(ARCHIVE_LIMIT_BYTES, "2026", { truncated: true });
-    expect(w.level).toBe("over");
-    expect(w.text).toContain("не менее 4,0 ГБ");
-    expect(w.text).not.toContain("≈4,0 ГБ");
-  });
-
-  test("без года текст остаётся читаемым", () => {
-    const w = archiveVolumeWarning(3.6 * GiB, null);
-    expect(w.text).toContain("Закрыть год, скорее всего, не удастся");
   });
 });
 
@@ -148,22 +95,13 @@ describe("подсчёт объёма вложений", () => {
     })();
     const store = { list: jest.fn(async () => [{ name: "big.bin", size: 2 * GiB }]) };
 
-    const res = await sumAttachmentBytes({ links: endless, store, limitBytes: ARCHIVE_LIMIT_BYTES });
+    const res = await sumAttachmentBytes({ links: endless, store, limitBytes: 3 * GiB });
 
     expect(res.truncated).toBe(true);
-    expect(res.bytes).toBeGreaterThanOrEqual(ARCHIVE_LIMIT_BYTES);
+    expect(res.bytes).toBeGreaterThanOrEqual(3 * GiB);
     // Двух писем по 2 ГБ хватило: тысячу писем не читаем.
     expect(consumed).toBe(2);
     expect(store.list).toHaveBeenCalledTimes(2);
-  });
-
-  test("ровно предел — это уже «не влезает»: архив обязан быть МЕНЬШЕ 4 ГБ", async () => {
-    const store = { list: jest.fn(async () => [{ name: "ровно.bin", size: ARCHIVE_LIMIT_BYTES }]) };
-
-    const res = await sumAttachmentBytes({ links: links(["e-1"]), store });
-
-    expect(res.truncated).toBe(true);
-    expect(archiveVolumeWarning(res.bytes as number, "2026").level).toBe("over");
   });
 
   test("досрочный выход важнее неизвестных размеров: превышение известно точно", async () => {
@@ -174,10 +112,11 @@ describe("подсчёт объёма вложений", () => {
       ])
     };
 
-    const res = await sumAttachmentBytes({ links: links(["e-1"]), store });
+    // Предел передан явно: предела по умолчанию больше нет — он был частью снятого
+    // предупреждения о 4 ГБ. Механизм досрочного выхода при явном пределе остался.
+    const res = await sumAttachmentBytes({ links: links(["e-1"]), store, limitBytes: 4 * GiB });
 
     expect(res.truncated).toBe(true);
     expect(res.bytes).toBe(5 * GiB);
-    expect(archiveVolumeWarning(res.bytes as number, "2026").level).toBe("over");
   });
 });

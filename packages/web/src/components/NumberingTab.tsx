@@ -128,9 +128,6 @@ export default function NumberingTab() {
   ).map((y) => ({ value: y, label: y }));
 
   const exportUrl = api.journalArchiveUrl(exportYear);
-  // Текст предупреждения готовит сервер (docflow): при досрочном выходе из обхода
-  // сумма — нижняя граница, и там честно написано «не менее».
-  const volumeWarning = state?.archiveWarning?.text ?? null;
 
   const pickImport = (file: File | null) => {
     if (!file) return;
@@ -234,14 +231,6 @@ export default function NumberingTab() {
             />
           </Space>
 
-          {volumeWarning && (
-            <Alert
-              type={state?.archiveWarning?.level === "over" ? "error" : "warning"}
-              showIcon
-              message="Объём архива года"
-              description={volumeWarning}
-            />
-          )}
           <div style={{ color: "#595959", fontSize: 12 }}>
             Выгрузка идёт потоком: сервер не собирает архив в памяти, а браузер сохраняет файл по готовности —
             для большого года это занимает время. Импорт пишет записи в журнал и требует права архивации.
@@ -332,14 +321,6 @@ export default function NumberingTab() {
         onCancel={() => setCloseOpen(false)}
       >
         <Space direction="vertical" size="small" style={{ width: "100%" }}>
-          {volumeWarning && (
-            <Alert
-              type={state?.archiveWarning?.level === "over" ? "error" : "warning"}
-              showIcon
-              message="Объём архива года"
-              description={volumeWarning}
-            />
-          )}
           {closeError && <Alert type="error" showIcon message={closeError} />}
           <div>
             Сначала будет сделан снимок года (архив одним файлом). Если снимок не удастся, год НЕ закроется.
