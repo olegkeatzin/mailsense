@@ -1,5 +1,6 @@
 import type express from "express";
 import { findReplyContext, suggestFields } from "./replySuggestions.js";
+import { intParam } from "./params.js";
 import {
   draftResolution,
   getAiConfig,
@@ -463,8 +464,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           status: str(req.query.status) as ResolutionStatus | undefined,
           documentId: str(req.query.documentId),
           assigneeId: str(req.query.assigneeId),
-          limit: Number(req.query.limit) || 50,
-          offset: Number(req.query.offset) || 0
+          // listResolutions приводит предел к [1, 200]; мусор отсекаем до базы.
+          limit: intParam(req.query.limit, "limit", { fallback: 50, min: 1, max: 200 }),
+          offset: intParam(req.query.offset, "offset", { fallback: 0, min: 0 })
         })
       );
     })

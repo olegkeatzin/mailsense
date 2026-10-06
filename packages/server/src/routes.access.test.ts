@@ -838,6 +838,58 @@ describe("справочник исполнителей: поручающим и
   });
 });
 
+describe("«Входящие на регистрацию»: вложения считаются пакетно", () => {
+  const mailbox = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: "e-" + i,
+      accountId: "acc-1",
+      subject: "Письмо " + i,
+      from: null,
+      date: "2026-10-01T10:00:00.000Z",
+      folder: "INBOX",
+      analysisStatus: "done",
+      externalNumber: null,
+      sendDate: null,
+      analysis: null
+    }));
+
+  it("число запросов не зависит от числа писем", async () => {
+    mockedCore.listEmailsWithAnalysis.mockReturnValueOnce(mailbox(120));
+    mockedDocflow.listRegisteredEmailIds.mockResolvedValueOnce([]);
+    mockedCore.countAttachmentsByEmail.mockImplementationOnce(
+      (ids: string[]) => new Map(ids.map((id) => [id, 2]))
+    );
+
+    // limit=300 — верхняя граница маршрута: вложения считаются для всего, что отдаём.
+    const res = await request(app.baseUrl, "GET", "/api/docflow/journal/incoming?limit=300", {
+      token: token("secretary")
+    });
+
+    expect(res.status).toBe(200);
+    const items = (res.body as { items: Array<{ attachmentsCount: number }> }).items;
+    expect(items).toHaveLength(120);
+    expect(items[0].attachmentsCount).toBe(2);
+
+    // Ни одного запроса на отдельное письмо: вложения считаются одним пакетным вызовом.
+    expect(mockedCore.listAttachments).not.toHaveBeenCalled();
+    expect(mockedCore.countAttachmentsByEmail).toHaveBeenCalledTimes(1);
+    expect((mockedCore.countAttachmentsByEmail.mock.calls[0][0] as string[]).length).toBe(120);
+  });
+
+  it("письма без вложений остаются с нулём", async () => {
+    mockedCore.listEmailsWithAnalysis.mockReturnValueOnce(mailbox(3));
+    mockedDocflow.listRegisteredEmailIds.mockResolvedValueOnce([]);
+    mockedCore.countAttachmentsByEmail.mockImplementationOnce(() => new Map());
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/journal/incoming", {
+      token: token("secretary")
+    });
+
+    const items = (res.body as { items: Array<{ attachmentsCount: number }> }).items;
+    expect(items.map((i) => i.attachmentsCount)).toEqual([0, 0, 0]);
+  });
+});
+
 describe("покрытие маршрутов резолюций", () => {
   it("все маршруты резолюций есть в матрице или в списке исключений", () => {
     // В стеке Express пути с параметрами (/:id), в матрице — с конкретными идентификаторами,

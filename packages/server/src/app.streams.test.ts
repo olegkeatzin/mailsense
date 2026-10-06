@@ -88,6 +88,50 @@ describe("скачивание вложения", () => {
     expect(await stillAlive(app.baseUrl)).toBe(true);
   }, 15000);
 
+  it("после обрыва клиентом дескриптор закрыт: поток чтения уничтожен", async () => {
+    const file = path.join(dir, "leak.bin");
+    fs.writeFileSync(file, Buffer.alloc(4 * 1024 * 1024, 3));
+    coreMocks.listAttachments.mockReturnValue([
+      attachment("att-leak", file, "application/octet-stream", "leak.bin")
+    ]);
+
+    // Следим за самим потоком: 'close' у fs.ReadStream означает, что дескриптор закрыт.
+    // Переименование файла на Windows утечку НЕ ловит: libuv открывает файлы с
+    // FILE_SHARE_DELETE, поэтому открытый файл переименовывается (проверено пробой).
+    const created: fs.ReadStream[] = [];
+    const realCreate = fs.createReadStream;
+    const spy = jest.spyOn(fs, "createReadStream").mockImplementation(((target: fs.PathLike, options?: unknown) => {
+      const stream = (realCreate as (p: fs.PathLike, o?: unknown) => fs.ReadStream)(target, options);
+      created.push(stream);
+      return stream;
+    }) as typeof fs.createReadStream);
+
+    try {
+      const controller = new AbortController();
+      const response = await fetch(app.baseUrl + "/api/emails/e-1/attachments/att-leak/file", {
+        // Приложению нужна сессия: без заголовка ответ 401 и до потока дело не дойдёт.
+        headers: { authorization: "Bearer token:admin" },
+        signal: controller.signal
+      });
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      await reader.read();
+      controller.abort();
+
+      // Ждём закрытия дескриптора: до правки поток оставался висеть открытым.
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline && !(created[0]?.closed ?? false)) {
+        await sleep(50);
+      }
+
+      expect(created).toHaveLength(1);
+      expect(created[0].closed).toBe(true);
+      expect(created[0].destroyed).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  }, 20000);
+
   it("файл исчез между проверкой и открытием — 404 и живой процесс", async () => {
     const gone = path.join(dir, "исчез.pdf");
     coreMocks.listAttachments.mockReturnValue([attachment("att-gone", gone, "application/pdf", "исчез.pdf")]);

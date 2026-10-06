@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type express from "express";
-import { buildXlsx, classifyKind, exportFileName, getEmailView, listAttachments, listEmailsWithAnalysis, logger, pdfPageCount } from "@mailsense/core";
+import { intParam } from "./params.js";
+import { buildXlsx, classifyKind, countAttachmentsByEmail, exportFileName, getEmailView, listEmailsWithAnalysis, logger, pdfPageCount } from "@mailsense/core";
 import {
   AppError,
   DOCUMENT_STATUSES,
@@ -90,8 +91,9 @@ export function docFilterFromQuery(q: Record<string, unknown>): DocumentFilter {
     caseNumber: str(q.caseNumber),
     sort: (str(q.sort) ?? "regNumber") as DocumentSortField,
     order: q.order === "asc" ? "asc" : "desc",
-    limit: Number(q.limit) || 50,
-    offset: Number(q.offset) || 0
+    // Числа уходят в SQL: «?limit=abc» обязан стать 400, а не LIMIT NaN.
+    limit: intParam(q.limit, "limit", { fallback: 50, min: 1, max: 1000 }),
+    offset: intParam(q.offset, "offset", { fallback: 0, min: 0 })
   };
 }
 export function mountJournalRoutes(app: express.Express, deps: JournalDeps): void {
@@ -281,11 +283,15 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     "/api/docflow/journal/incoming",
     ...register,
     asyncHandler(async (req, res) => {
-      const limit = Math.min(Number(req.query.limit) || 100, 300);
+      const limit = intParam(req.query.limit, "limit", { fallback: 100, min: 1, max: 300 });
       const folder = str(req.query.folder) ?? "INBOX";
       const registered = new Set(await listRegisteredEmailIds());
       const emails = listEmailsWithAnalysis({ folder }).filter((e) => !registered.has(e.id));
-      const items = emails.slice(0, limit).map((e) => ({
+      const page = emails.slice(0, limit);
+      // ⚠️ Вложения считаем ОДНИМ пакетным запросом. Раньше здесь стоял listAttachments
+      // на каждое письмо: на 300 писем — 300 запросов в SQLite на один вызов маршрута.
+      const attachmentCounts = countAttachmentsByEmail(page.map((e) => e.id));
+      const items = page.map((e) => ({
         emailId: e.id,
         accountId: e.accountId,
         subject: e.subject,
@@ -297,7 +303,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
         summary: e.analysis?.summary ?? "",
         priority: e.analysis?.priority ?? null,
         tags: e.analysis?.tags ?? [],
-        attachmentsCount: listAttachments(e.id).length
+        attachmentsCount: attachmentCounts.get(e.id) ?? 0
       }));
       res.json({ items, total: emails.length });
     })

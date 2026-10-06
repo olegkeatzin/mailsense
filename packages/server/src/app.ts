@@ -10,7 +10,8 @@ import {
   cancelAnalysis,
   classifyKind,
   createAccount,
-  deleteDraft,
+  createDraft,
+  draftAttachmentFile,
   deleteTemplate,
   directoryLogin,
   directoryLogout,
@@ -28,7 +29,8 @@ import {
   getProgress,
   getPromptSettings,
   importEmails,
-  insertDraft,
+  getDraft,
+  hasDraftAttachment,
   insertTemplate,
   listAttachments,
   listDrafts,
@@ -55,10 +57,12 @@ import {
   testConnection,
   testSmtpConnection,
   updateAccountById,
-  updateDraft,
+  removeDraft,
+  saveDraft,
   updateTemplate,
   upsertAnalysis,
   getAllSettings,
+  DraftAttachmentError,
   type AccountInput,
   type AnalysisStatus,
   type Category,
@@ -105,6 +109,7 @@ import {
 import { mountJournalRoutes } from "./journalRoutes.js";
 import { mountResolutionRoutes } from "./resolutionRoutes.js";
 import { createDocflowProxy } from "./proxy.js";
+import { intParam } from "./params.js";
 
 /**
  * Лимиты тела запроса. Тело читается в память целиком, поэтому общий предел жёсткий:
@@ -133,16 +138,22 @@ function asyncHandler(
 }
 
 /**
- * Вложения приходят из интерфейса уже готовыми: base64 подставляется в момент
- * отправки/сохранения черновика. Шаблон пересылки отдаёт только ссылки на файлы,
- * и если клиент их не подтянул, вложение окажется пустым. Молча отправить такое
- * письмо нельзя: человек видит файл в окне и уверен, что он уйдёт.
+ * У вложения должны быть либо данные, либо ссылка на файл: файл черновика (ref)
+ * или вложение письма (emailRef — сервер копирует его сам). Молча отправить письмо
+ * без вложения нельзя: человек видит файл в окне и уверен, что он уйдёт.
+ *
+ * @param needDraftId на отправке ссылка на файл черновика обязана называть сам черновик,
+ *   иначе сервер не знает, в каком каталоге искать файл.
  */
-function attachmentsError(list: unknown): string | null {
+function attachmentsError(list: unknown, needDraftId = false): string | null {
   if (!Array.isArray(list)) return null;
   for (const raw of list) {
     const att = (raw ?? {}) as Record<string, unknown>;
-    if (typeof att.data !== "string") {
+    const hasData = typeof att.data === "string";
+    const hasRef = typeof att.ref === "string" && att.ref !== "";
+    const hasEmailRef = !!att.emailRef && typeof att.emailRef === "object";
+    const ok = hasData || (hasRef && (!needDraftId || (typeof att.draftId === "string" && att.draftId !== ""))) || (!needDraftId && hasEmailRef);
+    if (!ok) {
       const name = typeof att.filename === "string" && att.filename ? att.filename : "(без имени)";
       return "Вложение «" + name + "» не загружено — приложите файл заново";
     }
@@ -614,10 +625,25 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     "/api/emails/send",
     asyncHandler(async (req, res) => {
       const compose = (req.body ?? {}) as ComposeInput;
-      const bad = attachmentsError(compose.attachments);
+      const bad = attachmentsError(compose.attachments, true);
       if (bad) return res.status(400).json({ error: bad });
-      const result = await sendEmail(compose);
-      res.status(201).json(result);
+      // Ссылку на файл черновика проверяем ДО отправки: письмо не должно уйти без
+      // вложения, которое человек видит в окне (содержимое читает уже ядро).
+      for (const att of compose.attachments ?? []) {
+        if (att.ref && att.draftId && !hasDraftAttachment(att.draftId, att.ref)) {
+          return res
+            .status(400)
+            .json({ error: "Вложение «" + att.filename + "» не найдено — приложите файл заново" });
+        }
+      }
+      try {
+        const result = await sendEmail(compose);
+        res.status(201).json(result);
+      } catch (err) {
+        // Файл мог исчезнуть между проверкой и чтением — это тоже отказ запроса.
+        if (err instanceof DraftAttachmentError) return res.status(400).json({ error: err.message });
+        throw err;
+      }
     })
   );
 
@@ -638,46 +664,92 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     const d = req.body ?? {};
     const bad = attachmentsError(d.attachments);
     if (bad) return res.status(400).json({ error: bad });
-    const draft = insertDraft({
-      accountId: d.accountId,
-      to: d.to ?? [],
-      cc: d.cc ?? [],
-      bcc: d.bcc ?? [],
-      subject: d.subject ?? "",
-      bodyText: d.bodyText ?? "",
-      bodyHtml: d.bodyHtml ?? null,
-      attachments: d.attachments ?? [],
-      inReplyToEmailId: d.inReplyToEmailId ?? null,
-      inReplyToMessageId: d.inReplyToMessageId ?? null,
-      references: d.references ?? []
-    });
-    res.status(201).json(draft);
+    try {
+      // Данные вложений раскладываются в файлы черновика: в JSON остаются ссылки,
+      // поэтому автосохранение больше не гоняет base64 каждые 15 секунд.
+      const draft = createDraft({
+        accountId: d.accountId,
+        to: d.to ?? [],
+        cc: d.cc ?? [],
+        bcc: d.bcc ?? [],
+        subject: d.subject ?? "",
+        bodyText: d.bodyText ?? "",
+        bodyHtml: d.bodyHtml ?? null,
+        attachments: d.attachments ?? [],
+        inReplyToEmailId: d.inReplyToEmailId ?? null,
+        inReplyToMessageId: d.inReplyToMessageId ?? null,
+        references: d.references ?? []
+      });
+      res.status(201).json(draft);
+    } catch (err) {
+      if (err instanceof DraftAttachmentError) return res.status(400).json({ error: err.message });
+      throw err;
+    }
   });
 
   app.put("/api/drafts/:id", (req, res) => {
     const d = req.body ?? {};
     const bad = attachmentsError(d.attachments);
     if (bad) return res.status(400).json({ error: bad });
-    const draft = updateDraft(req.params.id, {
-      to: d.to,
-      cc: d.cc,
-      bcc: d.bcc,
-      subject: d.subject,
-      bodyText: d.bodyText,
-      bodyHtml: d.bodyHtml,
-      attachments: d.attachments,
-      inReplyToEmailId: d.inReplyToEmailId,
-      inReplyToMessageId: d.inReplyToMessageId,
-      references: d.references
-    });
+    let draft;
+    try {
+      draft = saveDraft(req.params.id, {
+        to: d.to,
+        cc: d.cc,
+        bcc: d.bcc,
+        subject: d.subject,
+        bodyText: d.bodyText,
+        bodyHtml: d.bodyHtml,
+        attachments: d.attachments,
+        inReplyToEmailId: d.inReplyToEmailId,
+        inReplyToMessageId: d.inReplyToMessageId,
+        references: d.references
+      });
+    } catch (err) {
+      if (err instanceof DraftAttachmentError) return res.status(400).json({ error: err.message });
+      throw err;
+    }
     if (!draft) return res.status(404).json({ error: "Черновик не найден" });
     res.json(draft);
   });
 
   app.delete("/api/drafts/:id", (req, res) => {
-    deleteDraft(req.params.id);
+    // Вместе с черновиком убираем его файлы: иначе каталог drafts/<id> остаётся навсегда.
+    removeDraft(req.params.id);
     res.json({ ok: true });
   });
+
+  // Содержимое вложения черновика (файлы лежат в <dataDir>/drafts/<draftId>/).
+  app.get(
+    "/api/drafts/:id/attachments/:ref/file",
+    asyncHandler(async (req, res) => {
+      const draft = getDraft(req.params.id);
+      const att = draft?.attachments.find((a) => a.ref === req.params.ref);
+      if (!att || !att.ref) return res.status(404).json({ error: "Вложение не найдено" });
+      const file = draftAttachmentFile(draft!.id, att.ref);
+      if (!file) return res.status(404).json({ error: "Файл вложения не найден" });
+      const inline = req.query.inline === "1" || /^image\//.test(att.mimeType);
+      res.setHeader("Content-Type", att.mimeType);
+      res.setHeader(
+        "Content-Disposition",
+        (inline ? "inline" : "attachment") + "; filename*=UTF-8''" + encodeURIComponent(att.filename)
+      );
+      const stream = fs.createReadStream(file);
+      res.on("close", () => {
+        if (!stream.destroyed) stream.destroy();
+      });
+      // Обрыв скачивания: pipe лишь снимает привязку, поэтому поток закрываем сами —
+      // иначе дескриптор остаётся открытым до конца процесса. Проверять это надо по
+      // stream.closed: на Windows переименование открытого файла проходит (FILE_SHARE_DELETE).
+      // Файл мог исчезнуть между проверкой и открытием: без обработчика это падение процесса.
+      stream.on("error", (err: Error) => {
+        logger.warn({ err: err.message, path: file }, "Не удалось прочитать файл вложения черновика");
+        if (res.headersSent) res.destroy();
+        else res.status(404).json({ error: "Файл вложения не найден" });
+      });
+      stream.pipe(res);
+    })
+  );
 
   // -------- directory (LDAP/AD: адресная книга) --------
   app.get("/api/directory/status", (_req, res) => {
@@ -720,7 +792,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   app.get(
     "/api/contacts/search",
     asyncHandler(async (req, res) => {
-      const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 25));
+      const limit = intParam(req.query.limit, "limit", { fallback: 25, min: 1, max: 50 });
       res.json(await searchDirectory(String(req.query.q ?? ""), limit));
     })
   );
@@ -779,6 +851,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
         res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(att.filename));
       }
       const stream = fs.createReadStream(att.storagePath);
+      // ⚠️ Обрыв скачивания: pipe лишь снимает привязку к ответу, но чтение не закрывает —
+      // дескриптор оставался открытым до конца процесса. Клиент ушёл → уничтожаем поток.
+      res.on("close", () => {
+        if (!stream.destroyed) stream.destroy();
+      });
       // Файл мог исчезнуть между existsSync и открытием: письмо удаляют, вложение
       // чистят. Без обработчика ошибок это необработанное исключение — сервер падает.
       stream.on("error", (err: Error) => {
@@ -799,7 +876,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
         return res.status(404).json({ error: "Вложение не найдено" });
       }
       const kind = classifyKind(att.mimeType, att.filename);
-      const page = Number(req.query.page) || 1;
+      const page = intParam(req.query.page, "page", { fallback: 1, min: 1 });
       const content = fs.readFileSync(att.storagePath);
       const buf = await renderPreviewImage(kind, content, page);
       if (!buf) return res.status(415).json({ error: "Предпросмотр недоступен для этого типа" });
@@ -985,8 +1062,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
         action: (req.query.action as string) || undefined,
         dateFrom: (req.query.dateFrom as string) || undefined,
         dateTo: (req.query.dateTo as string) || undefined,
-        limit: req.query.limit ? Number(req.query.limit) : 200,
-        offset: req.query.offset ? Number(req.query.offset) : 0
+        // Число из query уходит в SQL: мусор должен стать 400, а не LIMIT NaN.
+        limit: intParam(req.query.limit, "limit", { fallback: 200, min: 1, max: 1000 }),
+        offset: intParam(req.query.offset, "offset", { fallback: 0, min: 0 })
       };
       res.json({ entries: await listAudit(filter), total: await countAudit(filter) });
     })

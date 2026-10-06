@@ -334,8 +334,10 @@ describe("пересылка доходит до адресата", () => {
     expect(Buffer.from(copyFiles[1].data, "base64").equals(CONTENT_B)).toBe(true);
   });
 
-  it("черновик: данные переживают запись и чтение, отправка из черновика доносит файлы", async () => {
+  it("черновик: вложения живут файлами, отправка из черновика доносит те же файлы", async () => {
     const tpl = await forwardTemplate();
+    // Клиент пересылает письмо и сохраняет черновик: данные раскладываются в файлы
+    // черновика, а в JSON остаются ссылки — автосохранение больше не гоняет base64.
     const attachments = await materialize(tpl.body);
 
     const created = await request(app.baseUrl, "POST", "/api/drafts", {
@@ -345,19 +347,43 @@ describe("пересылка доходит до адресата", () => {
     expect(created.status).toBe(201);
     const draftId = (created.body as { id: string }).id;
 
-    // Клиент открывает черновик из списка — вложения должны прийти с данными.
+    interface StoredAttachment {
+      filename: string;
+      size: number;
+      ref?: string;
+      data?: string;
+    }
+    // Клиент открывает черновик из списка: вместо base64 — ссылки на файлы.
     const list = await request(app.baseUrl, "GET", "/api/drafts?accountId=" + accountId, {
       token: "token:admin"
     });
-    const draft = (list.body as Array<{ id: string; subject: string; bodyText: string; attachments: unknown }>).find(
-      (d) => d.id === draftId
-    );
+    const draft = (
+      list.body as Array<{ id: string; subject: string; bodyText: string; attachments: StoredAttachment[] }>
+    ).find((d) => d.id === draftId);
     expect(draft).toBeDefined();
-    expect(draft!.attachments).toEqual(attachments);
+    expect(draft!.attachments.map((a) => [a.filename, a.size])).toEqual([
+      [NAME_A, CONTENT_A.length],
+      [NAME_B, CONTENT_B.length]
+    ]);
+    expect(draft!.attachments.every((a) => typeof a.ref === "string" && a.data === undefined)).toBe(true);
+    expect(JSON.stringify(draft!.attachments)).not.toContain(CONTENT_A.toString("base64"));
 
+    // Отправка из черновика: уходят ссылки, содержимое читает сервер.
     const sent = await request(app.baseUrl, "POST", "/api/emails/send", {
       token: "token:admin",
-      body: { ...sendBody(draft!.attachments, draft!.subject), bodyText: draft!.bodyText }
+      body: {
+        ...sendBody(
+          draft!.attachments.map((a) => ({
+            filename: a.filename,
+            mimeType: "application/pdf",
+            size: a.size,
+            ref: a.ref,
+            draftId
+          })),
+          draft!.subject
+        ),
+        bodyText: draft!.bodyText
+      }
     });
 
     expect(sent.status).toBe(201);
