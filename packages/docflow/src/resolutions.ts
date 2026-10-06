@@ -1050,21 +1050,52 @@ export async function listMyTasks(userId: string): Promise<TaskItem[]> {
 /**
  * Отметка о получении документа исполнителем — «расписка» из графы 8 журнала (О6).
  * Проставляется, когда исполнитель открыл задачу.
+ *
+ * ⚠️ Расписка — такая же мутация журнала, как отчёт или переход, поэтому она пишется
+ * со следом в аудите и в ОДНОЙ с ним транзакции (AGENTS.md, п. 4); без этого при сбое
+ * в графе 8 стояла бы отметка, а кто её поставил — неизвестно. Строка резолюции
+ * берётся FOR UPDATE первой — тот же порядок, что в applyTransition, reportExecution
+ * и confirmReport: иной порядок дал бы взаимную блокировку.
  */
 export async function markTaskReceived(resolutionId: string, userId: string): Promise<void> {
-  const db = getDocflowDb();
-  const rows = await db
-    .select()
-    .from(resolutionAssignees)
-    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
-    .limit(1);
-  // Повторное открытие задачи не должно переписывать время получения:
-  // важно, когда человек получил документ впервые.
-  if (!rows[0] || rows[0].receivedAt) return;
-  await db
-    .update(resolutionAssignees)
-    .set({ receivedAt: now() })
-    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)));
+  await getDocflowDb().transaction(async (tx) => {
+    // Замок на резолюции — первым действием: он же разводит две одновременные расписки,
+    // иначе обе увидели бы «ещё не получено» и написали бы по следу.
+    await tx.select().from(resolutions).where(eq(resolutions.id, resolutionId)).limit(1).for("update");
+
+    const rows = await tx
+      .select()
+      .from(resolutionAssignees)
+      .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
+      .limit(1);
+    // Повторное открытие задачи не должно переписывать время получения:
+    // важно, когда человек получил документ впервые. И второго следа быть не должно.
+    const mine = rows[0];
+    if (!mine || mine.receivedAt) return;
+
+    const ts = now();
+    await tx
+      .update(resolutionAssignees)
+      .set({ receivedAt: ts })
+      .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)));
+
+    // Расписался сам исполнитель; имя берём из справочника, чтобы след читался
+    // без дополнительного запроса в интерфейсе.
+    const person = (
+      await tx.select({ fullName: users.fullName }).from(users).where(eq(users.id, userId)).limit(1)
+    )[0];
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId,
+      userName: person?.fullName ?? "",
+      action: "resolution.received",
+      entityType: "resolution",
+      entityId: resolutionId,
+      oldValue: stringify({ receivedAt: null }),
+      newValue: stringify({ receivedAt: ts }),
+      createdAt: ts
+    });
+  });
 }
 
 /**

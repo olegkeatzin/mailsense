@@ -86,6 +86,32 @@ beforeEach(async () => {
   documentId = doc.id;
 });
 
+afterEach(async () => {
+  // Триггер не должен пережить упавший тест: иначе следующие упадут «на ровном месте».
+  await unblockAudit();
+});
+
+/**
+ * Запись в audit_log падает на уровне СУБД — ровно то, что бывает при сбое.
+ * Тот же приём, что в auditAtomicity.test.ts: проверяем не «есть ли след»,
+ * а атомарность «изменение и след — одно».
+ */
+async function blockAudit(): Promise<void> {
+  await getDocflowPool().query(
+    "CREATE OR REPLACE FUNCTION test_block_audit() RETURNS trigger AS $$ " +
+      "BEGIN RAISE EXCEPTION 'тест: запись аудита недоступна'; END; $$ LANGUAGE plpgsql; " +
+      "DROP TRIGGER IF EXISTS test_block_audit_trg ON audit_log; " +
+      "CREATE TRIGGER test_block_audit_trg BEFORE INSERT ON audit_log " +
+      "FOR EACH ROW EXECUTE FUNCTION test_block_audit();"
+  );
+}
+
+async function unblockAudit(): Promise<void> {
+  await getDocflowPool().query(
+    "DROP TRIGGER IF EXISTS test_block_audit_trg ON audit_log; DROP FUNCTION IF EXISTS test_block_audit();"
+  );
+}
+
 /** Черновик с двумя исполнителями: первый — ответственный. */
 async function draft(text = "Рассмотреть участие и подготовить заявку") {
   return createResolution(
@@ -377,6 +403,56 @@ describe("задачи исполнителя и расписка", () => {
     await markTaskReceived(r.id, director.id);
     const d = (await getResolutionDetail(r.id))!;
     expect(d.assignees.every((a) => a.receivedAt === null)).toBe(true);
+  });
+
+  test("расписка пишет след в аудит", async () => {
+    // Расписка — мутация графы 8 журнала, а не служебная пометка: у неё обязан быть след.
+    const r = await draft();
+    await requestApproval(r.id, secretary);
+    await approveResolution(r.id, director);
+    await dispatchResolution(r.id, secretary);
+
+    await markTaskReceived(r.id, executorA.id);
+
+    const rows = await getDocflowPool().query<{ action: string; user_name: string }>(
+      "SELECT action, user_name FROM audit_log WHERE entity_type = 'resolution' AND entity_id = $1 " +
+        "AND action = 'resolution.received'",
+      [r.id]
+    );
+    expect(rows.rows).toHaveLength(1);
+    expect(rows.rows[0].user_name).toBe("Романов Е.С.");
+    expect((await listMyTasks(executorA.id))[0].receivedAt).toBeTruthy();
+  });
+
+  test("сбой записи аудита откатывает расписку", async () => {
+    const r = await draft();
+    await requestApproval(r.id, secretary);
+    await approveResolution(r.id, director);
+    await dispatchResolution(r.id, secretary);
+
+    await blockAudit();
+    await expect(markTaskReceived(r.id, executorA.id)).rejects.toThrow();
+
+    // Изменение без следа недопустимо: расписки быть не должно (AGENTS.md, п. 4).
+    expect((await listMyTasks(executorA.id))[0].receivedAt).toBeNull();
+  });
+
+  test("повторная расписка безопасна и не плодит следы", async () => {
+    const r = await draft();
+    await requestApproval(r.id, secretary);
+    await approveResolution(r.id, director);
+    await dispatchResolution(r.id, secretary);
+
+    await markTaskReceived(r.id, executorA.id);
+    const first = (await listMyTasks(executorA.id))[0].receivedAt;
+    await markTaskReceived(r.id, executorA.id);
+
+    expect((await listMyTasks(executorA.id))[0].receivedAt).toBe(first);
+    const rows = await getDocflowPool().query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM audit_log WHERE action = 'resolution.received' AND entity_id = $1",
+      [r.id]
+    );
+    expect(Number(rows.rows[0].n)).toBe(1);
   });
 
   test("просроченная задача помечается, исполненная — нет", async () => {
