@@ -17,5 +17,6 @@ export * from "./audit.js";
 export * from "./ldapStore.js";
 export * from "./numbering.js";
 export * from "./journal.js";
+export * from "./journalArchive.js";
 export * from "./resolutions.js";
 export * from "./approvalReplies.js";
