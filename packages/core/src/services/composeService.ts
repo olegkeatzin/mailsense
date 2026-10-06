@@ -5,10 +5,23 @@ import type { AccountSettings, EmailAddress, EmailView } from "../types.js";
 
 export type ComposeMode = "new" | "reply" | "replyAll" | "forward";
 
+/**
+ * Вложение в шаблоне письма — ссылка на файл, без данных.
+ *
+ * ⚠️ Раньше здесь лежал сам файл в base64: письмо с вложениями на 20 МБ превращалось
+ * в ~27 МБ JSON, который сервер собирал в памяти целиком, отдавал по сети, а клиент
+ * держал в состоянии и отправлял обратно. Файл тянется по требованию уже существующим
+ * маршрутом: GET /api/emails/:emailId/attachments/:attachmentId/file
+ */
 export interface ComposeTemplateAttachment {
   filename: string;
   mimeType: string;
-  data: string; // base64
+  /** Размер файла на диске: то, что реально уйдёт в письмо. */
+  size: number;
+  /** Вложение в письме-источнике. */
+  attachmentId: string;
+  /** Письмо, в котором лежит файл. */
+  emailId: string;
 }
 
 /** Готовый шаблон письма (ответ/пересылка/новое) с подписью и цитатой. */
@@ -149,7 +162,8 @@ function joinText(parts: string[]): string {
 
 /**
  * Собирает шаблон письма: получателей, тему, тело (текст + HTML) с цитатой и
- * подписью, заголовки треда и (для пересылки) вложения оригинала.
+ * подписью, заголовки треда и (для пересылки) ссылки на вложения оригинала.
+ * Самих файлов в шаблоне нет — их тянет клиент в момент отправки.
  */
 export function buildComposeTemplate(input: {
   accountId: string;
@@ -263,11 +277,23 @@ export function buildComposeTemplate(input: {
 
   if (settings.forwardAttachments !== false) {
     for (const att of view.attachments) {
-      if (!att.storagePath || !fs.existsSync(att.storagePath)) continue;
+      if (!att.storagePath) continue;
+      let size: number;
+      try {
+        // Размер берём с диска, а не из базы: в базе он может быть нулевым или
+        // устаревшим (файлы дедуплицируются), а показывать надо то, что уйдёт.
+        size = fs.statSync(att.storagePath).size;
+      } catch {
+        // Файла нет — вложение не показываем. Иначе человек увидит его в окне
+        // пересылки и будет уверен, что оно уйдёт.
+        continue;
+      }
       tpl.attachments.push({
         filename: att.filename,
         mimeType: att.mimeType,
-        data: fs.readFileSync(att.storagePath).toString("base64")
+        size,
+        attachmentId: att.id,
+        emailId: view.id
       });
     }
   }

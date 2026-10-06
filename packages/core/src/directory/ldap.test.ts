@@ -27,6 +27,7 @@ import {
   loginToSam,
   verifyLdapCredentials
 } from "./ldap.js";
+import { logger } from "../logger.js";
 import type { LdapSettings } from "../types.js";
 
 function settings(over: Partial<LdapSettings> = {}): LdapSettings {
@@ -51,6 +52,65 @@ beforeEach(() => {
   mockUnbind.mockReset().mockResolvedValue(undefined);
   mockClientCtor.mockReset();
 });
+
+/** Сколько записей AD отдаёт на один непостраничный поиск (MaxPageSize). */
+const AD_MAX_PAGE_SIZE = 1000;
+/** Размер страницы, который обязан запросить клиент. */
+const EXPECTED_PAGE_SIZE = 1000;
+
+function person(i: number) {
+  return {
+    dn: "CN=User" + i + ",OU=K,DC=test",
+    sAMAccountName: "user" + i,
+    mail: "user" + i + "@test.local",
+    displayName: "Сотрудник " + i,
+    userAccountControl: "512"
+  };
+}
+
+/**
+ * Поддельный AD. Непостраничный поиск отдаёт только первую страницу (как
+ * настоящий: остальное он прячет за cookie). Постраничный — обходит все
+ * страницы, каждая следующая доступна только по cookie от предыдущей.
+ * Поэтому если из ldapListProfiles убрать paged, тест немедленно краснеет:
+ * вернётся ровно страница, а не весь каталог.
+ */
+function fakeAd(total: number) {
+  const pagesServed: number[] = [];
+  mockSearch.mockImplementation(async (_base: string, options: Record<string, unknown>) => {
+    const paged = options.paged as { pageSize?: number } | undefined;
+
+    if (!paged) {
+      // Настоящий AD отдаёт минимум из своего MaxPageSize и запрошенного sizeLimit.
+      const asked =
+        typeof options.sizeLimit === "number" && options.sizeLimit > 0
+          ? options.sizeLimit
+          : AD_MAX_PAGE_SIZE;
+      const size = Math.min(total, AD_MAX_PAGE_SIZE, asked);
+      pagesServed.push(size);
+      return { searchEntries: Array.from({ length: size }, (_, i) => person(i)) };
+    }
+
+    const pageSize = paged.pageSize ?? 100;
+    const entries: unknown[] = [];
+    let cookie = "начальная-страница";
+    let page = 0;
+    // Пока сервер отдаёт cookie — есть что продолжать.
+    while (cookie) {
+      const from = page * pageSize;
+      const chunk = Array.from(
+        { length: Math.max(0, Math.min(pageSize, total - from)) },
+        (_, k) => person(from + k)
+      );
+      entries.push(...chunk);
+      pagesServed.push(chunk.length);
+      page++;
+      cookie = page * pageSize < total ? "cookie-" + page : "";
+    }
+    return { searchEntries: entries };
+  });
+  return { pagesServed };
+}
 
 describe("разбор отказов Active Directory", () => {
   test("неверный пароль", () => {
@@ -267,6 +327,35 @@ describe("поиск контактов", () => {
   });
 });
 
+describe("полная выгрузка контактов в кэш", () => {
+  test("выгрузка больше страницы идёт постранично, а не отдаёт 1000", async () => {
+    // refreshDirectory() в directoryService тянет каталог в кэш именно так:
+    // ldapSearchContacts(..., "", 2000). Без страниц AD отдавал 1000 записей,
+    // и кэш адресной книги молча оставался неполным.
+    const { pagesServed } = fakeAd(2500);
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation((() => undefined) as never);
+    try {
+      const list = await ldapSearchContacts(settings(), "svc", "п", "", 2000);
+      expect(list).toHaveLength(2000);
+      expect(pagesServed).toEqual([1000, 1000, 500]);
+      // Обрезали по пределу выгрузки — это видно в логе.
+      expect(JSON.stringify(warnSpy.mock.calls)).toContain("2000");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("автодополнение остаётся точечным запросом без страниц", async () => {
+    // Для 25 подсказок страницы не нужны: они тянут весь набор совпадений.
+    fakeAd(2500);
+    const list = await ldapSearchContacts(settings(), "svc", "п", "иван", 25);
+    const opts = mockSearch.mock.calls[0][1];
+    expect(opts.paged).toBeUndefined();
+    expect(opts.sizeLimit).toBe(25);
+    expect(list.length).toBeLessThanOrEqual(25);
+  });
+});
+
 describe("выгрузка профилей сотрудников", () => {
   function profile(over: Record<string, unknown> = {}) {
     return {
@@ -294,31 +383,31 @@ describe("выгрузка профилей сотрудников", () => {
   test("признак отключённой учётки читается из userAccountControl", async () => {
     mockSearch.mockResolvedValue({ searchEntries: [profile({ userAccountControl: "546" })] });
     // Бит 0x2 = ACCOUNTDISABLE.
-    expect((await ldapListProfiles(settings(), "svc", "п"))[0].disabled).toBe(true);
+    expect((await ldapListProfiles(settings(), "svc", "п")).profiles[0].disabled).toBe(true);
   });
 
   test("активная учётка не помечается отключённой", async () => {
     mockSearch.mockResolvedValue({ searchEntries: [profile({ userAccountControl: "512" })] });
-    expect((await ldapListProfiles(settings(), "svc", "п"))[0].disabled).toBe(false);
+    expect((await ldapListProfiles(settings(), "svc", "п")).profiles[0].disabled).toBe(false);
   });
 
   test("без userAccountControl учётка считается активной", async () => {
     mockSearch.mockResolvedValue({ searchEntries: [profile({ userAccountControl: undefined })] });
-    expect((await ldapListProfiles(settings(), "svc", "п"))[0].disabled).toBe(false);
+    expect((await ldapListProfiles(settings(), "svc", "п")).profiles[0].disabled).toBe(false);
   });
 
   test("руководитель переносится, пустые поля не дают «undefined»", async () => {
     mockSearch.mockResolvedValue({
       searchEntries: [profile({ manager: "CN=Петров,OU=K,DC=test", title: undefined })]
     });
-    const p = (await ldapListProfiles(settings(), "svc", "п"))[0];
+    const p = (await ldapListProfiles(settings(), "svc", "п")).profiles[0];
     expect(p.managerDn).toBe("CN=Петров,OU=K,DC=test");
     expect(p.position).toBe("");
   });
 
   test("без руководителя поле пустое", async () => {
     mockSearch.mockResolvedValue({ searchEntries: [profile()] });
-    expect((await ldapListProfiles(settings(), "svc", "п"))[0].managerDn).toBeNull();
+    expect((await ldapListProfiles(settings(), "svc", "п")).profiles[0].managerDn).toBeNull();
   });
 
   test("записи без логина или почты отбрасываются", async () => {
@@ -326,12 +415,141 @@ describe("выгрузка профилей сотрудников", () => {
       searchEntries: [profile(), profile({ sAMAccountName: "" }), profile({ mail: "" })]
     });
     // Такие учётные записи бесполезны для входа и уведомлений.
-    expect(await ldapListProfiles(settings(), "svc", "п")).toHaveLength(1);
+    expect((await ldapListProfiles(settings(), "svc", "п")).profiles).toHaveLength(1);
   });
 
   test("полное имя подставляется из cn, если нет displayName", async () => {
     mockSearch.mockResolvedValue({ searchEntries: [profile({ displayName: "", cn: "Иванов И.И." })] });
-    expect((await ldapListProfiles(settings(), "svc", "п"))[0].fullName).toBe("Иванов И.И.");
+    expect((await ldapListProfiles(settings(), "svc", "п")).profiles[0].fullName).toBe("Иванов И.И.");
+  });
+});
+
+/**
+ * Постраничный обход каталога. Найденный дефект: один search без paged results —
+ * AD отдаёт не больше MaxPageSize (по умолчанию 1000) и на этом останавливается.
+ * docflow считает полученный список ПОЛНЫМ каталогом и деактивирует всех, кого
+ * в нём не оказалось: люди за первой страницей выключались каждую синхронизацию.
+ */
+describe("постраничная выгрузка каталога", () => {
+  test("каталог больше страницы: обход доходит до конца, а не отдаёт первую страницу", async () => {
+    const { pagesServed } = fakeAd(2500);
+
+    const { profiles } = await ldapListProfiles(settings(), "svc", "п");
+
+    // Все 2500, а не 1000: хвост каталога больше не теряется.
+    expect(profiles).toHaveLength(2500);
+    expect(profiles[profiles.length - 1].ldapUid).toBe("user2499");
+    expect(profiles.some((p) => p.ldapUid === "user1500")).toBe(true);
+    // Прочитано три страницы: 1000 + 1000 + 500.
+    expect(pagesServed).toEqual([1000, 1000, 500]);
+  });
+
+  test("запрошена именно постраничная выдача с разумным размером страницы", async () => {
+    fakeAd(10);
+
+    await ldapListProfiles(settings(), "svc", "п");
+
+    // Без paged AD снова вернёт только первую страницу — это и был дефект.
+    const opts = mockSearch.mock.calls[0][1];
+    expect(opts.paged).toEqual({ pageSize: EXPECTED_PAGE_SIZE });
+    // Предел на весь поиск серверу не отдаём: вместе с постраничной выдачей он
+    // режет результат по всему каталогу и возвращает sizeLimitExceeded с частью
+    // записей — синхронизация снова посчитала бы список полным.
+    expect(opts.sizeLimit).toBe(0);
+  });
+
+  test("каталог ровно в одну страницу не ломается", async () => {
+    fakeAd(1000);
+
+    const page = await ldapListProfiles(settings(), "svc", "п");
+    expect(page.profiles).toHaveLength(1000);
+    expect(page.truncated).toBe(false);
+  });
+
+  test("каталог больше предела: выставлен признак неполноты", async () => {
+    fakeAd(2500);
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation((() => undefined) as never);
+    try {
+      const res = await ldapListProfiles(settings(), "svc", "п", 1000);
+
+      // По этому признаку вызывающий обязан отказаться от деактивации:
+      // иначе он выключит всех, кого не увидел в обрезанном списке.
+      expect(res.truncated).toBe(true);
+      expect(res.total).toBe(2500);
+      expect(res.profiles).toHaveLength(1000);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("в пределах предела признак неполноты не выставлен", async () => {
+    fakeAd(300);
+
+    const res = await ldapListProfiles(settings(), "svc", "п", 1000);
+
+    expect(res.truncated).toBe(false);
+    expect(res.total).toBe(300);
+    expect(res.profiles).toHaveLength(300);
+  });
+
+  test("возвращается объект с признаком, а не голый массив", async () => {
+    // Осознанный разрыв контракта: старый код (list.map / list.length) обязан
+    // упасть на сборке типов, а не молча счесть обрезанный список полным каталогом.
+    fakeAd(5);
+
+    const res = await ldapListProfiles(settings(), "svc", "п");
+
+    expect(Array.isArray(res)).toBe(false);
+    expect(Object.keys(res).sort()).toEqual(["profiles", "total", "truncated"]);
+  });
+
+  test("пустой каталог — полный список из нуля записей", async () => {
+    fakeAd(0);
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation((() => undefined) as never);
+    try {
+      const res = await ldapListProfiles(settings(), "svc", "п");
+      expect(res).toEqual({ profiles: [], total: 0, truncated: false });
+      // Ноль сотрудников — почти всегда неверный Base DN: предупреждаем.
+      expect(JSON.stringify(warnSpy.mock.calls)).toContain("Base DN");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("предел выгрузки всё ещё защищает от лавины, но виден в логе", async () => {
+    fakeAd(2500);
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation((() => undefined) as never);
+    try {
+      const { profiles, total, truncated } = await ldapListProfiles(settings(), "svc", "п", 1200);
+      expect(profiles).toHaveLength(1200);
+      expect(total).toBe(2500);
+      expect(truncated).toBe(true);
+      // Молча обрезать нельзя: иначе снова тихо выключенные люди.
+      const logged = JSON.stringify(warnSpy.mock.calls);
+      expect(logged).toContain("1200");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("в пределах лимита предупреждения нет", async () => {
+    fakeAd(1500);
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation((() => undefined) as never);
+    try {
+      expect((await ldapListProfiles(settings(), "svc", "п", 2000)).profiles).toHaveLength(1500);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("страницы не отменяют отбрасывание записей без логина и почты", async () => {
+    // Усечённые записи приходят с любой страницы — фильтр должен работать после обхода.
+    mockSearch.mockResolvedValue({
+      searchEntries: [person(1), { ...person(2), mail: "" }, { ...person(3), sAMAccountName: "" }]
+    });
+    const { profiles } = await ldapListProfiles(settings(), "svc", "п");
+    expect(profiles.map((p) => p.ldapUid)).toEqual(["user1"]);
   });
 });
 

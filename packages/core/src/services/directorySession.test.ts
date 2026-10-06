@@ -9,15 +9,22 @@ import path from "node:path";
 const mockVerify = jest.fn();
 const mockSearch = jest.fn();
 
-jest.mock("../directory/ldap.js", () => ({
-  __esModule: true,
-  verifyLdapCredentials: (...a: unknown[]) => mockVerify(...a),
-  ldapSearchContacts: (...a: unknown[]) => mockSearch(...a)
-}));
+jest.mock("../directory/ldap.js", () => {
+  // Предел берём из настоящего модуля: иначе тест зафиксирует не то число,
+  // которое реально использует refreshDirectory.
+  const actual = jest.requireActual("../directory/ldap.js");
+  return {
+    __esModule: true,
+    DIRECTORY_BULK_LIMIT: actual.DIRECTORY_BULK_LIMIT,
+    verifyLdapCredentials: (...a: unknown[]) => mockVerify(...a),
+    ldapSearchContacts: (...a: unknown[]) => mockSearch(...a)
+  };
+});
 
+import { DIRECTORY_BULK_LIMIT } from "../directory/ldap.js";
 import { initApp } from "../init.js";
 import { closeDb } from "../db/index.js";
-import { countContacts, upsertContacts } from "../repos.js";
+import { countContacts, searchContactsCache, upsertContacts } from "../repos.js";
 import {
   directoryCredentials,
   directoryLogin,
@@ -186,7 +193,22 @@ describe("полная выгрузка каталога", () => {
 
     expect(await refreshDirectory()).toBe(2);
     expect(countContacts()).toBe(before + 2);
-    // Полная выгрузка запрашивает всё, а не 25 записей.
-    expect(mockSearch.mock.calls[0][4]).toBe(2000);
+    // Полная выгрузка запрашивает всё, а не 25 записей и не прежние 2000:
+    // на каталоге больше 2000 кэш обрезался, и сотрудники не находились поиском.
+    expect(mockSearch.mock.calls[0][4]).toBe(DIRECTORY_BULK_LIMIT);
+    // И сам предел больше прежних 2000, иначе кэш снова обрезался бы.
+    expect(DIRECTORY_BULK_LIMIT).toBeGreaterThan(2000);
+  });
+
+  test("каталог больше 2000 попадает в кэш целиком", async () => {
+    await directoryLogin("svc@test.local", "секрет");
+    // 2500 сотрудников: до правки в кэш уходило максимум 2000.
+    mockSearch.mockResolvedValue(
+      Array.from({ length: 2500 }, (_, i) => contact("CN=U" + i + ",DC=test", { displayName: "Сотрудник " + i }))
+    );
+
+    expect(await refreshDirectory()).toBe(2500);
+    // Поиск по кэшу находит и тех, кто «за» прежним пределом.
+    expect(searchContactsCache("Сотрудник 2499", 5).length).toBeGreaterThan(0);
   });
 });

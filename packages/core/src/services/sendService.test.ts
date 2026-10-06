@@ -33,9 +33,11 @@ jest.mock("../mail/pop3Connector.js", () => ({
 
 import { initApp } from "../init.js";
 import { closeDb } from "../db/index.js";
-import { getEmail, listEmails } from "../repos.js";
+import { getEmail, listAttachments, listEmails } from "../repos.js";
 import { createAccount } from "./accountService.js";
 import { sendEmail, testSmtpConnection } from "./sendService.js";
+import { logger } from "../logger.js";
+import * as attachmentStore from "../attachments/store.js";
 import type { ComposeInput } from "../types.js";
 
 let dir = "";
@@ -225,6 +227,69 @@ describe("сохранение копии", () => {
     // Письмо получателю уже ушло: пользователь не должен увидеть «ошибка».
     await expect(sendEmail(compose())).resolves.toMatchObject({ messageId: expect.any(String) });
     expect(listEmails({ accountId }).some((e) => e.folder === "Sent")).toBe(true);
+  });
+});
+
+describe("копия в «Отправленных» хранит вложения", () => {
+  const attachment = (filename: string, content: Buffer) => ({
+    filename,
+    mimeType: "application/pdf",
+    data: content.toString("base64")
+  });
+
+  test("два вложения с одинаковым именем не затирают друг друга, байты совпадают", async () => {
+    const first = Buffer.from("первый файл: содержимое А", "utf8");
+    const second = Buffer.from("второй файл: содержимое Б", "utf8");
+
+    const res = await sendEmail(
+      compose({
+        attachments: [attachment("Договор (копия).pdf", first), attachment("Договор (копия).pdf", second)]
+      })
+    );
+
+    const saved = listAttachments(res.emailId);
+    // Раньше строк вложений у отправленного письма не было вовсе: человек открывал
+    // «Отправленные» и не видел файлов, которые ушли адресату.
+    expect(saved.map((a) => a.filename)).toEqual(["Договор (копия).pdf", "Договор (копия).pdf"]);
+    expect(saved.map((a) => a.size)).toEqual([first.length, second.length]);
+
+    // ⚠️ Имя не уникально: файлы на диске обязаны быть разными, а содержимое — ровно
+    // тем, что ушло в письме.
+    expect(new Set(saved.map((a) => a.storagePath)).size).toBe(2);
+    const onDisk = saved.map((a) => fs.readFileSync(a.storagePath as string).toString("utf8")).sort();
+    expect(onDisk).toEqual([first.toString("utf8"), second.toString("utf8")].sort());
+  });
+
+  test("вид вложения определяется по типу, содержимое не извлекается", async () => {
+    const res = await sendEmail(compose({ attachments: [attachment("акт.pdf", Buffer.from("%PDF-1.4 тест"))] }));
+
+    const att = listAttachments(res.emailId)[0];
+    expect(att.kind).toBe("pdf");
+    expect(att.handled).toBe(true);
+    // Отправителю незачем извлекать текст из собственного вложения (и звать OCR).
+    expect(att.extractedText).toBeNull();
+  });
+
+  test("сбой сохранения вложения не превращает удачную отправку в ошибку", async () => {
+    const warnSpy = jest.spyOn(logger, "warn").mockImplementation((() => undefined) as never);
+    const saveSpy = jest.spyOn(attachmentStore, "saveAttachmentFile").mockImplementation(() => {
+      throw new Error("нет места на диске");
+    });
+
+    try {
+      const res = await sendEmail(compose({ attachments: [attachment("акт.pdf", Buffer.from("данные"))] }));
+
+      // Письмо адресату уже ушло — падать после этого нельзя.
+      expect(res.messageId).toBeTruthy();
+      expect(listAttachments(res.emailId)).toEqual([]);
+      // Но и молчать нельзя: причина видна в логе.
+      const logged = warnSpy.mock.calls.map((call) => JSON.stringify(call)).join(" ");
+      expect(logged).toContain("нет места на диске");
+      expect(logged).toContain("Отправленных");
+    } finally {
+      saveSpy.mockRestore();
+      warnSpy.mockRestore();
+    }
   });
 });
 

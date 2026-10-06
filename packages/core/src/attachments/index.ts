@@ -32,15 +32,30 @@ function stripHtml(html: string): string {
     .trim();
 }
 
+export interface PrepareAttachmentOptions {
+  /**
+   * Сохранять ли файл вложения на диске.
+   *
+   * ⚠️ Анализу письма файл не нужен — ему нужны текст и картинки. Раньше
+   * подготовка сохраняла файл ВСЕГДА, и после уникализации имён (flag "wx" +
+   * суффикс «-1», «-2») каждый прогон анализа оставлял на диске копию вложения,
+   * которой нет в БД: её не удаляло ни удаление письма, ни очистка вложений.
+   */
+  persist?: boolean;
+}
+
 export async function prepareAttachment(
   dataDir: string,
   emailId: string,
   filename: string,
   mimeType: string,
-  content: Buffer
+  content: Buffer,
+  options: PrepareAttachmentOptions = {}
 ): Promise<PreparedAttachment> {
   const kind = classifyKind(mimeType, filename);
-  const storagePath = saveAttachmentFile(dataDir, emailId, filename, content);
+  // Путь возвращаем только когда файл действительно сохранён.
+  const storagePath =
+    options.persist === false ? null : saveAttachmentFile(dataDir, emailId, filename, content);
   const base: PreparedAttachment = {
     kind,
     filename,

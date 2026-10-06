@@ -222,19 +222,69 @@ describe("пересылка", () => {
     expect(t.inReplyToEmailId).toBeNull();
   });
 
-  test("вложения оригинала прикладываются", () => {
+  test("вложение оригинала прикладывается ссылкой, без данных в шаблоне", () => {
     const email = makeEmail();
     const file = path.join(dir, "акт.txt");
     fs.writeFileSync(file, "содержимое", "utf8");
-    insertAttachment({
+    const att = insertAttachment({
       emailId: email.id, filename: "акт.txt", mimeType: "text/plain", size: 10,
       storagePath: file, extractedText: null, contentId: null, kind: "text", handled: true
     });
 
     const t = buildComposeTemplate({ accountId, mode: "forward", emailId: email.id });
-    expect(t.attachments).toHaveLength(1);
-    expect(t.attachments[0].filename).toBe("акт.txt");
-    expect(Buffer.from(t.attachments[0].data, "base64").toString("utf8")).toBe("содержимое");
+
+    expect(t.attachments).toEqual([
+      {
+        filename: "акт.txt",
+        mimeType: "text/plain",
+        size: 20,
+        attachmentId: att.id,
+        emailId: email.id
+      }
+    ]);
+    // ⚠️ Данных файла в ответе быть не должно. Раньше сервер вкладывал вложение
+    // целиком в base64: письмо на 20 МБ превращалось в ~27 МБ JSON, который он
+    // собирал в памяти, а клиент держал в состоянии и отправлял обратно.
+    expect(JSON.stringify(t)).not.toContain(Buffer.from("содержимое").toString("base64"));
+  });
+
+  test("размер берётся с диска, а не из базы", () => {
+    const email = makeEmail();
+    const file = path.join(dir, "счёт.pdf");
+    fs.writeFileSync(file, Buffer.alloc(1234, 7));
+    insertAttachment({
+      emailId: email.id, filename: "счёт.pdf", mimeType: "application/pdf", size: 0,
+      storagePath: file, extractedText: null, contentId: null, kind: "pdf", handled: true
+    });
+
+    // В базе размер может быть нулевым или устаревшим (файл дедуплицирован) —
+    // показывать надо то, что реально лежит на диске и уйдёт в письмо.
+    expect(buildComposeTemplate({ accountId, mode: "forward", emailId: email.id }).attachments[0].size).toBe(1234);
+  });
+
+  test("кириллическое имя и два одинаковых имени не теряются", () => {
+    const email = makeEmail();
+    const one = path.join(dir, "копия-1.bin");
+    const two = path.join(dir, "копия-2.bin");
+    fs.writeFileSync(one, "первый файл", "utf8");
+    fs.writeFileSync(two, "второй файл", "utf8");
+    const a1 = insertAttachment({
+      emailId: email.id, filename: "Договор (копия).pdf", mimeType: "application/pdf", size: 11,
+      storagePath: one, extractedText: null, contentId: null, kind: "pdf", handled: true
+    });
+    const a2 = insertAttachment({
+      emailId: email.id, filename: "Договор (копия).pdf", mimeType: "application/pdf", size: 11,
+      storagePath: two, extractedText: null, contentId: null, kind: "pdf", handled: true
+    });
+
+    const t = buildComposeTemplate({ accountId, mode: "forward", emailId: email.id });
+
+    // Каждое вложение — отдельная ссылка: письмо уйдёт с обоими файлами,
+    // хотя имена совпадают.
+    expect(t.attachments.map((a) => [a.filename, a.attachmentId])).toEqual([
+      ["Договор (копия).pdf", a1.id],
+      ["Договор (копия).pdf", a2.id]
+    ]);
   });
 
   test("вложение без файла на диске пропускается", () => {

@@ -1,5 +1,22 @@
 import { Client } from "ldapts";
+import { logger } from "../logger.js";
 import type { DirectoryContact, LdapProfile, LdapSettings } from "../types.js";
+
+/**
+ * Размер страницы при выгрузке всего каталога (LDAP paged results,
+ * control 1.2.840.113556.1.4.319). 1000 — это MaxPageSize Active Directory
+ * по умолчанию: столько он отдаёт на один непостраничный поиск и на этом
+ * молча останавливается.
+ */
+const LDAP_PAGE_SIZE = 1000;
+
+/**
+ * Предел полной выгрузки каталога (профили для СЭД и кэш адресной книги).
+ * Это предохранитель от лавины, а не способ обрезать каталог: превышение видно
+ * в логе, а для профилей ещё и в признаке truncated. Раньше здесь было 2000 —
+ * меньше реального каталога, то есть синхронизация и кэш тихо теряли людей.
+ */
+export const DIRECTORY_BULK_LIMIT = 20000;
 
 const DEFAULT_ATTRIBUTES = ["displayName", "mail", "sAMAccountName", "cn", "title", "department", "telephoneNumber"];
 
@@ -160,28 +177,65 @@ export async function ldapSearchContacts(
     const filter = q
       ? "(&" + base + "(|(displayName=*" + q + "*)(mail=*" + q + "*)(sAMAccountName=*" + q + "*)(cn=*" + q + "*)))"
       : base;
+    // Автодополнение (десятки подсказок) — точечный запрос: страницы ему не нужны
+    // и тянули бы весь набор совпадений. А выгрузка каталога в кэш
+    // (refreshDirectory → limit 2000) — это полный обход: без paged AD отдаёт
+    // только первую страницу, и кэш адресной книги молча остаётся неполным.
+    const bulk = limit > LDAP_PAGE_SIZE;
     const { searchEntries } = await c.search(s.baseDn ?? "", {
       scope: "sub",
       filter,
-      sizeLimit: limit,
+      // Предел серверу отдаём только для точечного запроса: вместе с постраничной
+      // выдачей он режет результат по всему поиску (sizeLimitExceeded + часть записей).
+      sizeLimit: bulk ? 0 : limit,
+      ...(bulk ? { paged: { pageSize: LDAP_PAGE_SIZE } } : {}),
       attributes: s.attributes && s.attributes.length ? s.attributes : DEFAULT_ATTRIBUTES
     });
-    return searchEntries.map(mapEntry).filter((x) => x.mail || x.displayName);
+    const contacts = searchEntries.map(mapEntry).filter((x) => x.mail || x.displayName);
+    if (contacts.length > limit) {
+      logger.warn(
+        { total: contacts.length, limit },
+        "Каталог больше предела выгрузки: часть контактов не попала в кэш — увеличьте предел"
+      );
+      return contacts.slice(0, limit);
+    }
+    return contacts;
   } finally {
     await c.unbind().catch(() => undefined);
   }
 }
 
 /**
+ * Результат полной выгрузки каталога.
+ *
+ * ⚠️ Возвращается объект, а не массив, намеренно: вызывающий обязан увидеть,
+ * что список может быть неполным. Со массивом старый код молча считал обрезанную
+ * выгрузку полным каталогом и деактивировал всех, кого в ней не оказалось.
+ */
+export interface LdapProfilesResult {
+  /** Сотрудники, попавшие в выгрузку (после отбрасывания записей без логина/почты). */
+  profiles: LdapProfile[];
+  /** Сколько всего нашлось в каталоге — до применения предела. */
+  total: number;
+  /** true = предел обрезал выгрузку: в profiles НЕ весь каталог, деактивировать нельзя. */
+  truncated: boolean;
+}
+
+/**
  * Полная выгрузка сотрудников с атрибутами, нужными СЭД (должность, отдел, руководитель,
  * признак отключённой учётки). Используется синхронизацией справочника пользователей.
+ *
+ * ⚠️ Идёт постранично (paged results). Без этого AD отдаёт не больше MaxPageSize
+ * (1000 записей) на один поиск, а вызывающий считает список полным каталогом и
+ * деактивирует всех, кого в нём не оказалось: на каталоге больше страницы каждая
+ * синхронизация выключала людей и рвала им сессии.
  */
 export async function ldapListProfiles(
   s: LdapSettings,
   login: string,
   password: string,
-  limit = 2000
-): Promise<LdapProfile[]> {
+  limit = DIRECTORY_BULK_LIMIT
+): Promise<LdapProfilesResult> {
   const c = clientOf(s);
   try {
     await c.bind(buildBindIdentifier(login, s), password);
@@ -191,10 +245,16 @@ export async function ldapListProfiles(
     const { searchEntries } = await c.search(base, {
       scope: "sub",
       filter: `(&${filter}(mail=*))`,
-      sizeLimit: limit,
+      // ⚠️ Предел серверу НЕ отдаём (0 = без предела). Вместе с постраничной
+      // выдачей sizeLimit режет результат по всему поиску: AD вернёт
+      // sizeLimitExceeded и часть записей, а вызывающий снова посчитает список
+      // полным. Предел держим на клиенте — после обхода всех страниц.
+      sizeLimit: 0,
+      // Страницами по MaxPageSize AD: ldapts сам продолжает обход по cookie.
+      paged: { pageSize: LDAP_PAGE_SIZE },
       attributes: PROFILE_ATTRIBUTES
     });
-    return (searchEntries as unknown as Record<string, unknown>[])
+    const profiles = (searchEntries as unknown as Record<string, unknown>[])
       .map((e) => {
         const uac = Number(attr(e, "userAccountControl") || "0");
         const sam = attr(e, "sAMAccountName");
@@ -211,6 +271,24 @@ export async function ldapListProfiles(
         };
       })
       .filter((p) => p.ldapUid && p.email);
+
+    const total = profiles.length;
+    // Обрезали — значит, кого-то в синхронизации не увидят. Молчать нельзя:
+    // именно молчаливое усечение и приводило к «отключённым» сотрудникам.
+    if (total > limit) {
+      logger.warn(
+        { total, limit },
+        "Каталог больше предела выгрузки: часть сотрудников не попала в синхронизацию — увеличьте предел"
+      );
+      return { profiles: profiles.slice(0, limit), total, truncated: true };
+    }
+    // Пустой ответ — это почти всегда неверный Base DN или фильтр, а не вымерший
+    // домен. Отдельное предупреждение: вызывающий по truncated === false решает,
+    // что список полный, и может отключить всех.
+    if (total === 0) {
+      logger.warn({ base }, "Каталог не вернул ни одного сотрудника — проверьте Base DN и фильтр");
+    }
+    return { profiles, total, truncated: false };
   } finally {
     await c.unbind().catch(() => undefined);
   }

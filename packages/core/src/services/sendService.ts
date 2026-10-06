@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { logger } from "../logger.js";
-import { getAccount, insertEmail } from "../repos.js";
+import { getContext } from "../context.js";
+import { getAccount, insertAttachment, insertEmail } from "../repos.js";
 import { buildConnector, decryptPassword, decryptSmtpPassword } from "./accountService.js";
 import { assignThread } from "./threadService.js";
 import { buildSmtpTransport, sendSmtp, wrapMessageId } from "../mail/smtpSender.js";
+import { classifyKind } from "../mail/parser.js";
+import { saveAttachmentFile } from "../attachments/store.js";
 import type { Account, ComposeInput, EmailAddress } from "../types.js";
 
 export interface SendResult {
@@ -89,6 +92,37 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
     headers: {},
     analysisStatus: "ready"
   });
+
+  // ⚠️ Копия в «Отправленных» должна показывать то, что реально ушло. Раньше строк
+  // вложений у неё не было вообще: открыв отправленное письмо, человек не видел файлов,
+  // которые ушли адресату. Файл уже есть в памяти — кладём его на диск, как во входящих.
+  // OCR не зовём: отправителю незачем извлекать текст из собственного вложения.
+  for (const att of compose.attachments ?? []) {
+    try {
+      const content = Buffer.from(att.data, "base64");
+      // Имена вложений не уникальны (два «акт.pdf» в одном письме) — saveAttachmentFile
+      // подбирает свободное имя и никогда не перезаписывает существующий файл.
+      const storagePath = saveAttachmentFile(getContext().config.dataDir, email.id, att.filename, content);
+      insertAttachment({
+        emailId: email.id,
+        filename: att.filename,
+        mimeType: att.mimeType,
+        size: content.length,
+        storagePath,
+        extractedText: null,
+        contentId: null,
+        kind: classifyKind(att.mimeType, att.filename),
+        handled: true
+      });
+    } catch (err) {
+      // Письмо адресату уже ушло: сбой записи копии не должен выглядеть как неудачная
+      // отправка. Но и молчать нельзя — вложение пропадёт из «Отправленных».
+      logger.warn(
+        { emailId: email.id, filename: att.filename, err: (err as Error).message },
+        "Вложение не сохранено в копии «Отправленных»"
+      );
+    }
+  }
 
   try {
     assignThread(email);

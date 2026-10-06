@@ -132,7 +132,12 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
       try {
         const buf = fs.readFileSync(att.storagePath);
         prepared.push(
-          await prepareAttachment(ctx.config.dataDir, emailId, att.filename, att.mimeType, buf)
+          // persist: false — файл уже лежит на диске (мы его только что прочитали).
+          // Повторная запись создавала копии «-1», «-2» при каждом прогоне анализа:
+          // они не попадают в БД и не удаляются вместе с письмом.
+          await prepareAttachment(ctx.config.dataDir, emailId, att.filename, att.mimeType, buf, {
+            persist: false
+          })
         );
         preparedAttIds.push(att.id);
       } catch (err) {

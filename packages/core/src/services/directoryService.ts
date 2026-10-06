@@ -1,7 +1,7 @@
 import { getContext } from "../context.js";
 import { logger } from "../logger.js";
 import { countContacts, getSetting, searchContactsCache, setSetting, upsertContacts } from "../repos.js";
-import { ldapSearchContacts, verifyLdapCredentials } from "../directory/ldap.js";
+import { DIRECTORY_BULK_LIMIT, ldapSearchContacts, verifyLdapCredentials } from "../directory/ldap.js";
 import { ldapSettingsStore } from "./ldapSettingsStore.js";
 import type { DirectoryContact, LdapSettings } from "../types.js";
 
@@ -135,11 +135,19 @@ export async function searchDirectory(query: string, limit = 25): Promise<Direct
   }
 }
 
-/** Полная выгрузка каталога в кэш. */
+/**
+ * Полная выгрузка каталога в кэш.
+ *
+ * ⚠️ Предел здесь — только предохранитель от лавины, а не способ обрезать кэш:
+ * с прежними 2000 на большом каталоге в кэш попадала лишь часть сотрудников, и
+ * они не находились поиском (а при недоступном LDAP кэш — единственный
+ * источник адресной книги). Выгрузка идёт постранично (см. ldapSearchContacts),
+ * о превышении предела поиск предупреждает в логе.
+ */
 export async function refreshDirectory(): Promise<number> {
   const cred = directoryCredentials();
   if (!cred) throw new Error("Сначала войдите в каталог");
-  const list = await ldapSearchContacts(getLdapSettings(), cred.login, cred.password, "", 2000);
+  const list = await ldapSearchContacts(getLdapSettings(), cred.login, cred.password, "", DIRECTORY_BULK_LIMIT);
   upsertContacts(list);
   return list.length;
 }
