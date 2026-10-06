@@ -1,0 +1,3 @@
+# pnpm 11 читает настройки отсюда, а не из .npmrc
+nodeLinker: hoisted
+packages: []

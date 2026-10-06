@@ -1,0 +1,11 @@
+{
+  "name": "ui-test-harness",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "jsdom": "26.1.0",
+    "jest-environment-jsdom": "29.7.0",
+    "@testing-library/react": "16.3.0",
+    "@testing-library/dom": "10.4.1"
+  }
+}

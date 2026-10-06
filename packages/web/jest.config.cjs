@@ -2,13 +2,21 @@
  * Тесты пакета @mailsense/web.
  *
  * ⚠️ Своих jest/ts-jest у пакета нет: `pnpm add` в ограниченной песочнице падает
- * (контент-адресуемый store лежит вне рабочей папки → ERR_SQLITE_ERROR), а
- * скопировать обвязку плоско, как в server, для web не потребовалось. Поэтому
+ * (контент-адресуемый store лежит вне рабочей папки → ERR_SQLITE_ERROR). Поэтому
  * инструменты берутся из соседнего @mailsense/core, где они уже установлены.
  *
+ * Компонентные тесты (*.test.tsx) работают в jsdom и используют @testing-library/react.
+ * Симлинки в песочнице запрещены, а линковка pnpm (и isolated, и hoisted) падает с
+ * переполнением стека, поэтому дерево зависимостей разложено в packages/web/node_modules
+ * ПЛОСКОЙ КОПИЕЙ — тот же приём, что в packages/server. Как пересобрать это дерево:
+ *   1) в .ui-test-harness лежат package.json/pnpm-lock.yaml с составом обвязки;
+ *   2) `pnpm install --lockfile-only` там же обновляет граф (линковка не нужна — она и падает);
+ *   3) `node .ui-test-harness/fetch-tarballs.cjs` скачивает архивы и распаковывает их
+ *      плоско в packages/web/node_modules (каталоги, без симлинков).
+ * Когда появится доступ к нормальной установке — заменить это на
+ * `pnpm add -D jest ts-jest @types/jest jest-environment-jsdom @testing-library/react`.
+ *
  * Запуск: `pnpm --filter @mailsense/web test` (или из корня `pnpm -r test`).
- * Если однажды появится возможность поставить зависимости — заменить пути ниже
- * на обычные "jest"/"ts-jest" и добавить их в devDependencies.
  */
 const path = require("path");
 
@@ -17,7 +25,8 @@ const coreNodeModules = path.join(__dirname, "..", "core", "node_modules");
 module.exports = {
   rootDir: __dirname,
   testEnvironment: "node",
-  testMatch: ["<rootDir>/src/**/*.test.ts"],
+  // Стор и утилиты — в node, компоненты — в jsdom (прагма @jest-environment в файле).
+  testMatch: ["<rootDir>/src/**/*.test.ts", "<rootDir>/src/**/*.test.tsx"],
   transform: {
     "^.+\\.(ts|tsx)$": [
       path.join(coreNodeModules, "ts-jest"),
@@ -39,6 +48,9 @@ module.exports = {
     ]
   },
   moduleFileExtensions: ["ts", "tsx", "js", "mjs", "json"],
+  // jsdom + antd небыстрые: отправка письма в тесте занимает ~11 с (анимации rc-motion
+  // и разбор большого дерева компонентов), в 5 с по умолчанию это не укладывается.
+  testTimeout: 30000,
   clearMocks: true,
   restoreMocks: true
 };
