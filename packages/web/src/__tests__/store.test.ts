@@ -281,3 +281,25 @@ describe("индикатор анализа не слепнет к скану и
     expect(useStore.getState().analysisEpoch).toBeGreaterThan(before);
   });
 });
+
+describe("ошибка загрузки списка не теряется", () => {
+  type WithError = { loadError?: string | null };
+
+  it("сбой запроса попадает в состояние, а не в необработанный промис", async () => {
+    mockEmails.mockRejectedValue(new Error("502 Bad Gateway"));
+
+    await expect(useStore.getState().loadEmails()).resolves.toBeUndefined();
+
+    expect((useStore.getState() as unknown as WithError).loadError).toBe("502 Bad Gateway");
+  });
+
+  it("успешная загрузка очищает прежнюю ошибку", async () => {
+    mockEmails.mockRejectedValueOnce(new Error("502 Bad Gateway"));
+    await useStore.getState().loadEmails();
+    mockEmails.mockResolvedValue([mail("a")]);
+
+    await useStore.getState().loadEmails();
+
+    expect((useStore.getState() as unknown as WithError).loadError ?? null).toBeNull();
+  });
+});

@@ -41,6 +41,22 @@ export function categoryColor(c: Category): string {
   return "#999999";
 }
 
+/**
+ * Список исполнителей одной строкой.
+ *
+ * Учётка может быть без ФИО (каталог не отдал имя) — тогда берём адрес, а если и его
+ * нет, честную подпись. Простой join(", ") на пустых именах давал «Исполнители: ,» —
+ * человек видел мусор вместо ответа на вопрос «кто исполняет».
+ */
+export function formatAssignees(
+  assignees: Array<{ fullName?: string | null; email?: string | null }>
+): string {
+  const names = assignees
+    .map((a) => (a.fullName ?? "").trim() || (a.email ?? "").trim() || "исполнитель без имени")
+    .filter(Boolean);
+  return names.length ? names.join(", ") : "—";
+}
+
 export function statusLabel(s: AnalysisStatus): string {
   switch (s) {
     case "pending": return "Ожидает";

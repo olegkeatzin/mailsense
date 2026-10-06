@@ -7,7 +7,6 @@ import {
   SettingOutlined,
   CalendarOutlined,
   ImportOutlined,
-  StopOutlined,
   EditOutlined,
   FileTextOutlined,
   UserOutlined
@@ -29,6 +28,7 @@ import FetchModal from "./components/FetchModal";
 import AnalyzeModal from "./components/AnalyzeModal";
 import EmailViewer from "./components/EmailViewer";
 import SettingsModal from "./components/SettingsModal";
+import { StopAnalysisButton } from "./components/StopAnalysisButton";
 import Composer from "./components/Composer";
 import DraftsModal from "./components/DraftsModal";
 import LoginScreen from "./components/LoginScreen";
@@ -99,7 +99,11 @@ function AnalysisProgressBadge() {
     // анализ запускает и фоновый планировщик — тогда плашка обязана появиться.
     const poller = createProgressPoller({
       fetchProgress: () => api.progress(),
-      onProgress: (r) => setP(r),
+      onProgress: (r) => {
+        setP(r);
+        // Размер очереди знает только индикатор — им пользуется подтверждение «Стоп».
+        useStore.getState().setAnalysisQueue(r.queueLength);
+      },
       isHidden: () => document.hidden
     });
     pollerRef.current = poller;
@@ -176,7 +180,7 @@ export default function App() {
   const folder = useStore((s) => s.folder);
   const accounts = useStore((s) => s.accounts);
   const analyzeAll = useStore((s) => s.analyzeAll);
-  const stopAnalysis = useStore((s) => s.stopAnalysis);
+
   const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const openCompose = useStore((s) => s.openCompose);
   const threadView = useStore((s) => s.threadView);
@@ -359,11 +363,7 @@ export default function App() {
               Анализ
             </Button>
           </Tooltip>
-          <Tooltip title="Остановить анализ (очистить очередь)">
-            <Button icon={<StopOutlined />} onClick={() => void stopAnalysis()}>
-              Стоп
-            </Button>
-          </Tooltip>
+          <StopAnalysisButton />
           <Tooltip title="Импорт писем из .eml / .mbox">
             <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>
               Импорт

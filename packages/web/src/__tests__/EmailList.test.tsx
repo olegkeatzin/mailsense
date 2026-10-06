@@ -112,3 +112,68 @@ describe("EmailList: выбор и полоса массовых действи�
     expect(useStore.getState().selectedIds.filter((id) => ["a", "b", "c"].includes(id))).toHaveLength(3);
   });
 });
+
+describe("сбой загрузки и пустой поиск объясняются человеку", () => {
+  it("ошибка загрузки списка показывается сообщением, а не тишиной", async () => {
+    mockEmails.mockRejectedValue(new Error("502 Bad Gateway"));
+    renderMailScreen();
+
+    // Список не загрузился: человек должен увидеть, что именно сломалось.
+    expect(await screen.findByText(/Не удалось обновить список/i)).toBeTruthy();
+    expect(screen.getByText(/502 Bad Gateway/)).toBeTruthy();
+  });
+
+  it("«Повторить» перезапрашивает список и убирает сообщение", async () => {
+    mockEmails.mockRejectedValueOnce(new Error("502 Bad Gateway"));
+    await act(async () => {
+      await useStore.getState().loadEmails();
+    });
+    renderMailScreen();
+    expect(await screen.findByText(/Не удалось обновить список/i)).toBeTruthy();
+
+    mockEmails.mockResolvedValue([mail("a", "Письмо про отчёт")]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    });
+
+    await waitFor(() => expect(screen.queryByText(/Не удалось обновить список/i)).toBeNull());
+  });
+
+  it("пустой результат поиска объясняет, что виноват фильтр, и предлагает его сбросить", async () => {
+    useStore.setState({
+      ...initial,
+      emails: [],
+      threads: [],
+      threadView: false,
+      selectedIds: [],
+      q: "ззз-нет-такого-письма",
+      loading: false
+    });
+    renderMailScreen();
+
+    expect(await screen.findByText(/Ничего не найдено/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Сбросить фильтр/i })).toBeTruthy();
+    // Старый текст «Нет писем» тут врал: письма есть, их скрыл фильтр.
+    expect(screen.queryByText("Нет писем")).toBeNull();
+  });
+});
+
+describe("обрезанный текст списка", () => {
+  it("у фрагмента письма есть подсказка с полным текстом", async () => {
+    const body = "Очень длинное письмо. ".repeat(20);
+    useStore.setState({
+      ...initial,
+      emails: [{ id: "long", subject: "Длинное", bodyText: body, analysisStatus: "pending" } as unknown as Email],
+      threads: [],
+      threadView: false,
+      selectedIds: [],
+      q: "",
+      loading: false
+    });
+    const { container } = renderMailScreen();
+
+    const snippet = [...container.querySelectorAll("div")].find((d) => (d.textContent ?? "").startsWith("Очень длинное письмо."));
+    expect(snippet).toBeTruthy();
+    expect(snippet?.getAttribute("title") ?? "").toContain("Очень длинное письмо.");
+  });
+});

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Card, Empty, Space, Spin, Tag, Typography } from "antd";
 import dayjs from "dayjs";
 import { resolutionApi } from "../api";
+import { useStore } from "../store";
 import { PRIORITY_TITLES, type BoardColumn, type Resolution } from "../resolutionTypes";
 
 /**
@@ -11,10 +12,28 @@ import { PRIORITY_TITLES, type BoardColumn, type Resolution } from "../resolutio
  * на что смотрят в первую очередь. Резолюция может быть одновременно «в работе»
  * и «просрочена» — это разные вопросы, и смешивать их нельзя.
  */
-function CardBody({ r }: { r: Resolution }) {
+function CardBody({ r, onOpen }: { r: Resolution; onOpen?: (documentId: string) => void }) {
   const responsible = r.assignees.find((a) => a.kind === "responsible") ?? r.assignees[0];
+  // Канбан без перехода — витрина: видно, что работа есть, а сделать ничего нельзя.
+  // Ведём в карточку документа, где и живут действия; кому журнал недоступен по правам,
+  // тот видит обычную карточку без обещания клика.
+  const openProps = onOpen
+    ? {
+        role: "button" as const,
+        tabIndex: 0,
+        "aria-label": "Открыть документ " + r.documentNumber,
+        onClick: () => onOpen(r.documentId),
+        onKeyDown: (ev: React.KeyboardEvent) => {
+          if (ev.key === "Enter" || ev.key === " ") {
+            ev.preventDefault();
+            onOpen(r.documentId);
+          }
+        },
+        style: { marginBottom: 8, cursor: "pointer" as const }
+      }
+    : { style: { marginBottom: 8 } };
   return (
-    <Card size="small" style={{ marginBottom: 8 }}>
+    <Card size="small" {...openProps}>
       <Space wrap size={4} style={{ marginBottom: 6 }}>
         <b>{r.documentNumber}</b>
         <Tag color={r.priority === "urgent" ? "red" : r.priority === "important" ? "orange" : "default"}>
@@ -42,6 +61,15 @@ export function ResolutionBoard() {
   const [columns, setColumns] = useState<BoardColumn[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const can = useStore((s) => s.can);
+  const setSection = useStore((s) => s.setSection);
+  const requestDocument = useStore((s) => s.requestDocument);
+  const canOpenDocument = can("journal.view");
+
+  const openDocument = (documentId: string) => {
+    requestDocument(documentId);
+    setSection("journal");
+  };
 
   useEffect(() => {
     resolutionApi
@@ -68,7 +96,9 @@ export function ResolutionBoard() {
               </div>
               <div style={{ background: "#fafafa", borderRadius: 8, padding: 8, minHeight: 80 }}>
                 {c.items.length ? (
-                  c.items.map((r) => <CardBody key={r.id + c.key} r={r} />)
+                  c.items.map((r) => (
+                    <CardBody key={r.id + c.key} r={r} onOpen={canOpenDocument ? openDocument : undefined} />
+                  ))
                 ) : (
                   <div style={{ color: "#767676", fontSize: 12, textAlign: "center", padding: 12 }}>пусто</div>
                 )}

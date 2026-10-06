@@ -11,6 +11,7 @@ import {
   type Resolution
 } from "../resolutionTypes";
 import { useStore } from "../store";
+import { formatAssignees } from "../utils";
 import {
   DOCUMENT_STATUS_TITLES,
   type AuditEntry,
@@ -331,7 +332,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                       </Space>
                       <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{r.text}</div>
                       <div style={{ fontSize: 12, color: "#666" }}>
-                        Исполнители: {r.assignees.map((a) => a.fullName).join(", ") || "—"}
+                        Исполнители: {formatAssignees(r.assignees)}
                       </div>
                       <ResolutionEmails resolution={r} />
                       <div style={{ fontSize: 11, color: "#595959" }}>

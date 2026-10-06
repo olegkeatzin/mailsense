@@ -56,6 +56,19 @@ interface State extends FilterState {
   selectedIds: string[];
   /** Письмо, для которого нужно сразу открыть форму регистрации (переход из списка «На регистрацию»). */
   registerIntent: string | null;
+  /** Документ, который надо открыть в журнале (переход с канбана резолюций). */
+  documentIntent: string | null;
+  requestDocument: (documentId: string) => void;
+  clearDocumentIntent: () => void;
+  /** Сколько писем сейчас в очереди анализа: нужно подтверждению «Стоп». */
+  analysisQueue: number;
+  setAnalysisQueue: (n: number) => void;
+  /**
+   * Последняя ошибка загрузки (список, письмо): показывается человеку.
+   * Без неё сбой сети выглядел как «ничего не произошло», а список молча
+   * оставался от прежней папки — человек читал не то, что думал.
+   */
+  loadError: string | null;
   /**
    * Счётчик запусков анализа: по нему индикатор прогресса понимает, что очередь
    * снова не пуста, и проверяет её немедленно (в простое он опрашивает редко).
@@ -185,6 +198,30 @@ function pruneSelection(selectedIds: string[], visible: string[]): string[] {
   return next.length === selectedIds.length ? selectedIds : next;
 }
 
+/**
+ * Включён ли фильтр или поиск.
+ *
+ * Нужно тексту пустого состояния: «нет писем» и «фильтр ничего не нашёл» —
+ * разные вещи, и во втором случае человеку надо предложить сбросить фильтр.
+ */
+export function hasActiveFilter(s: FilterState): boolean {
+  return Boolean(
+    s.q.trim() ||
+      s.tag ||
+      s.categories.length ||
+      s.status ||
+      s.minPriority ||
+      s.hasEvent ||
+      s.from.length ||
+      s.to.length ||
+      s.externalNumber.length ||
+      s.dateFrom ||
+      s.dateTo ||
+      s.sendDateFrom ||
+      s.sendDateTo
+  );
+}
+
 /** Выбранное, что реально видно в текущем списке — только по этому и действуем. */
 function selectedVisible(s: State): string[] {
   const keep = new Set(visibleEmailIds(s));
@@ -214,6 +251,9 @@ export const useStore = create<State>()((set, get) => ({
   emailView: null,
   selectedIds: [],
   registerIntent: null,
+  documentIntent: null,
+  analysisQueue: 0,
+  loadError: null,
   analysisEpoch: 0,
   loading: false,
   settingsOpen: false,
@@ -312,7 +352,7 @@ export const useStore = create<State>()((set, get) => ({
       const emails = await api.emails(filterParams(get()), { signal: ctrl.signal });
       // Отменённый ответ (или ответ, пришедший после отмены) в стор не попадает.
       if (ctrl.signal.aborted) return;
-      set({ emails, selectedIds: pruneSelection(get().selectedIds, emails.map((e) => e.id)) });
+      set({ emails, loadError: null, selectedIds: pruneSelection(get().selectedIds, emails.map((e) => e.id)) });
       if (get().threadView) {
         try {
           await get().loadThreads();
@@ -322,7 +362,9 @@ export const useStore = create<State>()((set, get) => ({
       }
     } catch (err) {
       // Отмена — не ошибка: её запросили мы сами, ответ просто устарел.
-      if (!ctrl.signal.aborted) throw err;
+      // Настоящий сбой не бросаем наружу (иначе необработанный промис в консоли),
+      // а показываем человеку: список мог остаться от прежней папки.
+      if (!ctrl.signal.aborted) set({ loadError: (err as Error).message });
     } finally {
       if (emailsAbort === ctrl) {
         emailsAbort = null;
@@ -340,9 +382,12 @@ export const useStore = create<State>()((set, get) => ({
       const emailView = await api.email(id, { signal: ctrl.signal });
       // Пока грузилось, могли открыть другое письмо — старый ответ не наш.
       if (ctrl.signal.aborted || get().selectedId !== id) return;
-      set({ emailView });
+      set({ emailView, loadError: null });
     } catch (e) {
-      if (!ctrl.signal.aborted) console.error(e);
+      if (!ctrl.signal.aborted) {
+        console.error(e);
+        set({ loadError: "Не удалось открыть письмо: " + (e as Error).message });
+      }
     }
   },
 
@@ -433,6 +478,9 @@ export const useStore = create<State>()((set, get) => ({
   setSection: (section: AppSection) => set({ section }),
   requestRegister: (emailId) => set({ registerIntent: emailId }),
   clearRegisterIntent: () => set({ registerIntent: null }),
+  requestDocument: (documentId) => set({ documentIntent: documentId }),
+  clearDocumentIntent: () => set({ documentIntent: null }),
+  setAnalysisQueue: (n) => set({ analysisQueue: n }),
 
   openCompose: (mode, emailId = null) => set({ compose: { open: true, mode, emailId, draft: null } }),
   openDraftCompose: (draft) => set({ compose: { open: true, mode: "new", emailId: null, draft } }),

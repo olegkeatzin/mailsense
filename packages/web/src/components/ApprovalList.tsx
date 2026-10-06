@@ -116,7 +116,13 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
     }
   }
 
-  /** Утверждение вместе с решением: текст и исполнители уходят одним запросом. */
+  /**
+   * Утверждение вместе с решением: текст и исполнители уходят одним запросом.
+   *
+   * ⚠️ Спрашиваем подтверждение: отменить утверждение нельзя, дальше аппарат отправляет
+   * поручение исполнителям. В окне показываем то, что человек утверждает — документ,
+   * текст, исполнителей и срок: раньше он нажимал кнопку, видя только поля формы.
+   */
   function approve(r: Resolution) {
     const f = forms[r.id];
     if (!f?.text.trim()) {
@@ -127,20 +133,51 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
       message.warning("Назначьте хотя бы одного исполнителя");
       return;
     }
-    void act(
-      r.id,
-      () =>
-        resolutionApi.approve(r.id, {
-          text: f.text,
-          assignees: f.ids.map((uid) => ({
-            userId: uid,
-            kind: (uid === f.resp ? "responsible" : "coexecutor") as AssigneeKind
-          })),
-          priority: f.priority,
-          deadline: f.deadline
-        }),
-      "Утверждено"
-    );
+    const assignees = f.ids
+      .map((uid) => users.find((u) => u.id === uid)?.fullName || "исполнитель")
+      .join(", ");
+    const deadline = f.deadline ? dayjs(f.deadline).format("DD.MM.YYYY") : "без срока";
+    const text = f.text.length > 300 ? f.text.slice(0, 300) + "…" : f.text;
+
+    Modal.confirm({
+      title: "Утвердить поручение?",
+      okText: "Утвердить",
+      cancelText: "Отмена",
+      width: 520,
+      content: (
+        <div style={{ fontSize: 13 }}>
+          <div style={{ marginBottom: 6 }}>
+            <b>{r.documentNumber}</b>
+            {" · "}
+            {PRIORITY_TITLES[f.priority]}
+            {" · срок: "}
+            {deadline}
+          </div>
+          <div style={{ marginBottom: 6, whiteSpace: "pre-wrap" }}>{text}</div>
+          <div>
+            Исполнители: <b>{assignees}</b>
+          </div>
+          <div style={{ color: "#595959", marginTop: 8 }}>
+            Отменить утверждение нельзя: дальше аппарат отправит поручение исполнителям.
+          </div>
+        </div>
+      ),
+      onOk: () =>
+        act(
+          r.id,
+          () =>
+            resolutionApi.approve(r.id, {
+              text: f.text,
+              assignees: f.ids.map((uid) => ({
+                userId: uid,
+                kind: (uid === f.resp ? "responsible" : "coexecutor") as AssigneeKind
+              })),
+              priority: f.priority,
+              deadline: f.deadline
+            }),
+          "Утверждено"
+        )
+    });
   }
 
   function reject(id: string) {

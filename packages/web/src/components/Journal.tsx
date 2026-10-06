@@ -45,6 +45,15 @@ export default function Journal() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [openId, setOpenId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Переход с канбана резолюций: карточка документа открывается сразу.
+  const documentIntent = useStore((s) => s.documentIntent);
+  const clearDocumentIntent = useStore((s) => s.clearDocumentIntent);
+
+  useEffect(() => {
+    if (!documentIntent) return;
+    setOpenId(documentIntent);
+    clearDocumentIntent();
+  }, [documentIntent, clearDocumentIntent]);
 
   const [search, setSearch] = useState("");
   // Пока пользователь печатает, запрос не уходит: иначе журнал спрашивается на каждую букву.

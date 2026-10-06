@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { FixedSizeList } from "react-window";
-import { Badge, Checkbox, Empty, Spin, Tag } from "antd";
-import { useStore } from "../store";
+import { Alert, Badge, Button, Checkbox, Empty, Spin, Tag } from "antd";
+import { hasActiveFilter, useStore } from "../store";
 import type { Email, ThreadGroup } from "../types";
 import {
   categoryColor,
@@ -63,7 +63,9 @@ function EmailRowItem({ e, selected }: { e: Email; selected: boolean }) {
       >
         {e.subject}
       </div>
+      {/* Фрагмент обрезан: без подсказки полный текст иначе не увидеть, не открыв письмо. */}
       <div
+        title={e.bodyText || undefined}
         style={{
           fontSize: 12,
           color: "#595959",
@@ -323,6 +325,10 @@ export default function EmailList() {
   const selectedIds = useStore((s) => s.selectedIds);
   const toggleSelect = useStore((s) => s.toggleSelect);
   const toggleSelectMany = useStore((s) => s.toggleSelectMany);
+  const loadError = useStore((s) => s.loadError);
+  const loadEmails = useStore((s) => s.loadEmails);
+  const resetFilters = useStore((s) => s.resetFilters);
+  const filterActive = useStore((s) => hasActiveFilter(s));
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const [height, setHeight] = useState(600);
@@ -346,6 +352,37 @@ export default function EmailList() {
     resizeObserver.current = ro;
   }, []);
 
+  /**
+   * Сбой сети раньше выглядел как «ничего не произошло»: список молча оставался
+   * от прежней папки, а ошибка уходила в консоль. Теперь говорим прямо.
+   */
+  const errorAlert = loadError ? (
+    <Alert
+      type="error"
+      showIcon
+      style={{ margin: 8 }}
+      message="Не удалось обновить список писем"
+      description={loadError}
+      action={
+        <Button size="small" onClick={() => void loadEmails()}>
+          Повторить
+        </Button>
+      }
+    />
+  ) : null;
+
+  /** Пустой список: «нет писем» и «фильтр ничего не нашёл» — разные вещи. */
+  const emptyState = (description: string) =>
+    filterActive ? (
+      <Empty description="Ничего не найдено по фильтру" style={{ marginTop: 80 }}>
+        <Button size="small" onClick={resetFilters}>
+          Сбросить фильтр
+        </Button>
+      </Empty>
+    ) : (
+      <Empty description={description} style={{ marginTop: 80 }} />
+    );
+
   if (loading && emails.length === 0 && threads.length === 0) {
     return (
       <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -357,13 +394,15 @@ export default function EmailList() {
   if (threadView) {
     if (threads.length === 0) {
       return (
-        <div style={{ flex: 1 }}>
-          <Empty description="Нет переписки" style={{ marginTop: 80 }} />
-        </div>
+        <>
+          {errorAlert}
+          <div style={{ flex: 1 }}>{emptyState("Нет переписки")}</div>
+        </>
       );
     }
     return (
       <div style={{ flex: 1, overflow: "auto" }}>
+        {errorAlert}
         {threads.map((t) => (
           <ThreadGroupItem
             key={t.id}
@@ -383,14 +422,16 @@ export default function EmailList() {
 
   if (emails.length === 0) {
     return (
-      <div style={{ flex: 1 }}>
-        <Empty description="Нет писем" style={{ marginTop: 80 }} />
-      </div>
+      <>
+        {errorAlert}
+        <div style={{ flex: 1 }}>{emptyState("Нет писем")}</div>
+      </>
     );
   }
 
   return (
     <div ref={attachList} style={{ flex: 1, overflow: "hidden" }}>
+      {errorAlert}
       <FixedSizeList
         height={height}
         itemCount={emails.length}
