@@ -124,10 +124,16 @@ export interface EmailView extends Email {
   analysis: AnalysisResult | null;
 }
 
+/**
+ * Вложение в запросе на отправку: данные (base64) либо ссылка на файл черновика,
+ * который сервер прочитает сам (draftId + ref).
+ */
 export interface ComposeAttachment {
   filename: string;
   mimeType: string;
-  data: string; // base64
+  data?: string; // base64
+  ref?: string;
+  draftId?: string;
 }
 
 export interface ComposeInput {
@@ -171,11 +177,18 @@ export interface ComposeTemplate {
   attachments: ComposeTemplateAttachment[];
 }
 
+/**
+ * Вложение черновика. Содержимое лежит файлом на сервере (<dataDir>/drafts/<id>/),
+ * а в JSON — ссылка на него: автосохранение больше не гоняет base64 каждые 15 секунд.
+ */
 export interface DraftAttachment {
   filename: string;
   mimeType: string;
   size: number;
-  data: string;
+  /** Имя файла в каталоге черновика. */
+  ref?: string;
+  /** base64 — только у черновика, сохранённого до раскладки вложений в файлы. */
+  data?: string;
 }
 
 export interface LdapSettings {

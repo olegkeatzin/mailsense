@@ -591,21 +591,36 @@ export interface AttachmentRef {
   attachmentId: string;
 }
 
-/** Вложение в окне письма: данные уже есть (выбрал человек / пришло из черновика) либо есть ссылка. */
+/** Файл вложения черновика: сам черновик и имя файла в его каталоге. */
+export interface DraftAttachmentRef {
+  draftId: string;
+  file: string;
+}
+
+/**
+ * Вложение в окне письма: данные (выбрал человек), ссылка на вложение письма (пересылка)
+ * или ссылка на файл черновика (открыли сохранённый черновик).
+ */
 export interface ComposerAttachment {
   filename: string;
   mimeType: string;
   size: number;
   data?: string;
   ref?: AttachmentRef;
+  draftRef?: DraftAttachmentRef;
 }
 
-/** Вложение, готовое к отправке и к записи в черновик. */
+/**
+ * Вложение, готовое к отправке и к записи в черновик: данные либо ссылка на файл
+ * черновика (его читает сервер — содержимое в браузер не качается).
+ */
 export interface OutgoingAttachment {
   filename: string;
   mimeType: string;
   size: number;
-  data: string;
+  data?: string;
+  ref?: string;
+  draftId?: string;
 }
 
 /**
@@ -650,6 +665,18 @@ export async function materializeAttachments(
 ): Promise<OutgoingAttachment[]> {
   const out: OutgoingAttachment[] = [];
   for (const item of items) {
+    // Файл черновика уже лежит на диске: уходит ссылка, а читает его сервер.
+    // Качать содержимое в браузер (и держать base64 в состоянии) незачем.
+    if (item.draftRef) {
+      out.push({
+        filename: item.filename,
+        mimeType: item.mimeType,
+        size: item.size,
+        ref: item.draftRef.file,
+        draftId: item.draftRef.draftId
+      });
+      continue;
+    }
     let data = item.data;
     if (data === undefined && item.ref) {
       try {

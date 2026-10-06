@@ -76,9 +76,20 @@ function nextKey(): string {
   return "att-" + attachmentSeq;
 }
 
-/** Вложение из черновика или выбранное человеком: данные уже внутри. */
-function withAttachmentKey(a: DraftAttachment): AttachmentItem {
-  return { ...a, key: nextKey() };
+/**
+ * Вложение из черновика или выбранное человеком.
+ * Если сервер уже разложил файл, запоминаем ссылку и НЕ тащим содержимое в браузер:
+ * отправка и автосохранение пойдут ссылками, файл прочитает сервер.
+ */
+function withAttachmentKey(a: DraftAttachment, draftId?: string): AttachmentItem {
+  return {
+    key: nextKey(),
+    filename: a.filename,
+    mimeType: a.mimeType,
+    size: a.size,
+    data: a.data,
+    draftRef: draftId && a.ref ? { draftId, file: a.ref } : undefined
+  };
 }
 
 /** Вложение пересылки: в шаблоне только ссылка, файл тянется в момент отправки. */
@@ -292,7 +303,9 @@ function ComposerForm({
   const [bcc, setBcc] = useState<string[]>(template.bcc.map(fmt));
   const [subject, setSubject] = useState(template.subject);
   const [attachments, setAttachments] = useState<AttachmentItem[]>(() =>
-    draftAttachments ? draftAttachments.map(withAttachmentKey) : template.attachments.map(refAttachment)
+    draftAttachments
+      ? draftAttachments.map((a) => withAttachmentKey(a, draftId ?? undefined))
+      : template.attachments.map(refAttachment)
   );
   const [sending, setSending] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -376,12 +389,37 @@ function ComposerForm({
    */
   const outgoingAttachments = () => materializeAttachments(attachments, loadAttachment);
 
-  /** Тело запроса без данных вложений — снимок для автосохранения. */
+  /**
+   * Тело запроса для черновика. У разложенных вложений уходит ССЫЛКА, а не base64:
+   * файлы уже лежат на сервере, и автосохранение не гоняет десятки мегабайт каждые
+   * 15 секунд. Данные отправляются один раз — при первой раскладке файла, а вложение
+   * пересылки сервер копирует сам по ссылке на письмо.
+   */
   const draftState = () => ({
     ...formState(),
     // Ключ списка — деталь интерфейса, на сервер он не уходит.
-    attachments: attachments.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size }))
+    attachments: attachments.map((a) => ({
+      filename: a.filename,
+      mimeType: a.mimeType,
+      size: a.size,
+      ...(a.draftRef ? { ref: a.draftRef.file } : a.ref ? { emailRef: a.ref } : { data: a.data })
+    }))
   });
+
+  /**
+   * После сохранения сервер отдаёт ссылки на файлы черновика. Запоминаем их: дальше
+   * вложение уходит ссылкой, а base64 отпускаем — иначе 20 МБ так и висят в браузере.
+   */
+  const adoptSavedAttachments = (saved: Draft) => {
+    setAttachments((prev) =>
+      prev.map((item, i) => {
+        const att = saved.attachments?.[i];
+        // Порядок вложений сохраняется; если сервер вернул другое вложение — не трогаем.
+        if (!att?.ref || att.filename !== item.filename || att.size !== item.size) return item;
+        return { ...item, data: undefined, draftRef: { draftId: saved.id, file: att.ref } };
+      })
+    );
+  };
 
   /** Тело запроса с данными вложений — то, что уходит на сервер. */
   const outgoing = async () => ({ ...formState(), attachments: await outgoingAttachments() });
@@ -389,8 +427,8 @@ function ComposerForm({
   // Автосохранение живёт в интервале с пустыми зависимостями: состояние берём через ref.
   const draftStateRef = useRef(draftState);
   draftStateRef.current = draftState;
-  const outgoingAttachmentsRef = useRef(outgoingAttachments);
-  outgoingAttachmentsRef.current = outgoingAttachments;
+  const adoptSavedRef = useRef(adoptSavedAttachments);
+  adoptSavedRef.current = adoptSavedAttachments;
 
   // Автосохранение черновика: раз в 15 c, если что-то изменилось.
   useEffect(() => {
@@ -411,11 +449,14 @@ function ComposerForm({
       if (snap === lastSnapRef.current) return;
       void (async () => {
         try {
-          // ⚠️ В черновик вложения кладём с данными: иначе после перезапуска окна
-          // вложение будет видно, а отправить его будет нечем.
-          const body = { ...p, attachments: await outgoingAttachmentsRef.current() };
-          if (draftIdRef.current) await api.updateDraft(draftIdRef.current, body);
-          else draftIdRef.current = (await api.createDraft(body)).id;
+          // ⚠️ Вложения уходят ССЫЛКАМИ (p собран draftState): файлы уже разложены
+          // на сервере. Раньше здесь висел base64, и каждые 15 секунд по сети
+          // уходили десятки мегабайт.
+          const saved = draftIdRef.current
+            ? await api.updateDraft(draftIdRef.current, p)
+            : await api.createDraft(p);
+          draftIdRef.current = saved.id;
+          adoptSavedRef.current(saved);
           lastSnapRef.current = snap;
           setDraftSavedAt(new Date());
         } catch {
@@ -488,9 +529,12 @@ function ComposerForm({
     if (!accountId) return message.warning("Выберите аккаунт");
     setSaving(true);
     try {
-      const body = await outgoing();
-      if (draftIdRef.current) await api.updateDraft(draftIdRef.current, body);
-      else draftIdRef.current = (await api.createDraft(body)).id;
+      // Ручное сохранение: вложения уходят ссылками, как и в автосохранении.
+      const saved = draftIdRef.current
+        ? await api.updateDraft(draftIdRef.current, draftState())
+        : await api.createDraft(draftState());
+      draftIdRef.current = saved.id;
+      adoptSavedRef.current(saved);
       message.success("Черновик сохранён");
       closeCompose();
     } catch (e) {

@@ -133,4 +133,50 @@ describe("materializeAttachments", () => {
 
     expect(out[0].size).toBe(3);
   });
+
+  it("файл черновика уходит ссылкой: содержимое в браузер не качается", async () => {
+    const load = jest.fn(async () => "QQ==");
+
+    const out = await materializeAttachments(
+      [
+        {
+          filename: "Договор (копия).pdf",
+          mimeType: "application/pdf",
+          size: 27939,
+          draftRef: { draftId: "draft-1", file: "Договор_копия_.pdf" }
+        }
+      ],
+      load
+    );
+
+    // Автосохранение и отправка не должны тянуть мегабайты: файл читает сервер.
+    expect(load).not.toHaveBeenCalled();
+    expect(out).toEqual([
+      {
+        filename: "Договор (копия).pdf",
+        mimeType: "application/pdf",
+        size: 27939,
+        ref: "Договор_копия_.pdf",
+        draftId: "draft-1"
+      }
+    ]);
+  });
+
+  it("ссылка на файл черновика важнее данных: файл не гоняем туда-обратно", async () => {
+    const load = jest.fn(async () => "QQ==");
+
+    const out = await materializeAttachments(
+      [{ ...refItem, data: "Zg==", draftRef: { draftId: "draft-1", file: "Договор_копия_.pdf" } }],
+      load
+    );
+
+    expect(load).not.toHaveBeenCalled();
+    expect(out[0]).toEqual({
+      filename: "Договор (копия).pdf",
+      mimeType: "application/pdf",
+      size: 1024,
+      ref: "Договор_копия_.pdf",
+      draftId: "draft-1"
+    });
+  });
 });
