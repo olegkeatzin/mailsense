@@ -144,10 +144,24 @@ export function docflowMockModule(): Record<string, unknown> {
       rules: [],
       openPeriod: String(new Date().getFullYear()),
       archivedPeriods: [],
+      reopenablePeriods: [],
       blockedReason: null
     }),
     saveNumberingRule: stub({}),
     archivePeriod: stub(undefined),
+    /** Строгое закрытие года: проверки, архив и след — в одной транзакции (ядро). */
+    closePeriod: jest.fn(async (input: { period: string; fileName?: string; documentCount?: number }) => ({
+      period: input.period,
+      fileName: input.fileName ?? "",
+      documentCount: input.documentCount ?? 0
+    })),
+    /** Отмена закрытия года: в ядре проверяется, что в новом году нет документов. */
+    reopenPeriod: jest.fn(async (input: { period: string }) => ({ period: input.period })),
+    /** Снимок года перед закрытием — вызывается В ПРОЦЕССЕ, не по HTTP. */
+    exportPeriodArchive: jest.fn(async (period: string) => "/tmp/archives/journal-" + period + ".zip"),
+    archiveFailureText: jest.fn(
+      (reason: string) => "Снимок года не сделан — год НЕ закрыт. Причина: " + reason + ". Данные журнала не изменялись."
+    ),
     listArchivedPeriods: stub([]),
     listCases: stub([]),
     saveCase: stub({}),
@@ -214,6 +228,32 @@ export function docflowMockModule(): Record<string, unknown> {
     matchReplies: replies.matchReplies,
     /** Кандидаты на утверждение/отчёт: в бою их даёт docflow по requestEmailId/dispatchEmailId. */
     listReplyCandidates: stub([]),
+
+    // Архив года: выгрузка потоком и импорт. По умолчанию выгрузка отдаёт минимальный
+    // ZIP и закрывает ответ — иначе маршрут в матрице повис бы без тела.
+    exportJournalYear: jest.fn(async (opts: { out: { end: (chunk?: unknown) => void } }) => {
+      opts.out.end(Buffer.from("PK\u0003\u0004test"));
+      return { period: "2026", documents: 0, resolutions: 0, assignees: 0, reports: 0, audit: 0, attachments: 0, files: [] };
+    }),
+    importJournalArchive: jest.fn(async (opts: { file: string }) => ({
+      period: "2026",
+      inserted: { documents: 0 },
+      skipped: {},
+      attachments: 0,
+      file: opts.file
+    })),
+    setJournalAttachmentStore: jest.fn(),
+    // Расчёт объёма архива для предупреждения в форме закрытия (истинные функции —
+    // в docflow, здесь достаточно заглушек, чтобы маршрут состояния нумерации отвечал).
+    ARCHIVE_LIMIT_BYTES: 4 * 1024 ** 3,
+    yearEmailLinks: jest.fn(async function* () {
+      /* ссылок нет */
+    }),
+    sumAttachmentBytes: jest.fn(async () => ({ bytes: 0, files: 0, unknownSizes: 0, truncated: false })),
+    archiveVolumeWarning: jest.fn(() => ({ level: "ok", text: null })),
+    getDocflowPool: () => ({
+      connect: jest.fn(async () => ({ query: jest.fn(), release: jest.fn() }))
+    }),
     /** Откат отправки: поручение снова ждёт отправки. */
     revertDispatch: jest.fn(async (id: string) => ({ id, status: "approved", dispatchEmailId: null })),
 

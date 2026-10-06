@@ -23,6 +23,8 @@ import { pipeline } from "node:stream/promises";
 const DOCFLOW_PREFIXES = [
   "/api/auth",
   "/api/docflow",
+  // Архив года: выгрузка и импорт журнала — серверная работа, в режиме клиента их нет.
+  "/api/journal",
   "/api/users",
   "/api/roles",
   "/api/audit",

@@ -1,7 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
 import type express from "express";
 import { intParam } from "./params.js";
-import { buildXlsx, classifyKind, countAttachmentsByEmail, exportFileName, getEmailView, listEmailsWithAnalysis, logger, pdfPageCount } from "@mailsense/core";
+import { buildXlsx, classifyKind, countAttachmentsByEmail, exportFileName, getEmailView, listAttachments, listEmailsWithAnalysis, logger, pdfPageCount } from "@mailsense/core";
 import {
   AppError,
   DOCUMENT_STATUSES,
@@ -32,6 +37,20 @@ import {
   type DocumentSortField,
   type DocumentStatus,
   type Permission
+} from "@mailsense/docflow";
+import {
+  ARCHIVE_LIMIT_BYTES,
+  archiveFailureText,
+  archiveVolumeWarning,
+  closePeriod,
+  exportJournalYear,
+  exportPeriodArchive,
+  getDocflowPool,
+  importJournalArchive,
+  reopenPeriod,
+  setJournalAttachmentStore,
+  sumAttachmentBytes,
+  yearEmailLinks
 } from "@mailsense/docflow";
 
 /**
@@ -96,8 +115,61 @@ export function docFilterFromQuery(q: Record<string, unknown>): DocumentFilter {
     offset: intParam(q.offset, "offset", { fallback: 0, min: 0 })
   };
 }
+/**
+ * Источник вложений для архива: вложения живут в почтовой базе (core), а формат архива
+ * и ZIP — в docflow. Раньше регистрации не было ВООБЩЕ, и рабочий сервер собирал архив
+ * БЕЗ папки attachments, молча показывая 0 вложений: тихая потеря для заказчика.
+ * Регистрируем в композиционном корне — там, где сходятся оба пакета.
+ */
+type AttachmentView = { name: string; size?: number; open: () => NodeJS.ReadableStream };
+let currentStore: { list: (emailId: string) => Promise<AttachmentView[]> } | null = null;
+
+/** Источник вложений, зарегистрированный для архива (нужен расчёту объёма года). */
+export function journalAttachmentStore(): { list: (emailId: string) => Promise<AttachmentView[]> } | null {
+  // Регистрация идемпотентна и обязана быть к моменту использования: если композиция
+  // ещё не зарегистрировала источник (или тест не поднимал приложение), делаем это здесь.
+  // Так «архив без вложений молча» становится невозможным по построению.
+  if (!currentStore) registerJournalAttachments();
+  return currentStore;
+}
+
+export function registerJournalAttachments(): void {
+  setJournalAttachmentStore({
+    list: async (emailId: string) => {
+      let files: Array<{ filename: string; size: number; storagePath: string | null }> = [];
+      try {
+        files = (listAttachments(emailId) ?? []) as typeof files;
+      } catch {
+        // Почта ещё не инициализирована (режим клиента) — вложений просто нет.
+        return [];
+      }
+      return files
+        .filter((a) => !!a.storagePath && fs.existsSync(a.storagePath))
+        .map((a) => ({
+          name: a.filename || path.basename(a.storagePath as string),
+          // Размер из метаданных: он нужен предупреждению о размере архива.
+          size: a.size,
+          open: () => fs.createReadStream(a.storagePath as string)
+        }));
+    }
+  } as never) as never;
+  // Тот же источник, что ушёл в docflow: геттер обязан отдавать ПОЛНЫЙ вид (с open()),
+  // иначе расчёт объёма получит урезанный, а тесты проводки — сломанный.
+  currentStore = {
+    list: async (emailId: string) =>
+      (listAttachments(emailId) ?? [])
+        .filter((a) => !!a.storagePath && fs.existsSync(a.storagePath))
+        .map((a) => ({
+          name: a.filename || path.basename(a.storagePath as string),
+          size: a.size,
+          open: () => fs.createReadStream(a.storagePath as string)
+        }))
+  };
+}
+
 export function mountJournalRoutes(app: express.Express, deps: JournalDeps): void {
   const { requireDocflowDb, requirePermission, asyncHandler } = deps;
+  registerJournalAttachments();
   const view = [requireDocflowDb, requirePermission("journal.view")];
   const register = [requireDocflowDb, requirePermission("journal.register")];
   const edit = [requireDocflowDb, requirePermission("journal.edit")];
@@ -123,7 +195,36 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     ...view,
     asyncHandler(async (req, res) => {
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
-      res.json(await getNumberingState(period));
+      const state = await getNumberingState(period);
+      // Сколько займут вложения открытого года — предупреждение до закрытия года.
+      // Считаем ТЕМ ЖЕ обходом ссылок, что и выгрузка (yearEmailLinks), иначе цифра
+      // разойдётся с фактом, а неверное предупреждение хуже отсутствующего.
+      let archiveSizeBytes: number | null = null;
+      // Текст предупреждения формирует docflow: он же знает, что при досрочном выходе
+      // из обхода сумма — НИЖНЯЯ граница («не менее 4,0 ГБ», а не «≈4,0 ГБ»).
+      let archiveWarning: { level: string; text: string | null } | null = null;
+      if (state.openPeriod) {
+        const client = await getDocflowPool().connect();
+        try {
+          const summary = await sumAttachmentBytes({
+            links: yearEmailLinks(client, state.openPeriod),
+            store: journalAttachmentStore() ?? { list: async () => [] },
+            limitBytes: ARCHIVE_LIMIT_BYTES
+          });
+          // Размер неизвестен хотя бы у одного вложения — честно «неизвестно», без догадок.
+          archiveSizeBytes = summary.unknownSizes > 0 ? null : summary.bytes;
+          if (archiveSizeBytes !== null) {
+            archiveWarning = archiveVolumeWarning(archiveSizeBytes, state.openPeriod, {
+              truncated: summary.truncated
+            });
+          }
+        } catch {
+          archiveSizeBytes = null;
+        } finally {
+          client.release();
+        }
+      }
+      res.json({ ...state, archiveSizeBytes, archiveLimitBytes: ARCHIVE_LIMIT_BYTES, archiveWarning });
     })
   );
 
@@ -146,7 +247,68 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     })
   );
 
-  /** Закрытие года выгрузкой: без этого следующий год не открыть. */
+  /**
+   * Выгрузка журнала за год одним файлом.
+   *
+   * ZIP пишется ПРЯМО в ответ: архив на 10 ГБ не должен собираться в памяти сервера
+   * и не должен ждать конца выгрузки — клиент качает потоком.
+   */
+  app.get(
+    "/api/journal/export",
+    requireDocflowDb,
+    requirePermission("journal.archive"),
+    asyncHandler(async (req, res) => {
+      const year = String(req.query.year ?? "").trim();
+      if (!/^\d{4}$/.test(year)) throw new AppError("Укажите год выгрузки в виде ГГГГ", 400, "bad_period");
+      // Источник вложений обязан быть зарегистрирован К МОМЕНТУ выгрузки: без него
+      // архив уедет без папки attachments и не скажет об этом. Регистрация идемпотентна,
+      // поэтому подтверждаем её прямо здесь, а не надеемся на порядок сборки приложения.
+      registerJournalAttachments();
+      // Заголовки ставим до первого байта: потом их уже не поменять.
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", 'attachment; filename="journal-' + year + '.zip"');
+      try {
+        await exportJournalYear({ year, out: res as unknown as NodeJS.WritableStream });
+      } catch (err) {
+        // Часть архива уже ушла клиенту: ответ не «починить», обрываем соединение.
+        logger.error({ err: (err as Error).message, year }, "Выгрузка журнала прервана");
+        res.destroy(err as Error);
+      }
+    })
+  );
+
+  /**
+   * Импорт архива года: тело запроса — сам ZIP, поэтому json-парсер его не трогает.
+   * Пишем во временный файл и удаляем его ВСЕГДА: мусор после ошибки — та же потеря,
+   * только на диске.
+   */
+  app.post(
+    "/api/journal/import",
+    requireDocflowDb,
+    requirePermission("journal.archive"),
+    asyncHandler(async (req, res) => {
+      const tmp = path.join(os.tmpdir(), "mailsense-journal-import-" + randomUUID() + ".zip");
+      let result: Awaited<ReturnType<typeof importJournalArchive>>;
+      try {
+        await pipeline(req, createWriteStream(tmp));
+        result = await importJournalArchive({ file: tmp, actor: actorOf(req) });
+      } finally {
+        // Файл убираем ДО ответа: иначе клиент успеет увидеть ответ, пока мусор ещё на диске,
+        // а при ошибке файл обязан исчезнуть тем же путём.
+        await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
+      }
+      res.json({ ok: true, ...result });
+    })
+  );
+
+  /**
+   * Закрытие года выгрузкой: без этого следующий год не открыть.
+   *
+   * Три уровня защиты от промаха (заказчик: «а если кто-то случайно год закроет?»):
+   *  1) подтверждение ВВОДОМ ГОДА — проверяется здесь, а не только в форме;
+   *  2) снимок года ДО необратимого действия — не собрался снимок, нет и закрытия;
+   *  3) отмена закрытия, пока в новом году нет документов (маршрут ниже).
+   */
   app.post(
     "/api/docflow/numbering/archive",
     requireDocflowDb,
@@ -155,10 +317,22 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       const b = req.body ?? {};
       const period = String(b.period ?? "");
       if (!/^\d{4}$/.test(period)) throw new AppError("Укажите год выгрузки", 400, "bad_period");
-      // ⚠️ Закрыть можно только открытый период: записи архива удалять нечем, поэтому
-      // выгруженный год закрыт навсегда. Раньше принимался любой год — случайная выгрузка
-      // «2027» при открытом 2026 закрывала год, в котором ещё никто не работал, и открыть
-      // его было уже нельзя.
+
+      // Подтверждение годом: защита от промаха мышью. «ОК» нажимают не глядя,
+      // а чтобы вписать год, человек должен прочитать, ЧТО именно закрывает.
+      const confirm = String(b.confirm ?? "").trim();
+      if (confirm !== period) {
+        throw new AppError(
+          "Чтобы закрыть " + period + " год, введите год «" + period + "» в поле подтверждения.",
+          400,
+          "bad_confirm"
+        );
+      }
+
+      // ⚠️ Закрыть можно только открытый период: записи архива не удаляются произвольно,
+      // поэтому раньше выгруженный год закрывался навсегда. Раньше принимался любой год —
+      // случайная выгрузка «2027» при открытом 2026 закрывала год, в котором ещё никто
+      // не работал, и открыть его было уже нельзя.
       const state = await getNumberingState();
       const open = state.openPeriod;
       if (!open) {
@@ -178,9 +352,63 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
         );
       }
       const docs = await listDocuments({ period, limit: 1 });
-      const file = String(b.fileName ?? exportFileName("journal-" + period));
-      await archivePeriod({ period, fileName: file, documentCount: docs.total }, actorOf(req));
-      res.json({ ok: true, period, documentCount: docs.total });
+
+      // СНИМОК ПЕРЕД НЕОБРАТИМЫМ ДЕЙСТВИЕМ. Вызывается В ПРОЦЕССЕ (не по своему HTTP):
+      // сервер, дергающий сам себя по сети, ломается на таймаутах и в тестах.
+      // Не собрался снимок — закрытия не будет вообще: молча закрыть год, не сохранив
+      // копию, нельзя.
+      let snapshot: string;
+      try {
+        snapshot = await exportPeriodArchive(period);
+      } catch (err) {
+        throw new AppError(archiveFailureText((err as Error).message), 409, "snapshot_failed");
+      }
+
+      try {
+        const closed = await closePeriod(
+          { period, fileName: path.basename(snapshot), documentCount: docs.total },
+          actorOf(req)
+        );
+        res.json({ ok: true, period: closed.period, documentCount: closed.documentCount, file: snapshot });
+      } catch (err) {
+        // Отказ ядра — тоже «год НЕ закрыт», и причина показывается человеку как есть.
+        const code = err instanceof AppError ? err.code : "close_failed";
+        throw new AppError(archiveFailureText((err as Error).message), 409, code);
+      }
+    })
+  );
+
+  /**
+   * Отмена закрытия года — ровно пока в новом году нет ни одного документа.
+   *
+   * Это не только «откат ошибки»: штатный путь для случая «поздно принесли письмо
+   * за прошлый год» — закрытый год документов не принимает, поэтому письмо проводят
+   * через отмену закрытия, регистрацию и повторную выгрузку.
+   */
+  app.post(
+    "/api/docflow/numbering/reopen",
+    requireDocflowDb,
+    requirePermission("journal.reopen"),
+    asyncHandler(async (req, res) => {
+      const b = req.body ?? {};
+      const period = String(b.period ?? "");
+      if (!/^\d{4}$/.test(period)) throw new AppError("Укажите год", 400, "bad_period");
+
+      const confirm = String(b.confirm ?? "").trim();
+      if (confirm !== period) {
+        throw new AppError(
+          "Чтобы отменить закрытие " + period + " года, введите год «" + period + "» в поле подтверждения.",
+          400,
+          "bad_confirm"
+        );
+      }
+
+      // Причина обязательна: отмена закрытия года — объяснимое действие, но не молчаливое.
+      const reason = String(b.reason ?? "").trim();
+      if (!reason) throw new AppError("Укажите причину отмены закрытия года", 400, "bad_reason");
+
+      const result = await reopenPeriod({ period, reason }, actorOf(req));
+      res.json({ ok: true, period: result.period });
     })
   );
 

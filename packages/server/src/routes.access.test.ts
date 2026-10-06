@@ -171,11 +171,38 @@ const CASES: RouteCase[] = [
     allowed: ["admin"]
   },
   {
+    what: "GET /api/journal/export — выгрузку года делает тот, у кого есть право архивации",
+    method: "GET",
+    path: "/api/journal/export?year=2026",
+    allowed: ["admin", "secretary"]
+  },
+  {
+    what: "POST /api/journal/import — импорт архива пишет в журнал: только с правом архивации",
+    method: "POST",
+    path: "/api/journal/import",
+    allowed: ["admin", "secretary"]
+  },
+  {
     what: "POST /api/docflow/numbering/archive — закрытие года только с правом архивации",
     method: "POST",
     path: "/api/docflow/numbering/archive",
-    body: { period: String(new Date().getFullYear()) },
+    // Подтверждение годом обязательно и на сервере: без него закрытие отклоняется.
+    body: {
+      period: String(new Date().getFullYear()),
+      confirm: String(new Date().getFullYear())
+    },
     allowed: ["admin", "secretary"]
+  },
+  {
+    what: "POST /api/docflow/numbering/reopen — отмену закрытия года делает только администратор",
+    method: "POST",
+    path: "/api/docflow/numbering/reopen",
+    body: {
+      period: String(new Date().getFullYear()),
+      confirm: String(new Date().getFullYear()),
+      reason: "закрыли по ошибке"
+    },
+    allowed: ["admin"]
   },
   {
     what: "GET /api/audit — следы аудита только с правом аудита",
@@ -927,11 +954,14 @@ describe("закрыть можно только открытый год", () =>
 
     const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
       token: token("secretary"),
-      body: { period: year }
+      body: { period: year, confirm: year }
     });
 
     expect(res.status).toBe(200);
-    expect(mockedDocflow.archivePeriod).toHaveBeenCalledTimes(1);
+    // Закрытие идёт строгой функцией ядра (проверки + архив + след в одной транзакции),
+    // а archivePeriod осталась служебной и в маршруте больше не вызывается.
+    expect(mockedDocflow.closePeriod).toHaveBeenCalledTimes(1);
+    expect(mockedDocflow.archivePeriod).not.toHaveBeenCalled();
   });
 
   it("будущий год при открытом текущем отклонён — иначе он закроется навсегда", async () => {
@@ -944,13 +974,14 @@ describe("закрыть можно только открытый год", () =>
 
     const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
       token: token("secretary"),
-      body: { period: String(Number(year) + 1) }
+      // Подтверждение верное: проверяем именно правило «только открытый год».
+      body: { period: String(Number(year) + 1), confirm: String(Number(year) + 1) }
     });
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "not_open_period" });
     expect(String((res.body as { error?: string }).error)).toContain(year);
-    expect(mockedDocflow.archivePeriod).not.toHaveBeenCalled();
+    expect(mockedDocflow.closePeriod).not.toHaveBeenCalled();
   });
 
   it("закрывается открытый период, а не год по календарю", async () => {
@@ -963,11 +994,11 @@ describe("закрыть можно только открытый год", () =>
 
     const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
       token: token("secretary"),
-      body: { period: "2025" }
+      body: { period: "2025", confirm: "2025" }
     });
 
     expect(res.status).toBe(400);
-    expect(mockedDocflow.archivePeriod).not.toHaveBeenCalled();
+    expect(mockedDocflow.closePeriod).not.toHaveBeenCalled();
   });
 
   it("пустой журнал: закрывать нечего", async () => {
@@ -980,7 +1011,7 @@ describe("закрыть можно только открытый год", () =>
 
     const res = await request(app.baseUrl, "POST", "/api/docflow/numbering/archive", {
       token: token("secretary"),
-      body: { period: year }
+      body: { period: year, confirm: year }
     });
 
     expect(res.status).toBe(400);
@@ -1051,7 +1082,15 @@ describe("статус документа проверяется на серве
 });
 
 /** Префиксы, которые обслуживает сервер документооборота: всё здесь под правами. */
-const DOCFLOW_PREFIXES = ["/api/docflow", "/api/users", "/api/roles", "/api/audit", "/api/directory"];
+const DOCFLOW_PREFIXES = [
+  "/api/docflow",
+  "/api/users",
+  "/api/roles",
+  "/api/audit",
+  "/api/directory",
+  // Архив года: выгрузка и импорт журнала — тоже серверные маршруты под правами.
+  "/api/journal"
+];
 
 /**
  * Осознанное исключение: статус каталога нужен любому вошедшему — от него зависит,
