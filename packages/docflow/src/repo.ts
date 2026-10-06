@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { getDocflowDb, type DocflowDb } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
+import { AppError } from "./errors.js";
 import type {
   AuditEntry,
   AuditFilter,
@@ -37,6 +38,57 @@ const countExpr = sql<number>`count(*)::int`;
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Замок «смена администраторов».
+ *
+ * Любая операция, которая может оставить систему без действующего администратора
+ * (снятие роли, блокировка, удаление учётки), обязана взять этот замок ПЕРВЫМ
+ * действием своей транзакции и проверить инвариант под ним. Иначе две одновременные
+ * операции не видят незакоммиченных изменений друг друга и проходят обе — система
+ * остаётся без того, кому выдавать права, и лечится это только правкой базы руками.
+ *
+ * ⚠️ Строки пользователей до замка НЕ блокируются: полная синхронизация справочника
+ * держит их пачкой в своей транзакции, и обратный порядок блокировок дал бы взаимную
+ * блокировку (deadlock). pg_advisory_xact_lock отпускается сам при COMMIT и ROLLBACK,
+ * поэтому отказ в правах не оставляет систему запертой.
+ */
+export const ADMIN_CHANGES_LOCK_KEY = 0x41444d31; // "ADM1"
+
+/** Берёт замок смены администраторов на время текущей транзакции. */
+export async function lockAdminChanges(tx: DocflowExecutor): Promise<void> {
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(${ADMIN_CHANGES_LOCK_KEY}::bigint)`);
+}
+
+/**
+ * Сколько в системе администраторов, которые реально могут войти: роль admin,
+ * is_active и не blocked.
+ *
+ * ⚠️ Засчитывать администратора, который войти не может, нельзя. Уволенный в каталоге
+ * (is_active = false) или заблокированный прав не удерживает: иначе правило «должен
+ * остаться хотя бы один администратор» выполнялось бы тем, кто в систему не войдёт,
+ * и система оставалась бы без администратора ровно так же, просто через другую дверь.
+ *
+ * Читать это число можно только под замком смены администраторов и в той же
+ * транзакции, что и изменение.
+ */
+export async function countActingAdmins(exec?: DocflowExecutor): Promise<number> {
+  const db = executor(exec);
+  const rows = await db
+    .select({ n: countExpr })
+    .from(users)
+    .where(
+      and(
+        eq(users.isActive, true),
+        eq(users.blocked, false),
+        inArray(
+          users.id,
+          db.select({ id: userRoles.userId }).from(userRoles).where(eq(userRoles.roleId, "admin"))
+        )
+      )
+    );
+  return rows[0]?.n ?? 0;
 }
 
 // ---------------- Users ----------------
@@ -201,8 +253,27 @@ export async function touchLastLogin(id: string): Promise<void> {
   await getDocflowDb().update(users).set({ lastLoginAt: ts, updatedAt: ts }).where(eq(users.id, id));
 }
 
+/**
+ * Удаление учётки.
+ *
+ * Роли уходят каскадом, поэтому удаление администратора — такая же смена прав, как
+ * assignRoles: последнего действующего администратора удалять нельзя, иначе выдавать
+ * права станет некому. Операция берёт тот же замок смены администраторов и проверяет
+ * инвариант под ним. Функция публичная: следующий, кто её позовёт, не должен получить
+ * эту дыру обратно.
+ */
 export async function deleteUser(id: string): Promise<void> {
-  await getDocflowDb().delete(users).where(eq(users.id, id));
+  await getDocflowDb().transaction(async (tx) => {
+    // Замок — первым действием: строки пользователей не блокируем (см. ADMIN_CHANGES_LOCK_KEY).
+    await lockAdminChanges(tx);
+    const user = await getUser(id, tx);
+    if (user && user.isActive && !user.blocked && (await getUserRoles(id, tx)).includes("admin")) {
+      if ((await countActingAdmins(tx)) === 1) {
+        throw new AppError("В системе должен остаться хотя бы один администратор");
+      }
+    }
+    await tx.delete(users).where(eq(users.id, id));
+  });
 }
 
 // ---------------- Roles ----------------

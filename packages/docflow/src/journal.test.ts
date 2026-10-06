@@ -11,6 +11,7 @@ import {
   getDocument,
   getDocumentByEmail,
   getNumberingState,
+  linkDocumentEmail,
   listCases,
   listCorrespondents,
   listAudit,
@@ -526,5 +527,43 @@ describe("подсказка следующего номера", () => {
     // Следующая подсказка уже про следующий номер — счётчик сдвинула только регистрация.
     const next = await peekNextNumber();
     expect(next.regNumber).not.toBe(peeked.regNumber);
+  });
+});
+
+describe("привязка письма к документу", () => {
+  test("письмо — источник другого документа: отказ, а не ложный след", async () => {
+    const first = await registerDocument({ emailId: "mail-dup", summary: "Первый" }, actor);
+    const second = await registerDocument({ summary: "Второй" }, actor);
+    const before = (await listAudit({ limit: 500 })).length;
+
+    // Связи не будет (частичный индекс document_emails_source_idx: одно письмо —
+    // источник ровно одного документа). Значит, не должно быть ни «ok»,
+    // ни следа «связь создана»: ложный след в аудите — худший из исходов.
+    await expect(linkDocumentEmail(second.id, "mail-dup", "source", actor)).rejects.toThrow(/источник/);
+
+    const links = await getDocflowPool().query<{ document_id: string }>(
+      "SELECT document_id FROM document_emails WHERE email_id = $1",
+      ["mail-dup"]
+    );
+    expect(links.rows.map((r) => r.document_id)).toEqual([first.id]);
+    expect((await listAudit({ limit: 500 })).length).toBe(before);
+  });
+
+  test("повторная привязка того же письма к тому же документу второго следа не пишет", async () => {
+    const doc = await registerDocument({ emailId: "mail-same", summary: "Документ" }, actor);
+    const before = (await listAudit({ limit: 500 })).length;
+
+    // Ничего не изменилось — значит, и следа быть не должно.
+    await linkDocumentEmail(doc.id, "mail-same", "source", actor);
+    expect((await listAudit({ limit: 500 })).length).toBe(before);
+  });
+
+  test("новая связь пишет след", async () => {
+    const doc = await registerDocument({ summary: "Документ" }, actor);
+    await linkDocumentEmail(doc.id, "mail-new", "resolution", actor);
+
+    const entries = (await listAudit({ limit: 500 })).filter((e) => e.action === "journal.link_email");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].entityId).toBe(doc.id);
   });
 });

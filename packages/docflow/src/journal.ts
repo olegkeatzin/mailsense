@@ -12,7 +12,7 @@ import { getDocflowDb, getDocflowPool } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
 import { writeAudit } from "./audit.js";
 import { insertAudit } from "./repo.js";
-import { AppError } from "./errors.js";
+import { AppError, isUniqueViolation } from "./errors.js";
 import {
   DEFAULT_NUMBERING_RULES,
   canOpenPeriod,
@@ -581,10 +581,32 @@ export async function linkDocumentEmail(
   // Привязка письма и след — одна транзакция: письмо, привязанное без следа,
   // невозможно отличить от привязанного вручную мимо системы.
   await getDocflowDb().transaction(async (tx) => {
-    await tx
-      .insert(documentEmails)
-      .values({ documentId, emailId, role, linkedAt: now(), linkedBy: actor.id })
-      .onConflictDoNothing();
+    // ⚠️ Гасим конфликт ТОЛЬКО по первичному ключу (документ + письмо): повторная
+    // привязка того же письма к тому же документу — no-op, и следа она не пишет.
+    // `onConflictDoNothing()` без цели гасил бы и нарушение частичного индекса
+    // document_emails_source_idx (одно письмо — источник ровно одного документа):
+    // связь молча не создавалась бы, транзакция коммитилась, а в аудит уходил бы
+    // ложный след «связь создана». Ложный след хуже отказа: по аудиту ищут виноватого.
+    let inserted: Array<{ emailId: string }>;
+    try {
+      inserted = await tx
+        .insert(documentEmails)
+        .values({ documentId, emailId, role, linkedAt: now(), linkedBy: actor.id })
+        .onConflictDoNothing({ target: [documentEmails.documentId, documentEmails.emailId] })
+        .returning({ emailId: documentEmails.emailId });
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        throw new AppError(
+          "Письмо уже привязано к другому документу как источник",
+          409,
+          "email_linked"
+        );
+      }
+      throw err;
+    }
+    // След — только когда связь действительно появилась (сбой записи следа
+    // откатывает и связь: AGENTS.md, п. 4).
+    if (!inserted.length) return;
     await insertAudit(
       {
         userId: actor.id,

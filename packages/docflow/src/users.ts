@@ -1,7 +1,9 @@
 import { logger } from "@mailsense/core/directory";
 import { getLdapSettings, directoryCredentials } from "@mailsense/core/directory";
 import { ldapListProfiles } from "@mailsense/core/directory";
+import type { LdapProfile } from "@mailsense/core/directory";
 import {
+  countActingAdmins,
   getRole,
   getUser,
   getUserByDn,
@@ -13,8 +15,10 @@ import {
   insertUser,
   listRoles,
   listUsersWithRoles,
+  lockAdminChanges,
   setUserRoles,
   updateUser,
+  type DocflowTx,
   type ListUsersOptions
 } from "./repo.js";
 import { revokeSessions } from "./auth.js";
@@ -43,23 +47,19 @@ function duplicateEmailError(err: unknown, email: string): unknown {
 }
 
 /**
- * Администраторы, которые реально могут войти (не заблокированы).
+ * Инвариант «в системе должен остаться хотя бы один действующий администратор».
  *
- * ⚠️ ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ (не баг этой правки, разбирается отдельной задачей):
- * проверки «останется хотя бы один администратор» читают это число ВНЕ транзакции
- * изменения. Два одновременных снятия прав у двух последних администраторов могут
- * оба увидеть «администраторов двое» и пройти — система останется без администратора.
- * Лечится так: внутри той же транзакции взять advisory-лок «смена администраторов»
- * (pg_advisory_xact_lock), затем применить изменение и пересчитать администраторов,
- * откатив транзакцию при нуле. Строки пользователей блокировать нельзя: полная
- * синхронизация справочника держит их пачкой в своей транзакции, и разный порядок
- * блокировок дал бы взаимную блокировку. Сознательно не сделано в этой задаче:
- * это меняет правила выдачи прав, нужно отдельное решение (см. task-5, п. 7).
+ * «Действующий» — тот, кто реально может войти: роль admin, is_active и не blocked
+ * (см. countActingAdmins в repo.ts). Уволенный в каталоге или заблокированный
+ * администратором прав не удерживает: иначе правило выполнялось бы тем, кто в систему
+ * не войдёт, и система осталась бы без администратора через другую дверь.
+ *
+ * Замок смены администраторов (lockAdminChanges) берётся ПЕРВЫМ действием транзакции:
+ * под READ COMMITTED две транзакции не видят незакоммиченных изменений друг друга,
+ * поэтому без замка обе одновременные проверки видят «двоих» и проходят обе.
+ * Строки пользователей до замка не блокируются — обратный порядок дал бы взаимную
+ * блокировку с синхронизацией справочника.
  */
-async function countAdmins(): Promise<number> {
-  const admins = await listUsersWithRoles({ roleId: "admin", includeInactive: true });
-  return admins.filter((u) => !u.blocked).length;
-}
 
 /** Назначает пользователю полный набор ролей. Пустой список = снять все роли. */
 export async function assignRoles(
@@ -76,19 +76,27 @@ export async function assignRoles(
   }
   if (unknown.length) throw new AppError("Неизвестные роли: " + unknown.join(", "));
 
-  // Нельзя оставить систему без администратора — иначе некому будет выдать права.
-  // ⚠️ Проверка идёт вне транзакции (гонку см. в комментарии к countAdmins): здесь
-  // она только отсекает очевидный случай «снимаю права у единственного».
-  const before = await getUserRoles(userId);
-  const wasAdmin = before.includes("admin") && !user.blocked;
-  const willBeAdmin = roleIds.includes("admin");
-  if (wasAdmin && !willBeAdmin && (await countAdmins()) === 1) {
-    throw new AppError("В системе должен остаться хотя бы один администратор");
-  }
-
   // Роли, разрыв сессий и след аудита — ОДНА транзакция: если след не запишется,
-  // не изменятся и права (AGENTS.md, п. 4).
+  // не изменятся и права (AGENTS.md, п. 4). Проверка «останется хотя бы один
+  // администратор» живёт здесь же — под общим замком смены администраторов.
   const after = await getDocflowDb().transaction(async (tx) => {
+    // Замок — первым действием: строки пользователей не блокируем (см. lockAdminChanges).
+    await lockAdminChanges(tx);
+
+    // Набор ролей читаем внутри транзакции: он нужен и аудиту, и проверке, и обязан
+    // быть на момент изменения, а не до взятия замка.
+    const before = await getUserRoles(userId, tx);
+    // Администратором считается только тот, кто может войти: уволенный в каталоге
+    // (is_active = false) или заблокированный прав не удерживает.
+    const wasAdmin = before.includes("admin") && user.isActive && !user.blocked;
+    const willBeAdmin = roleIds.includes("admin");
+    // Замок держится до конца транзакции, поэтому между пересчётом и записью никто не
+    // вклинится: два одновременных снятия прав у двух последних администраторов идут
+    // по очереди, и второе получает отказ.
+    if (wasAdmin && !willBeAdmin && (await countActingAdmins(tx)) === 1) {
+      throw new AppError("В системе должен остаться хотя бы один администратор");
+    }
+
     const roles = await setUserRoles(userId, roleIds, actor?.id ?? null, tx);
     // Права изменились — старые сессии несут устаревший набор прав.
     await revokeSessions(userId, tx);
@@ -125,13 +133,20 @@ export async function setUserActive(userId: string, isActive: boolean, actor: Au
   if (blocked && user.id === actor?.id) {
     throw new AppError("Нельзя заблокировать собственную учётную запись");
   }
-  // ⚠️ Та же гонка, что и в assignRoles: проверка вне транзакции (см. countAdmins).
-  if (blocked && (await getUserRoles(userId)).includes("admin") && (await countAdmins()) === 1) {
-    throw new AppError("В системе должен остаться хотя бы один администратор");
-  }
-
-  // Блокировка, разрыв сессий и след — одна транзакция.
+  // Блокировка, разрыв сессий и след — одна транзакция; проверка «останется хотя бы
+  // один администратор» — там же, под общим замком смены администраторов.
   return getDocflowDb().transaction(async (tx) => {
+    if (blocked) {
+      // Замок — первым действием: строки пользователей не блокируем (см. lockAdminChanges).
+      await lockAdminChanges(tx);
+      const roles = await getUserRoles(userId, tx);
+      // Блокируем действующего администратора: уволенный или уже заблокированный
+      // счёт не держит, его блокировка ничего не ухудшает.
+      const actingAdmin = user.isActive && !user.blocked && roles.includes("admin");
+      if (actingAdmin && (await countActingAdmins(tx)) === 1) {
+        throw new AppError("В системе должен остаться хотя бы один администратор");
+      }
+    }
     const updated = (await updateUser(userId, { blocked }, tx))!;
     if (blocked) await revokeSessions(userId, tx);
     await insertAudit(
@@ -272,6 +287,60 @@ export interface SyncResult {
   updated: number;
   deactivated: number;
   linked: number;
+  /** Адреса из каталога, которые не удалось применить: их уже занимает другая учётка. */
+  emailConflicts: Array<{ ldapUid: string; email: string }>;
+  /** Список каталога неполный или недостоверный — деактивация пропущена. */
+  incomplete: boolean;
+}
+
+/**
+ * Применяет одну запись каталога.
+ *
+ * ⚠️ Каждая запись — в своём savepoint. Нарушение уникальности внутри общей транзакции
+ * отравляет её целиком («current transaction is aborted»), и тогда одна плохая запись
+ * в каталоге не дала бы обновить справочник вообще — именно так дубль адреса ронял всю
+ * синхронизацию и отдавал наружу 500.
+ *
+ * Конфликт адреса (занят другой учёткой: общий ящик, контрагент, запись, заведённая
+ * вручную) кадровые данные не отменяет: человека заводим или обновляем, но чужой адрес
+ * не отбираем и не дублируем. О конфликте сообщаем в отчёте — разбираться человеку.
+ */
+async function applyDirectoryProfile(
+  tx: DocflowTx,
+  p: LdapProfile,
+  existing: User | null
+): Promise<{ created: boolean; emailConflict: boolean }> {
+  const email = (p.email ?? "").trim();
+  const fields = {
+    ldapDn: p.dn || existing?.ldapDn || null,
+    fullName: p.fullName || existing?.fullName || "",
+    department: p.department,
+    position: p.position,
+    phone: p.phone,
+    managerDn: p.managerDn,
+    // is_active следует за каталогом; ручную блокировку (blocked) синхронизация не трогает.
+    isActive: !p.disabled
+  };
+  /** То же самое, но без адреса: чужой адрес не занимаем. */
+  const withoutEmail = async (): Promise<void> => {
+    await tx.transaction(async (sp) => {
+      if (existing) await updateUser(existing.id, fields, sp);
+      else await insertUser({ ...fields, ldapUid: p.ldapUid, email: "", source: "ldap" }, sp);
+    });
+  };
+
+  try {
+    await tx.transaction(async (sp) => {
+      if (existing) await updateUser(existing.id, { ...fields, email: email || existing.email }, sp);
+      else await insertUser({ ...fields, ldapUid: p.ldapUid, email, source: "ldap" }, sp);
+    });
+    return { created: !existing, emailConflict: false };
+  } catch (err) {
+    // Конфликт адреса — не повод терять кадровые данные и не повод ронять синхронизацию.
+    if (!isUniqueViolation(err) || !email) throw err;
+    await withoutEmail();
+    return { created: !existing, emailConflict: true };
+  }
 }
 
 /**
@@ -285,61 +354,58 @@ export async function syncDirectoryUsers(actor: AuthUser | null): Promise<SyncRe
   if (!cred) throw new AppError("Сначала войдите в каталог: «Настройки → Каталог (LDAP)»");
 
   const s = getLdapSettings();
-  const profiles = await ldapListProfiles(s, cred.login, cred.password, 5000);
+  // Предел выгрузки не задаём: берётся дефолт каталога (core). Свой предел здесь
+  // означал бы, что на справочнике больше него уволенных НИКОГДА не отключат —
+  // и никто не поймёт почему. Признак обрезки приходит отдельно (truncated).
+  const { profiles, total, truncated } = await ldapListProfiles(s, cred.login, cred.password);
+
+  // ⚠️ Неполный список нельзя принимать за «этих людей в каталоге больше нет»:
+  // деактивация выключила бы живых сотрудников и разорвала им сессии. Обрезка по
+  // пределу выгрузки — прямой признак; пустой ответ — почти всегда неверный Base DN,
+  // а не вымерший дом, и доверия к нему ровно столько же.
+  const incomplete = truncated || total === 0;
+  if (incomplete) {
+    logger.warn(
+      { total, got: profiles.length, truncated },
+      "Список каталога неполный — деактивация сотрудников пропущена"
+    );
+  }
 
   // Вся синхронизация — одна транзакция: справочник и его след в аудите
   // обязаны появиться вместе, частично применённый справочник недопустим.
   const result = await getDocflowDb().transaction(async (tx) => {
-    const res: SyncResult = { total: profiles.length, created: 0, updated: 0, deactivated: 0, linked: 0 };
+    const res: SyncResult = {
+      total: profiles.length,
+      created: 0,
+      updated: 0,
+      deactivated: 0,
+      linked: 0,
+      emailConflicts: [],
+      incomplete
+    };
     const seen = new Set<string>();
 
     for (const p of profiles) {
       seen.add(p.ldapUid.toLowerCase());
       const existing = await getUserByLdapUid(p.ldapUid, tx);
-      if (existing) {
-        await updateUser(
-          existing.id,
-          {
-            ldapDn: p.dn || existing.ldapDn,
-            email: p.email || existing.email,
-            fullName: p.fullName || existing.fullName,
-            department: p.department,
-            position: p.position,
-            phone: p.phone,
-            managerDn: p.managerDn,
-            // is_active следует за каталогом; ручную блокировку (blocked) синхронизация не трогает.
-            isActive: !p.disabled
-          },
-          tx
-        );
-        res.updated++;
-      } else {
-        await insertUser(
-          {
-            ldapUid: p.ldapUid,
-            ldapDn: p.dn || null,
-            email: p.email,
-            fullName: p.fullName,
-            department: p.department,
-            position: p.position,
-            phone: p.phone,
-            managerDn: p.managerDn,
-            source: "ldap",
-            isActive: !p.disabled
-          },
-          tx
-        );
-        res.created++;
+      const applied = await applyDirectoryProfile(tx, p, existing);
+      if (applied.created) res.created++;
+      else res.updated++;
+      if (applied.emailConflict) {
+        res.emailConflicts.push({ ldapUid: p.ldapUid, email: (p.email ?? "").trim() });
       }
     }
 
     // Ушли из каталога — блокируем вход, но историю сохраняем (ТЗ п. 2 «Увольнение»).
-    for (const u of await listUsersWithRoles({ includeInactive: false }, tx)) {
-      if (u.source !== "ldap" || !u.ldapUid) continue;
-      if (seen.has(u.ldapUid.toLowerCase())) continue;
-      await updateUser(u.id, { isActive: false }, tx);
-      await revokeSessions(u.id, tx);
-      res.deactivated++;
+    // Только по полному списку: при incomplete отсутствие в списке ничего не доказывает.
+    if (!incomplete) {
+      for (const u of await listUsersWithRoles({ includeInactive: false }, tx)) {
+        if (u.source !== "ldap" || !u.ldapUid) continue;
+        if (seen.has(u.ldapUid.toLowerCase())) continue;
+        await updateUser(u.id, { isActive: false }, tx);
+        await revokeSessions(u.id, tx);
+        res.deactivated++;
+      }
     }
 
     // Связываем «руководитель → подчинённый» по DN.

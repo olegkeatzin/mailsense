@@ -3,10 +3,11 @@ import { logger } from "@mailsense/core/directory";
 import { getSetting, setSetting } from "./settings.js";
 import { getLdapSettings } from "@mailsense/core/directory";
 import { LdapError, ldapAuthenticate, ldapFailureMessage } from "@mailsense/core/directory";
-import { AppError, AuthError } from "./errors.js";
+import { AppError, AuthError, isUniqueViolation } from "./errors.js";
 import { buildAuthUser, permissionsOfRoles } from "./roles.js";
 import { hasDocflowDb } from "./db/index.js";
 import {
+  countActingAdmins,
   countUsers,
   deleteSession,
   deleteSessionsForUser,
@@ -87,10 +88,17 @@ export function configuredAdminLogins(): string[] {
     .filter(Boolean);
 }
 
-/** Есть ли в системе хотя бы один действующий администратор. */
+/**
+ * Есть ли в системе хотя бы один действующий администратор — тот, кто реально может
+ * войти: роль admin, учётка действующая (is_active) и не заблокирована.
+ *
+ * ⚠️ Администратор, который войти не может, за администратора не считается: на этом
+ * статусе держится предупреждение первого запуска («администратор не назначен»).
+ * Уволенный в каталоге администратор оставлял бы систему без того, кому выдавать
+ * права, а предупреждение при этом молчало бы.
+ */
 export async function hasAdmin(): Promise<boolean> {
-  const admins = await listUsersWithRoles({ roleId: "admin", includeInactive: true });
-  return admins.some((u) => !u.blocked);
+  return (await countActingAdmins()) > 0;
 }
 
 export async function authStatus(): Promise<AuthStatus> {
@@ -211,36 +219,56 @@ interface LdapProfileInput {
 
 async function upsertLdapUser(profile: LdapProfileInput): Promise<{ id: string; created: boolean }> {
   const existing = await getUserByLdapUid(profile.ldapUid);
-  if (existing) {
-    await updateUser(existing.id, {
-      ldapDn: profile.dn || existing.ldapDn,
-      email: profile.email || existing.email,
-      fullName: profile.fullName || existing.fullName,
-      department: profile.department,
-      position: profile.position,
-      phone: profile.phone,
-      managerDn: profile.managerDn,
-      // Кадровые поля обновляем, но ручную блокировку администратора не снимаем.
+  const email = (profile.email ?? "").trim();
+  const fields = {
+    ldapDn: profile.dn || existing?.ldapDn || null,
+    fullName: profile.fullName || existing?.fullName || "",
+    department: profile.department,
+    position: profile.position,
+    phone: profile.phone,
+    managerDn: profile.managerDn,
+    // Кадровые поля обновляем, но ручную блокировку администратора не снимаем.
+    isActive: true
+  };
+
+  // ⚠️ Адрес в каталоге может быть занят другой учёткой (общий ящик, контрагент,
+  // запись, заведённая вручную): уникальный индекс users_email_uniq_idx его не пустит,
+  // и вход падал бы 500 ещё до выдачи сессии. Пускаем человека без смены адреса —
+  // войти он обязан мочь, а разбираться с дублем в каталоге будет администратор.
+  const apply = async (withEmail: boolean): Promise<string> => {
+    if (existing) {
+      await updateUser(existing.id, withEmail ? { ...fields, email: email || existing.email } : fields);
+      return existing.id;
+    }
+    const u = await insertUser({
+      ...fields,
+      ldapUid: profile.ldapUid,
+      email: withEmail ? email : "",
+      source: "ldap",
       isActive: true
     });
+    return u.id;
+  };
+
+  let newId = "";
+  try {
+    newId = await apply(true);
+  } catch (err) {
+    if (!isUniqueViolation(err) || !email) throw err;
+    logger.warn(
+      { ldapUid: profile.ldapUid, email },
+      "Адрес занят другой учёткой — вход без смены адреса, дубль нужно разобрать в каталоге"
+    );
+    newId = await apply(false);
+  }
+
+  if (existing) {
     if (existing.blocked) {
       throw new AuthError("Учётная запись заблокирована администратором");
     }
     return { id: existing.id, created: false };
   }
-  const u = await insertUser({
-    ldapUid: profile.ldapUid,
-    ldapDn: profile.dn || null,
-    email: profile.email,
-    fullName: profile.fullName,
-    department: profile.department,
-    position: profile.position,
-    phone: profile.phone,
-    managerDn: profile.managerDn,
-    source: "ldap",
-    isActive: true
-  });
-  return { id: u.id, created: true };
+  return { id: newId, created: true };
 }
 
 /** Проставляет managerId по managerDn, если руководитель уже есть в базе. */

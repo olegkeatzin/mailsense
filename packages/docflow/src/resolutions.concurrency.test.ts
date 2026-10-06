@@ -7,10 +7,13 @@ import { registerDocument, type Actor } from "./journal.js";
 import { AppError } from "./errors.js";
 import {
   approveResolution,
+  confirmReport,
   createResolution,
   dispatchResolution,
   getResolution,
-  requestApproval
+  reportExecution,
+  requestApproval,
+  revertDispatch
 } from "./resolutions.js";
 
 /**
@@ -113,14 +116,19 @@ function settle(p: Promise<unknown>): Promise<Outcome> {
  * Так тест не зависит от скорости машины: снятие блокировки происходит
  * только после того, как оба перехода реально стартовали и упёрлись в строку.
  */
+/** Сколько сессий прямо сейчас ждут блокировку строки. */
+async function blockedSessions(): Promise<number> {
+  const rows = await getDocflowPool().query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM pg_stat_activity " +
+      "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+  );
+  return Number(rows.rows[0]?.n ?? 0);
+}
+
 async function waitForBlockedSessions(expected: number): Promise<void> {
   const deadline = Date.now() + 15000;
   for (;;) {
-    const rows = await getDocflowPool().query<{ n: number }>(
-      "SELECT count(*)::int AS n FROM pg_stat_activity " +
-        "WHERE datname = current_database() AND wait_event_type = 'Lock'"
-    );
-    if (Number(rows.rows[0]?.n ?? 0) >= expected) return;
+    if ((await blockedSessions()) >= expected) return;
     if (Date.now() > deadline) {
       throw new Error("Не дождались блокировки строки: параллельные переходы не стартовали");
     }
@@ -174,4 +182,124 @@ describe("гонка переходов резолюции", () => {
     await dispatchResolution(id, secretary, {});
     await expect(dispatchResolution(id, secretary, {})).rejects.toThrow(/невозможно/);
   });
+
+  test("параллельные отчёт исполнителя и откат отправки: проходит ровно один", async () => {
+    const id = await approvedResolution();
+    await dispatchResolution(id, secretary, {});
+
+    const holder = await getDocflowPool().connect();
+    let report: Promise<Outcome>;
+    let revert: Promise<Outcome>;
+    try {
+      await holder.query("BEGIN");
+      // Держим строку исполнителя: отчёт записывается его транзакцией, но ещё не
+      // закоммичен — ровно то состояние, в котором его не видит guard отката.
+      await holder.query(
+        "SELECT user_id FROM resolution_assignees WHERE resolution_id = $1 AND user_id = $2 FOR UPDATE",
+        [id, executorA.id]
+      );
+
+      report = settle(reportExecution(id, executorA.id, { text: "Заявка подготовлена" }, executorA));
+      await waitForBlockedSessions(1);
+
+      revert = settle(revertDispatch(id, secretary, "Письмо не ушло"));
+
+      // Ждём, пока откат либо завершится (прежнее поведение: отчёт ему не виден),
+      // либо встанет на строке резолюции (отчёт держит её первым).
+      let settled = false;
+      void revert.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+      const deadline = Date.now() + 10000;
+      while (!settled && Date.now() < deadline) {
+        if ((await blockedSessions()) >= 2) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      await holder.query("COMMIT");
+    } finally {
+      holder.release();
+    }
+
+    const [reportOutcome, revertOutcome] = await Promise.all([report, revert]);
+    expect([reportOutcome.ok, revertOutcome.ok].filter(Boolean)).toHaveLength(1);
+
+    // Откат обязан отказаться: по поручению уже идёт работа.
+    expect(revertOutcome.ok).toBe(false);
+    expect(revertOutcome.code).toBe("bad_state");
+    // Отчёт записан — и вызов не должен «упасть после записи».
+    expect(reportOutcome.ok).toBe(true);
+
+    const rows = await getDocflowPool().query<{ report_at: string | null }>(
+      "SELECT report_at FROM resolution_assignees WHERE resolution_id = $1 AND user_id = $2",
+      [id, executorA.id]
+    );
+    expect(rows.rows[0].report_at).not.toBeNull();
+
+    // Отчитался ответственный — поручение закрыто; состояние и отчёт согласованы:
+    // «утверждено» с уже отчитавшимся исполнителем — это и есть та дыра.
+    const after = await getResolution(id);
+    expect(after!.status).toBe("done");
+  }, 20000);
+
+  test("параллельное подтверждение отчёта письмом и откат отправки: проходит ровно один", async () => {
+    const id = await approvedResolution();
+    await dispatchResolution(id, secretary, {});
+
+    const holder = await getDocflowPool().connect();
+    let confirm: Promise<Outcome>;
+    let revert: Promise<Outcome>;
+    try {
+      await holder.query("BEGIN");
+      // Тот же приём: подтверждение записывает отчёт, но ещё не закоммитило его.
+      await holder.query(
+        "SELECT user_id FROM resolution_assignees WHERE resolution_id = $1 AND user_id = $2 FOR UPDATE",
+        [id, executorA.id]
+      );
+
+      confirm = settle(confirmReport(id, executorA.id, { text: "Отчёт из письма" }, secretary));
+      await waitForBlockedSessions(1);
+
+      revert = settle(revertDispatch(id, secretary, "Письмо не ушло"));
+
+      let settled = false;
+      void revert.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        }
+      );
+      const deadline = Date.now() + 10000;
+      while (!settled && Date.now() < deadline) {
+        if ((await blockedSessions()) >= 2) break;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      await holder.query("COMMIT");
+    } finally {
+      holder.release();
+    }
+
+    const [confirmOutcome, revertOutcome] = await Promise.all([confirm, revert]);
+    expect([confirmOutcome.ok, revertOutcome.ok].filter(Boolean)).toHaveLength(1);
+
+    // Откат обязан отказаться: отчёт по поручению уже принят.
+    expect(revertOutcome.ok).toBe(false);
+    expect(revertOutcome.code).toBe("bad_state");
+    // Подтверждение не должно «упасть после записи».
+    expect(confirmOutcome.ok).toBe(true);
+
+    const rows = await getDocflowPool().query<{ report_at: string | null }>(
+      "SELECT report_at FROM resolution_assignees WHERE resolution_id = $1 AND user_id = $2",
+      [id, executorA.id]
+    );
+    expect(rows.rows[0].report_at).not.toBeNull();
+    const after = await getResolution(id);
+    expect(after!.status).toBe("done");
+  }, 20000);
 });

@@ -7,10 +7,13 @@ import { registerDocument, type Actor } from "./journal.js";
 import {
   approveResolution,
   attachDispatchEmail,
+  attachRequestEmail,
   createResolution,
   dispatchResolution,
+  forwardToManager,
   getResolution,
   getResolutionDetail,
+  listReplyCandidates,
   reportExecution,
   requestApproval,
   revertDispatch
@@ -236,5 +239,77 @@ describe("revertDispatch: неудачная отправка возвращае
     await expect(revertDispatch(id, secretary, "Письмо не ушло")).rejects.toThrow();
     // Письма нет — поручение обязано остаться отправленным, а не «подвиснуть» посередине.
     expect((await getResolution(id))!.status).toBe("sent");
+  });
+});
+
+describe("attachRequestEmail: письмо-запрос, по которому отвечает руководитель", () => {
+  /** Письмо направлено руководителю: запись создана до отправки, id письма ещё не записан. */
+  async function forwarded(): Promise<string> {
+    const r = await forwardToManager(documentId, secretary, {});
+    expect(r.status).toBe("pending_approval");
+    expect(r.requestEmailId).toBeNull();
+    return r.id;
+  }
+
+  test("после записи письмо находится как кандидат ответа, а история перестаёт врать про «вручную»", async () => {
+    const id = await forwarded();
+
+    const after = await attachRequestEmail(id, "mail-request-1", secretary);
+    expect(after.requestEmailId).toBe("mail-request-1");
+    expect(
+      await count("SELECT count(*)::int AS n FROM audit_log WHERE action = 'resolution.request_email'")
+    ).toBe(1);
+
+    // Главное: без requestEmailId ответ руководителя письмом не сопоставить с поручением.
+    const found = (await listReplyCandidates()).find((c) => c.resolutionId === id);
+    expect(found).toBeDefined();
+    expect(found!.expects).toBe("approval");
+    expect(found!.emailId).toBe("mail-request-1");
+
+    const detail = (await getResolutionDetail(id))!;
+    const requested = detail.history.filter((h) => h.step === "requested");
+    expect(requested).toHaveLength(1);
+    expect(requested[0].method).toBe("email");
+    expect(requested[0].emailId).toBe("mail-request-1");
+  });
+
+  test("повторная запись того же письма безопасна и не плодит следы", async () => {
+    const id = await forwarded();
+    await attachRequestEmail(id, "mail-request-1", secretary);
+
+    const again = await attachRequestEmail(id, "mail-request-1", secretary);
+    expect(again.requestEmailId).toBe("mail-request-1");
+    expect(
+      await count("SELECT count(*)::int AS n FROM audit_log WHERE action = 'resolution.request_email'")
+    ).toBe(1);
+  });
+
+  test("второе письмо по тому же поручению отклоняется", async () => {
+    const id = await forwarded();
+    await attachRequestEmail(id, "mail-request-1", secretary);
+
+    await expect(attachRequestEmail(id, "mail-request-2", secretary)).rejects.toThrow(/уже записано/);
+    expect((await getResolution(id))!.requestEmailId).toBe("mail-request-1");
+  });
+
+  test("по поручению, которое уже не ждёт решения руководителя, письмо не записывается", async () => {
+    const id = await approved();
+    await expect(attachRequestEmail(id, "mail-request-1", secretary)).rejects.toThrow(/ждёт решения руководителя/);
+    expect((await getResolution(id))!.requestEmailId).toBeNull();
+  });
+
+  test("без идентификатора письма — понятная ошибка", async () => {
+    const id = await forwarded();
+    await expect(attachRequestEmail(id, "   ", secretary)).rejects.toThrow(/Не указано письмо/);
+  });
+
+  test("сбой записи следа откатывает и запись письма, и правку истории", async () => {
+    const id = await forwarded();
+    await blockAudit();
+
+    await expect(attachRequestEmail(id, "mail-request-1", secretary)).rejects.toThrow();
+    expect((await getResolution(id))!.requestEmailId).toBeNull();
+    const detail = (await getResolutionDetail(id))!;
+    expect(detail.history.find((h) => h.step === "requested")!.method).toBe("manual");
   });
 });

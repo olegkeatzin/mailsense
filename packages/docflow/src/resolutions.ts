@@ -838,6 +838,90 @@ export async function attachDispatchEmail(
 }
 
 /**
+ * Записывает письмо-запрос, которым поручение ушло руководителю на утверждение.
+ *
+ * Порядок тот же, что при отправке исполнителям: сначала захват (создание записи или
+ * переход), затем письмо, затем эта запись — id письма известен только после отправки.
+ * Без неё `requestEmailId` пуст, и **ответ руководителя письмом не сопоставляется
+ * с поручением**: listReplyCandidates ищет кандидатов именно по этому полю.
+ *
+ * ⚠️ Письмо ровно одно: второе означало бы два письма руководителю по одному поручению.
+ * Повторный вызов с тем же id — не ошибка (сеть/повтор запроса), с другим — отказ.
+ */
+export async function attachRequestEmail(
+  resolutionId: string,
+  emailId: string,
+  actor: Actor
+): Promise<ResolutionRecord> {
+  const email = (emailId ?? "").trim();
+  if (!email) throw new AppError("Не указано письмо-запрос", 400, "bad_email");
+
+  return getDocflowDb().transaction(async (tx) => {
+    const rows = await tx
+      .select()
+      .from(resolutions)
+      .where(eq(resolutions.id, resolutionId))
+      .limit(1)
+      .for("update");
+    const current = rows[0];
+    if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+    if (current.status !== "pending_approval") {
+      throw badState(
+        "Письмо-запрос записывается, только пока поручение ждёт решения руководителя: резолюция в состоянии «" +
+          current.status +
+          "»"
+      );
+    }
+    if (current.requestEmailId === email) return mapResolution(current);
+    if (current.requestEmailId) {
+      throw badState(
+        "Письмо-запрос уже записано (" + current.requestEmailId + ") — второе означало бы два письма руководителю"
+      );
+    }
+
+    const ts = now();
+    await tx
+      .update(resolutions)
+      .set({ requestEmailId: email, updatedAt: ts })
+      .where(eq(resolutions.id, resolutionId));
+
+    // Шаг истории правим в той же транзакции: иначе в журнале остаётся «manual»,
+    // хотя письмо ушло по почте. Берём последний шаг «requested» — более ранние
+    // относятся к прежним попыткам пересылки.
+    const requested = (
+      await tx
+        .select({ id: resolutionApprovals.id })
+        .from(resolutionApprovals)
+        .where(
+          and(eq(resolutionApprovals.resolutionId, resolutionId), eq(resolutionApprovals.step, "requested"))
+        )
+        .orderBy(desc(resolutionApprovals.createdAt))
+        .limit(1)
+    )[0];
+    if (requested) {
+      await tx
+        .update(resolutionApprovals)
+        .set({ method: "email", emailId: email })
+        .where(eq(resolutionApprovals.id, requested.id));
+    }
+
+    await tx.insert(auditLog).values({
+      id: randomUUID(),
+      userId: actor.id,
+      userName: actor.name,
+      action: "resolution.request_email",
+      entityType: "resolution",
+      entityId: resolutionId,
+      oldValue: stringify({ requestEmailId: null }),
+      newValue: stringify({ requestEmailId: email }),
+      createdAt: ts
+    });
+    const after = await tx.select().from(resolutions).where(eq(resolutions.id, resolutionId)).limit(1);
+    return mapResolution(after[0]);
+  });
+}
+
+/**
  * Откат неудачной отправки: sent → approved.
  *
  * Порядок отправки: переход в sent (он же захват поручения) → письмо → `attachDispatchEmail`.
@@ -1036,28 +1120,36 @@ export async function reportExecution(
   if (!text) throw new AppError("Отчёт пуст — опишите, что сделано", 400, "empty_report");
 
   const db = getDocflowDb();
-  const resolution = await getResolution(resolutionId);
-  if (!resolution) throw new AppError("Резолюция не найдена", 404, "not_found");
-  // Отчитаться можно только по выданному поручению: до отправки исполнитель о нём не знает,
-  // после закрытия — отчёт уже не имеет смысла (поправить может аппарат).
-  if (resolution.status !== "sent") {
-    throw badState(
-      resolution.status === "done"
-        ? "Поручение уже исполнено"
-        : "Поручение ещё не отправлено исполнителям"
-    );
-  }
-
-  const rows = await db
-    .select()
-    .from(resolutionAssignees)
-    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
-    .limit(1);
-  const mine = rows[0];
-  if (!mine) throw new AppError("Вы не исполнитель по этому поручению", 403, "not_assignee");
-
   const ts = now();
+
+  // ⚠️ Проверка состояния, запись отчёта и след — ОДНА транзакция, и строка резолюции
+  // берётся FOR UPDATE ПЕРВОЙ (тот же порядок, что в applyTransition: разный порядок
+  // дал бы взаимную блокировку). Иначе guard отката отправки читает отчёт, которого в
+  // его снапшоте ещё нет: откат проходит, а отчёт коммитится следом — поручение
+  // «утверждено» с уже отчитавшимся исполнителем, повторная отправка даёт второе письмо.
   await db.transaction(async (tx) => {
+    const rows = await tx.select().from(resolutions).where(eq(resolutions.id, resolutionId)).limit(1).for("update");
+    const current = rows[0];
+    if (!current) throw new AppError("Резолюция не найдена", 404, "not_found");
+    // Отчитаться можно только по выданному поручению: до отправки исполнитель о нём
+    // не знает, после закрытия — отчёт уже не имеет смысла (поправить может аппарат).
+    if (current.status !== "sent") {
+      throw badState(
+        current.status === "done"
+          ? "Поручение уже исполнено"
+          : "Поручение ещё не отправлено исполнителям"
+      );
+    }
+
+    const mine = (
+      await tx
+        .select()
+        .from(resolutionAssignees)
+        .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
+        .limit(1)
+    )[0];
+    if (!mine) throw new AppError("Вы не исполнитель по этому поручению", 403, "not_assignee");
+
     await tx
       .update(resolutionAssignees)
       .set({ reportText: text, reportAt: ts, reportEmailId: input.emailId ?? null })
@@ -1200,25 +1292,33 @@ export async function confirmReport(
   actor: Actor
 ): Promise<ResolutionRecord> {
   const db = getDocflowDb();
-  const rows = await db
-    .select()
-    .from(resolutionAssignees)
-    .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
-    .limit(1);
-  const mine = rows[0];
-  if (!mine) throw new AppError("Исполнитель не найден в поручении", 404, "not_found");
-  if (mine.reportAt) throw badState("Отчёт уже принят");
-  // Предложение модели может отсутствовать: аппарат отмечает отчёт, открыв письмо в почте.
-  // Требовать «распознанного» отчёта нельзя — тогда ручной путь был бы закрыт.
-
-  const text = (input.text ?? mine.reportSummary ?? "").trim();
-  if (!text) throw new AppError("Текст отчёта пуст", 400, "empty_report");
-
-  const resolution = await getResolution(resolutionId);
-  if (!resolution || resolution.status !== "sent") throw badState("Поручение не в работе");
-
   const ts = now();
+
+  // ⚠️ Проверки и запись отчёта — ОДНА транзакция, и строка резолюции берётся FOR UPDATE
+  // ПЕРВОЙ (тот же порядок, что в applyTransition: иначе взаимная блокировка). Иначе
+  // guard отката отправки не видит ещё не закоммиченный принятый отчёт: откат проходит,
+  // а отчёт коммитится следом — поручение «утверждено» с уже отчитавшимся исполнителем.
   await db.transaction(async (tx) => {
+    const locked = (
+      await tx.select().from(resolutions).where(eq(resolutions.id, resolutionId)).limit(1).for("update")
+    )[0];
+
+    const mine = (
+      await tx
+        .select()
+        .from(resolutionAssignees)
+        .where(and(eq(resolutionAssignees.resolutionId, resolutionId), eq(resolutionAssignees.userId, userId)))
+        .limit(1)
+    )[0];
+    if (!mine) throw new AppError("Исполнитель не найден в поручении", 404, "not_found");
+    if (mine.reportAt) throw badState("Отчёт уже принят");
+    // Предложение модели может отсутствовать: аппарат отмечает отчёт, открыв письмо в почте.
+    // Требовать «распознанного» отчёта нельзя — тогда ручной путь был бы закрыт.
+    const text = (input.text ?? mine.reportSummary ?? "").trim();
+    if (!text) throw new AppError("Текст отчёта пуст", 400, "empty_report");
+
+    if (!locked || locked.status !== "sent") throw badState("Поручение не в работе");
+
     await tx
       .update(resolutionAssignees)
       .set({ reportText: text, reportAt: ts })
