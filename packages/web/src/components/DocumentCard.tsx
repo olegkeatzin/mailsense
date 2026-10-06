@@ -41,7 +41,8 @@ const ACTION_TITLES: Record<string, string> = {
   "journal.edit": "Изменение",
   "journal.link_email": "Привязка письма",
   "journal.register_denied": "Отклонённая регистрация",
-  "journal.archive_period": "Выгрузка года в архив"
+  "journal.archive_period": "Выгрузка года в архив",
+  "journal.reopen_period": "Отмена закрытия года"
 };
 
 export default function DocumentCard({ documentId, onClose, onChanged }: Props) {

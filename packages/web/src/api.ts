@@ -320,10 +320,23 @@ export const api = {
     request<NumberingState>("/api/docflow/numbering" + (period ? "?period=" + period : "")),
   saveNumbering: (rule: NumberingRuleRecord) =>
     request<NumberingRuleRecord>("/api/docflow/numbering", { method: "PUT", body: JSON.stringify(rule) }),
-  archivePeriod: (period: string, fileName?: string) =>
-    request<{ ok: boolean; period: string; documentCount: number }>("/api/docflow/numbering/archive", {
+  /**
+   * Закрытие года. Подтверждение годом уходит на сервер: проверка обязана быть на сервере,
+   * а не только в форме — иначе её обойдёт любой другой клиент.
+   */
+  archivePeriod: (period: string, confirm: string) =>
+    request<{ ok: boolean; period: string; documentCount: number; file?: string }>(
+      "/api/docflow/numbering/archive",
+      { method: "POST", body: JSON.stringify({ period, confirm }) }
+    ),
+  /**
+   * Отмена закрытия года (право journal.reopen — только администратор).
+   * Причина обязательна: отмена не бывает молчаливой.
+   */
+  reopenPeriod: (period: string, confirm: string, reason: string) =>
+    request<{ ok: boolean; period: string }>("/api/docflow/numbering/reopen", {
       method: "POST",
-      body: JSON.stringify({ period, fileName })
+      body: JSON.stringify({ period, confirm, reason })
     }),
   /**
    * Ссылка на выгрузку АРХИВА года (ZIP с журналом и вложениями). Именно ССЫЛКА:

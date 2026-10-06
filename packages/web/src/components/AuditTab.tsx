@@ -20,6 +20,7 @@ const ACTION_TITLES: Record<string, string> = {
   "journal.register_denied": "Отклонённая регистрация",
   "journal.numbering.save": "Смена правил нумерации",
   "journal.archive_period": "Выгрузка года в архив",
+  "journal.reopen_period": "Отмена закрытия года",
   "journal.case.save": "Изменение номенклатуры дел",
   "journal.correspondent.save": "Изменение корреспондента",
   "journal.correspondent.create": "Новый корреспондент",

@@ -20,6 +20,19 @@ export default function NumberingTab() {
   const [exportYear, setExportYear] = useState(String(new Date().getFullYear()));
   const [importing, setImporting] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Закрытие года: подтверждение вводом года + текст отказа от сервера.
+  const [closeOpen, setCloseOpen] = useState(false);
+  const [closePeriod, setClosePeriod] = useState<string | null>(null);
+  const [closeConfirm, setCloseConfirm] = useState("");
+  const [closeError, setCloseError] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
+  // Отмена закрытия: причина обязательна, доступна только администратору.
+  const [reopenOpen, setReopenOpen] = useState(false);
+  const [reopenYear, setReopenYear] = useState<string>("");
+  const [reopenConfirm, setReopenConfirm] = useState("");
+  const [reopenReason, setReopenReason] = useState("");
+  const [reopenError, setReopenError] = useState<string | null>(null);
+  const [reopening, setReopening] = useState(false);
 
   const editable = can("settings.manage");
 
@@ -56,24 +69,57 @@ export default function NumberingTab() {
     }
   };
 
-  const archive = (period: string) => {
-    Modal.confirm({
-      title: "Выгрузить " + period + " год в архив?",
-      content:
-        "После выгрузки год считается закрытым, и откроется следующий. Отменить это нельзя — " +
-        "именно так журнал защищён от «забыли выгрузить прошлый год».",
-      okText: "Выгрузить и закрыть год",
-      cancelText: "Отмена",
-      onOk: async () => {
-        try {
-          const res = await api.archivePeriod(period);
-          message.success("Год " + res.period + " закрыт, документов: " + res.documentCount);
-          await load();
-        } catch (err) {
-          message.error((err as Error).message);
-        }
-      }
-    });
+  /**
+   * Закрытие года: подтверждение ВВОДОМ ГОДА, а не «ОК».
+   * «ОК» нажимают не глядя, а чтобы вписать год, надо прочитать, что именно закрываешь.
+   */
+  const openClose = (period: string) => {
+    setClosePeriod(period);
+    setCloseConfirm("");
+    setCloseError(null);
+    setCloseOpen(true);
+  };
+
+  const confirmClose = async () => {
+    if (!closePeriod || closeConfirm !== closePeriod) return;
+    setClosing(true);
+    setCloseError(null);
+    try {
+      const res = await api.archivePeriod(closePeriod, closeConfirm);
+      message.success("Год " + res.period + " закрыт, документов: " + res.documentCount);
+      setCloseOpen(false);
+      await load();
+    } catch (err) {
+      // Показываем ОТВЕТ СЕРВЕРА как есть: он говорит «год НЕ закрыт» и называет причину.
+      // Собирать формулировку в клиенте нельзя — разойдётся с сервером.
+      setCloseError((err as Error).message);
+    } finally {
+      setClosing(false);
+    }
+  };
+
+  const openReopen = (period: string) => {
+    setReopenYear(period);
+    setReopenConfirm("");
+    setReopenReason("");
+    setReopenError(null);
+    setReopenOpen(true);
+  };
+
+  const confirmReopen = async () => {
+    if (!reopenYear || reopenConfirm !== reopenYear || !reopenReason.trim()) return;
+    setReopening(true);
+    setReopenError(null);
+    try {
+      const res = await api.reopenPeriod(reopenYear, reopenConfirm, reopenReason.trim());
+      message.success("Закрытие " + res.period + " года отменено — год снова открыт");
+      setReopenOpen(false);
+      await load();
+    } catch (err) {
+      setReopenError((err as Error).message);
+    } finally {
+      setReopening(false);
+    }
   };
 
   /** Год выгрузки: открытый год журнала и текущий календарный. */
@@ -223,12 +269,132 @@ export default function NumberingTab() {
             >
               Выгрузить журнал {state.openPeriod} в Excel
             </Button>
-            <Button size="small" danger onClick={() => archive(state.openPeriod!)}>
+            <Button size="small" danger onClick={() => openClose(state.openPeriod!)}>
               Выгрузить и закрыть {state.openPeriod} год
             </Button>
           </Space>
         )}
       </Card>
+
+      {/*
+        Отмена закрытия года — не «откат ошибки», а штатный путь для случая «поздно принесли
+        письмо за прошлый год»: закрытый год документов не принимает.
+        Право отдельное (journal.reopen): кто действует и кто отменяет — разные люди.
+      */}
+      {can("journal.reopen") && state && state.archivedPeriods.length > 0 && (
+        <Card size="small" title="Отмена закрытия года">
+          <Space direction="vertical" size="small" style={{ width: "100%" }}>
+            {state.reopenablePeriods.length === 0 ? (
+              <Alert
+                type="info"
+                showIcon
+                message="Отмена недоступна"
+                description={
+                  "В году после закрытого уже зарегистрированы документы: номера выданы, откатить нумерацию " +
+                  "нельзя. Отмена возможна только до первого документа нового года."
+                }
+              />
+            ) : (
+              <Space wrap>
+                <Select
+                  style={{ width: 120 }}
+                  value={reopenYear || state.reopenablePeriods[0]}
+                  onChange={setReopenYear}
+                  options={state.reopenablePeriods.map((y) => ({ value: y, label: y }))}
+                />
+                {/* Многоточие как у «Импортировать архив…»: кнопка открывает диалог,
+                    а не выполняет действие сразу — и не путается с кнопкой подтверждения. */}
+                <Button
+                  size="small"
+                  danger
+                  onClick={() => openReopen(reopenYear || state.reopenablePeriods[0])}
+                >
+                  Отменить закрытие…
+                </Button>
+                <span style={{ color: "#595959", fontSize: 12 }}>
+                  Год снова начнёт принимать документы; закрыть его заново можно после повторной выгрузки.
+                </span>
+              </Space>
+            )}
+          </Space>
+        </Card>
+      )}
+
+      {/* Закрытие года: подтверждение вводом года. */}
+      <Modal
+        open={closeOpen}
+        title={closePeriod ? "Закрыть " + closePeriod + " год?" : "Закрыть год?"}
+        okText="Закрыть год"
+        cancelText="Отмена"
+        confirmLoading={closing}
+        okButtonProps={{ disabled: !closePeriod || closeConfirm !== closePeriod }}
+        onOk={confirmClose}
+        onCancel={() => setCloseOpen(false)}
+      >
+        <Space direction="vertical" size="small" style={{ width: "100%" }}>
+          {volumeWarning && (
+            <Alert
+              type={state?.archiveWarning?.level === "over" ? "error" : "warning"}
+              showIcon
+              message="Объём архива года"
+              description={volumeWarning}
+            />
+          )}
+          {closeError && <Alert type="error" showIcon message={closeError} />}
+          <div>
+            Сначала будет сделан снимок года (архив одним файлом). Если снимок не удастся, год НЕ закроется.
+            Затем год станет закрытым: новые документы в него не регистрируются, а открыть его заново можно
+            только отменой закрытия — и лишь пока в новом году нет документов.
+          </div>
+          <div>
+            Для подтверждения введите год <b>{closePeriod}</b>:
+          </div>
+          <Input
+            value={closeConfirm}
+            onChange={(e) => setCloseConfirm(e.target.value)}
+            placeholder={closePeriod ?? ""}
+            aria-label="Подтверждение года"
+          />
+        </Space>
+      </Modal>
+
+      {/* Отмена закрытия: причина обязательна — отмена не бывает молчаливой. */}
+      <Modal
+        open={reopenOpen}
+        title={reopenYear ? "Отменить закрытие " + reopenYear + " года?" : "Отменить закрытие года?"}
+        okText="Отменить закрытие"
+        cancelText="Отмена"
+        confirmLoading={reopening}
+        okButtonProps={{
+          disabled: !reopenYear || reopenConfirm !== reopenYear || !reopenReason.trim()
+        }}
+        onOk={confirmReopen}
+        onCancel={() => setReopenOpen(false)}
+      >
+        <Space direction="vertical" size="small" style={{ width: "100%" }}>
+          {reopenError && <Alert type="error" showIcon message={reopenError} />}
+          <div>
+            Год снова станет открытым: в него можно будет зарегистрировать письмо, пришедшее задним числом.
+            Повторно закрыть год можно будет после новой выгрузки.
+          </div>
+          <div>
+            Для подтверждения введите год <b>{reopenYear}</b>:
+          </div>
+          <Input
+            value={reopenConfirm}
+            onChange={(e) => setReopenConfirm(e.target.value)}
+            placeholder={reopenYear}
+            aria-label="Подтверждение года отмены"
+          />
+          <Input.TextArea
+            value={reopenReason}
+            onChange={(e) => setReopenReason(e.target.value)}
+            rows={2}
+            placeholder="Почему отменяем закрытие (попадёт в аудит)"
+            aria-label="Причина отмены"
+          />
+        </Space>
+      </Modal>
     </Space>
   );
 }

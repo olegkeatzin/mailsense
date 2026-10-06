@@ -30,3 +30,6 @@ coverage/
 .DS_Store
 .idea/
 .vscode/
+
+# Снимки года, снятые при закрытии: рабочие данные, не в репозиторий
+packages/server/archives/

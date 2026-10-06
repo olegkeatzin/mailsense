@@ -447,6 +447,11 @@ export interface NumberingState {
   rules: NumberingRuleRecord[];
   openPeriod: string | null;
   archivedPeriods: string[];
+  /**
+   * Годы, закрытие которых ещё можно отменить (в новом году нет документов).
+   * Считает сервер; интерфейс лишь показывает — решает всё равно транзакция.
+   */
+  reopenablePeriods: string[];
   blockedReason: string | null;
   /** Сколько занимают вложения открытого года (null — размер неизвестен: предупреждать нечем). */
   archiveSizeBytes?: number | null;
