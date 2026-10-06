@@ -2,8 +2,18 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Input, Modal, Select, Space, Spin, Switch, Typography, message } from "antd";
 import { DeleteOutlined, PaperClipOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { useStore } from "../store";
-import { api } from "../api";
-import type { Account, ComposeTemplate, Draft, DraftAttachment, EmailAddress, EmailView, Template } from "../types";
+import { api, attachmentBase64, materializeAttachments, type ComposerAttachment } from "../api";
+import type {
+  Account,
+  ComposeInput,
+  ComposeTemplate,
+  ComposeTemplateAttachment,
+  Draft,
+  DraftAttachment,
+  EmailAddress,
+  EmailView,
+  Template
+} from "../types";
 import { escapeHtml, htmlToPlainText } from "../utils/text";
 import RichTextEditor from "./RichTextEditor";
 
@@ -42,7 +52,9 @@ function draftToTemplate(d: Draft): ComposeTemplate {
     inReplyToEmailId: d.inReplyToEmailId,
     inReplyToMessageId: d.inReplyToMessageId,
     references: d.references,
-    attachments: d.attachments.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size, data: a.data }))
+    // Вложения черновика передаются отдельно (draftAttachments): в шаблоне вложений
+    // нет по определению — там только ссылки на файлы писем.
+    attachments: []
   };
 }
 
@@ -56,12 +68,28 @@ function fmt(a: EmailAddress): string {
  * Индекс как key врал при удалении вложения — React переиспользовал строки
  * не той позиции. Ключ присваивается один раз при добавлении.
  */
-type AttachmentItem = DraftAttachment & { key: string };
+type AttachmentItem = ComposerAttachment & { key: string };
 
 let attachmentSeq = 0;
-function withAttachmentKey(a: DraftAttachment): AttachmentItem {
+function nextKey(): string {
   attachmentSeq += 1;
-  return { ...a, key: "att-" + attachmentSeq };
+  return "att-" + attachmentSeq;
+}
+
+/** Вложение из черновика или выбранное человеком: данные уже внутри. */
+function withAttachmentKey(a: DraftAttachment): AttachmentItem {
+  return { ...a, key: nextKey() };
+}
+
+/** Вложение пересылки: в шаблоне только ссылка, файл тянется в момент отправки. */
+function refAttachment(a: ComposeTemplateAttachment): AttachmentItem {
+  return {
+    key: nextKey(),
+    filename: a.filename,
+    mimeType: a.mimeType,
+    size: a.size,
+    ref: { emailId: a.emailId, attachmentId: a.attachmentId }
+  };
 }
 
 
@@ -136,6 +164,19 @@ function fallbackTemplate(
     tpl.inReplyToEmailId = v.id;
     tpl.inReplyToMessageId = v.messageId;
     tpl.references = [...(v.references ?? []), v.messageId];
+    // Пересылка несёт вложения оригинала. Здесь они тоже ссылками: иначе при сбое
+    // запроса шаблона вложение молча пропало бы из окна.
+    if (compose.mode === "forward" && account?.settings?.forwardAttachments !== false) {
+      tpl.attachments = v.attachments
+        .filter((a) => a.storagePath)
+        .map((a) => ({
+          filename: a.filename,
+          mimeType: a.mimeType,
+          size: a.size,
+          attachmentId: a.id,
+          emailId: v.id
+        }));
+    }
     const who = v.from ? v.from.name || v.from.address : "";
     const when = v.date ? new Date(v.date).toLocaleString("ru-RU") : "";
     const attr = (when ? when + ", " : "") + who + " пишет:";
@@ -230,7 +271,16 @@ const TITLE_BY_MODE: Record<string, string> = {
   forward: "Переслать"
 };
 
-function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftId?: string | null }) {
+function ComposerForm({
+  template,
+  draftId,
+  draftAttachments
+}: {
+  template: ComposeTemplate;
+  draftId?: string | null;
+  /** Вложения открываемого черновика: данные в них уже есть. */
+  draftAttachments?: DraftAttachment[];
+}) {
   const closeCompose = useStore((s) => s.closeCompose);
   const loadEmails = useStore((s) => s.loadEmails);
   const accounts = useStore((s) => s.accounts);
@@ -241,15 +291,8 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
   const [cc, setCc] = useState<string[]>(template.cc.map(fmt));
   const [bcc, setBcc] = useState<string[]>(template.bcc.map(fmt));
   const [subject, setSubject] = useState(template.subject);
-  const [attachments, setAttachments] = useState<AttachmentItem[]>(
-    template.attachments.map((a) =>
-      withAttachmentKey({
-        filename: a.filename,
-        mimeType: a.mimeType,
-        size: Math.floor((a.data.length * 3) / 4),
-        data: a.data
-      })
-    )
+  const [attachments, setAttachments] = useState<AttachmentItem[]>(() =>
+    draftAttachments ? draftAttachments.map(withAttachmentKey) : template.attachments.map(refAttachment)
   );
   const [sending, setSending] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -299,7 +342,8 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
   // Пустой редактор = только теги/пробелы.
   const isEmptyHtml = !bodyHtml || bodyHtml.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim() === "";
 
-  const payload = () => ({
+  /** Поля формы: данных вложений здесь нет — они подставляются в момент отправки. */
+  const formState = (): Omit<ComposeInput, "attachments"> => ({
     accountId,
     to: parseEmails(to.join(",")),
     cc: cc.length ? parseEmails(cc.join(",")) : [],
@@ -307,20 +351,51 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
     subject: subject.trim() || "(без темы)",
     bodyText: htmlToPlainText(bodyHtml),
     bodyHtml: plainTextOnly || isEmptyHtml ? "" : bodyHtml,
-    // Ключ списка — деталь интерфейса, на сервер он не уходит.
-    attachments: attachments.map(({ key: _key, ...a }) => a),
     inReplyToEmailId: template.inReplyToEmailId,
     inReplyToMessageId: template.inReplyToMessageId,
     references: template.references
   });
 
-  const payloadFnRef = useRef(payload);
-  payloadFnRef.current = payload;
+  /**
+   * Данные уже загруженных вложений. Пересылка несёт только ссылки, и без кэша
+   * автосохранение тянуло бы один и тот же файл на каждое изменение текста.
+   */
+  const loadedRef = useRef(new Map<string, string>());
+  const loadAttachment = async (emailId: string, attachmentId: string): Promise<string> => {
+    const cached = loadedRef.current.get(attachmentId);
+    if (cached !== undefined) return cached;
+    const data = await attachmentBase64(emailId, attachmentId);
+    loadedRef.current.set(attachmentId, data);
+    return data;
+  };
+
+  /**
+   * Вложения с данными: файл тянется из письма именно сейчас — при отправке или
+   * сохранении черновика. Если файл не пришёл, materializeAttachments бросает
+   * ошибку, и письмо НЕ уходит: вложение, которое человек видит, обязано уйти.
+   */
+  const outgoingAttachments = () => materializeAttachments(attachments, loadAttachment);
+
+  /** Тело запроса без данных вложений — снимок для автосохранения. */
+  const draftState = () => ({
+    ...formState(),
+    // Ключ списка — деталь интерфейса, на сервер он не уходит.
+    attachments: attachments.map((a) => ({ filename: a.filename, mimeType: a.mimeType, size: a.size }))
+  });
+
+  /** Тело запроса с данными вложений — то, что уходит на сервер. */
+  const outgoing = async () => ({ ...formState(), attachments: await outgoingAttachments() });
+
+  // Автосохранение живёт в интервале с пустыми зависимостями: состояние берём через ref.
+  const draftStateRef = useRef(draftState);
+  draftStateRef.current = draftState;
+  const outgoingAttachmentsRef = useRef(outgoingAttachments);
+  outgoingAttachmentsRef.current = outgoingAttachments;
 
   // Автосохранение черновика: раз в 15 c, если что-то изменилось.
   useEffect(() => {
     const id = window.setInterval(() => {
-      const p = payloadFnRef.current();
+      const p = draftStateRef.current();
       if (!p.accountId) return;
       const hasContent =
         p.to.length > 0 || p.subject.trim().length > 0 || p.bodyText.trim().length > 0 || p.attachments.length > 0;
@@ -336,8 +411,11 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
       if (snap === lastSnapRef.current) return;
       void (async () => {
         try {
-          if (draftIdRef.current) await api.updateDraft(draftIdRef.current, p);
-          else draftIdRef.current = (await api.createDraft(p)).id;
+          // ⚠️ В черновик вложения кладём с данными: иначе после перезапуска окна
+          // вложение будет видно, а отправить его будет нечем.
+          const body = { ...p, attachments: await outgoingAttachmentsRef.current() };
+          if (draftIdRef.current) await api.updateDraft(draftIdRef.current, body);
+          else draftIdRef.current = (await api.createDraft(body)).id;
           lastSnapRef.current = snap;
           setDraftSavedAt(new Date());
         } catch {
@@ -387,7 +465,7 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
     if (to.length === 0) return message.warning("Укажите получателя");
     setSending(true);
     try {
-      await api.sendEmail(payload());
+      await api.sendEmail(await outgoing());
       if (draftIdRef.current) {
         try {
           await api.deleteDraft(draftIdRef.current);
@@ -410,8 +488,9 @@ function ComposerForm({ template, draftId }: { template: ComposeTemplate; draftI
     if (!accountId) return message.warning("Выберите аккаунт");
     setSaving(true);
     try {
-      if (draftIdRef.current) await api.updateDraft(draftIdRef.current, payload());
-      else draftIdRef.current = (await api.createDraft(payload())).id;
+      const body = await outgoing();
+      if (draftIdRef.current) await api.updateDraft(draftIdRef.current, body);
+      else draftIdRef.current = (await api.createDraft(body)).id;
       message.success("Черновик сохранён");
       closeCompose();
     } catch (e) {
@@ -576,6 +655,7 @@ export default function Composer() {
               key={(compose.draft?.id ?? compose.emailId ?? "new") + ":" + compose.mode}
               template={template}
               draftId={compose.draft?.id ?? null}
+              draftAttachments={compose.draft?.attachments}
             />
           ) : (
             <div style={{ padding: 40, textAlign: "center" }}>

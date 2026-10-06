@@ -225,7 +225,11 @@ function AccountTab() {
                 onClick={() =>
                   void api
                     .fetchAccount(a.id)
-                    .then(() => message.success("Проверено"))
+                    .then(() => {
+                      // Ящик проверен — сервер мог поставить письма в анализ.
+                      useStore.getState().wakeAnalysisProgress();
+                      message.success("Проверено");
+                    })
                     // Без catch отказ уходил в консоль браузера необработанным промисом.
                     .catch((e) => message.error("Проверка не удалась: " + (e as Error).message))
                 }

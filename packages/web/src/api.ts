@@ -581,6 +581,96 @@ export function attachmentUrl(emailId: string, attId: string, inline = false): s
   return BASE + "/api/emails/" + emailId + "/attachments/" + attId + "/file" + (inline ? "?inline=1" : "");
 }
 
+/**
+ * Вложение из шаблона пересылки: данных в нём нет — только ссылка на файл письма.
+ * Раньше сервер вкладывал вложение целиком в base64, и письмо на 20 МБ
+ * превращалось в ~27 МБ JSON, который клиент держал в состоянии.
+ */
+export interface AttachmentRef {
+  emailId: string;
+  attachmentId: string;
+}
+
+/** Вложение в окне письма: данные уже есть (выбрал человек / пришло из черновика) либо есть ссылка. */
+export interface ComposerAttachment {
+  filename: string;
+  mimeType: string;
+  size: number;
+  data?: string;
+  ref?: AttachmentRef;
+}
+
+/** Вложение, готовое к отправке и к записи в черновик. */
+export interface OutgoingAttachment {
+  filename: string;
+  mimeType: string;
+  size: number;
+  data: string;
+}
+
+/**
+ * Байты → base64. Кодируем кусками: у файла в десятки мегабайт
+ * `String.fromCharCode(...bytes)` упирается в предел числа аргументов и роняет вкладку.
+ */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/** Тянет файл вложения письма и кодирует его в base64 — ровно в момент отправки. */
+export async function attachmentBase64(emailId: string, attachmentId: string): Promise<string> {
+  const res = await fetch(attachmentUrl(emailId, attachmentId), { credentials: "include" });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) msg = body.error;
+    } catch {
+      /* тело не JSON — показываем статус */
+    }
+    throw new Error(msg);
+  }
+  return bytesToBase64(new Uint8Array(await res.arrayBuffer()));
+}
+
+/**
+ * Готовит вложения к отправке и к сохранению черновика.
+ *
+ * ⚠️ Вложение, которое не удалось достать, — это ошибка, а не «письмо без файла»:
+ * человек видит файл в окне и уверен, что он уйдёт. Поэтому не пропускаем, а
+ * бросаем исключение — вызывающий обязан показать его и ничего не отправлять.
+ */
+export async function materializeAttachments(
+  items: ComposerAttachment[],
+  load: (emailId: string, attachmentId: string) => Promise<string> = attachmentBase64
+): Promise<OutgoingAttachment[]> {
+  const out: OutgoingAttachment[] = [];
+  for (const item of items) {
+    let data = item.data;
+    if (data === undefined && item.ref) {
+      try {
+        data = await load(item.ref.emailId, item.ref.attachmentId);
+      } catch (err) {
+        throw new Error("Не удалось приложить «" + item.filename + "»: " + (err as Error).message);
+      }
+    }
+    if (typeof data !== "string") {
+      throw new Error("Вложение «" + item.filename + "» не загружено — приложите файл заново");
+    }
+    out.push({
+      filename: item.filename,
+      mimeType: item.mimeType,
+      size: item.size || Math.floor((data.length * 3) / 4),
+      data
+    });
+  }
+  return out;
+}
+
 export function previewUrl(emailId: string, attId: string, page?: number): string {
   return (
     BASE +

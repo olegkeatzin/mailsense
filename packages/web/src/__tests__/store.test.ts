@@ -11,7 +11,10 @@ jest.mock("../api", () => ({
     aiConfig: jest.fn(),
     bulkAnalyze: jest.fn(),
     bulkFolder: jest.fn(),
-    bulkDelete: jest.fn()
+    bulkDelete: jest.fn(),
+    fetchAccount: jest.fn(),
+    importEmails: jest.fn(),
+    analyze: jest.fn()
   }
 }));
 
@@ -21,6 +24,9 @@ const mockThreads = api.threads as unknown as jest.Mock;
 const mockBulkDelete = api.bulkDelete as unknown as jest.Mock;
 const mockBulkFolder = api.bulkFolder as unknown as jest.Mock;
 const mockBulkAnalyze = api.bulkAnalyze as unknown as jest.Mock;
+const mockFetchAccount = api.fetchAccount as unknown as jest.Mock;
+const mockImportEmails = api.importEmails as unknown as jest.Mock;
+const mockAnalyze = api.analyze as unknown as jest.Mock;
 
 function mail(id: string): Email {
   return { id, subject: "Письмо " + id, bodyText: "", analysisStatus: "pending" } as unknown as Email;
@@ -220,5 +226,58 @@ describe("гонки запросов", () => {
 
     expect(useStore.getState().selectedId).toBe("b");
     expect((useStore.getState().emailView as unknown as { email: Email }).email.id).toBe("b");
+  });
+});
+
+/**
+ * Регрессия: опрос очереди останавливался в простое и возобновлялся только по
+ * analysisEpoch. Но скан ящика и импорт ставят письма в анализ на сервере
+ * (core: auto_analyze → enqueue), поэтому без этих действий плашка прогресса
+ * и кнопка «Стоп» не появлялись вовсе.
+ */
+describe("индикатор анализа не слепнет к скану и импорту", () => {
+  it("«Проверить почту» (скан ящика) возобновляет опрос очереди", async () => {
+    const before = useStore.getState().analysisEpoch;
+    mockFetchAccount.mockResolvedValue({ added: 3, skipped: 0 });
+
+    await useStore.getState().fetchAccount("acc-1");
+
+    expect(useStore.getState().analysisEpoch).toBeGreaterThan(before);
+  });
+
+  it("скан по нескольким ящикам возобновляет опрос очереди", async () => {
+    const before = useStore.getState().analysisEpoch;
+    mockFetchAccount.mockResolvedValue({ added: 0, skipped: 0 });
+
+    await useStore.getState().fetchAccounts(["acc-1", "acc-2"]);
+
+    expect(useStore.getState().analysisEpoch).toBeGreaterThan(before);
+  });
+
+  it("скан за период возобновляет опрос очереди", async () => {
+    const before = useStore.getState().analysisEpoch;
+    mockFetchAccount.mockResolvedValue({ added: 1, skipped: 0 });
+
+    await useStore.getState().fetchAccountRange("acc-1", "2025-01-01", "2025-02-01");
+
+    expect(useStore.getState().analysisEpoch).toBeGreaterThan(before);
+  });
+
+  it("импорт .eml возобновляет опрос очереди: импортированные письма уходят в анализ", async () => {
+    const before = useStore.getState().analysisEpoch;
+    mockImportEmails.mockResolvedValue({ added: 2, skipped: 1 });
+
+    await useStore.getState().importEmails("acc-1", "INBOX", [{ filename: "a.eml", data: "x" }]);
+
+    expect(useStore.getState().analysisEpoch).toBeGreaterThan(before);
+  });
+
+  it("ручной анализ по-прежнему поднимает счётчик", async () => {
+    const before = useStore.getState().analysisEpoch;
+    mockAnalyze.mockResolvedValue({ ok: true });
+
+    await useStore.getState().analyze("mail-1");
+
+    expect(useStore.getState().analysisEpoch).toBeGreaterThan(before);
   });
 });

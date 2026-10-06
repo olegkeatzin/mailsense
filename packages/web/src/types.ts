@@ -144,10 +144,16 @@ export interface ComposeInput {
   references?: string[];
 }
 
+/**
+ * Вложение в шаблоне пересылки — ссылка на файл письма, без данных.
+ * Файл тянется по требованию: /api/emails/:emailId/attachments/:attachmentId/file
+ */
 export interface ComposeTemplateAttachment {
   filename: string;
   mimeType: string;
-  data: string; // base64
+  size: number;
+  attachmentId: string;
+  emailId: string;
 }
 
 export interface ComposeTemplate {

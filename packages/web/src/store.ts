@@ -58,9 +58,17 @@ interface State extends FilterState {
   registerIntent: string | null;
   /**
    * Счётчик запусков анализа: по нему индикатор прогресса понимает, что очередь
-   * снова не пуста, и возобновляет опрос (в простое он не опрашивает сервер).
+   * снова не пуста, и проверяет её немедленно (в простое он опрашивает редко).
    */
   analysisEpoch: number;
+  /**
+   * Сообщить индикатору, что сервер мог поставить письма в анализ.
+   *
+   * Нужно действиям, после которых анализ запускается на сервере, а не кнопкой
+   * «Анализировать»: скан ящика и импорт .eml (core: auto_analyze → enqueue).
+   * Без этого плашка прогресса и кнопка «Стоп» не появлялись.
+   */
+  wakeAnalysisProgress: () => void;
   loading: boolean;
   settingsOpen: boolean;
   aiConfig: AiConfig | null;
@@ -398,23 +406,25 @@ export const useStore = create<State>()((set, get) => ({
 
   fetchAccount: async (id: string) => {
     await api.fetchAccount(id);
+    // Сервер ставит принятые письма в анализ сам — индикатору нужно об этом сказать.
+    get().wakeAnalysisProgress();
     await get().loadEmails();
   },
 
   analyze: async (id: string) => {
-    set({ analysisEpoch: get().analysisEpoch + 1 });
+    get().wakeAnalysisProgress();
     await api.analyze(id);
     await get().loadEmails();
   },
 
   analyzeAll: async () => {
-    set({ analysisEpoch: get().analysisEpoch + 1 });
+    get().wakeAnalysisProgress();
     await api.analyzeAll();
     await get().loadEmails();
   },
 
   stopAnalysis: async () => {
-    set({ analysisEpoch: get().analysisEpoch + 1 });
+    get().wakeAnalysisProgress();
     await api.stopAnalysis();
     await get().loadEmails();
   },
@@ -473,7 +483,7 @@ export const useStore = create<State>()((set, get) => ({
   bulkAnalyze: async () => {
     const ids = selectedVisible(get());
     if (!ids.length) return;
-    set({ analysisEpoch: get().analysisEpoch + 1 });
+    get().wakeAnalysisProgress();
     await api.bulkAnalyze(ids);
     await get().loadEmails();
   },
@@ -503,7 +513,7 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   analyzeRange: async (since, until, accountIds) => {
-    set({ analysisEpoch: get().analysisEpoch + 1 });
+    get().wakeAnalysisProgress();
     const r = await api.analyzeRange({ since, until, accountIds });
     await get().loadEmails();
     return r.queued;
@@ -513,15 +523,22 @@ export const useStore = create<State>()((set, get) => ({
     for (const id of ids) {
       await api.fetchAccount(id, { since, until });
     }
+    get().wakeAnalysisProgress();
     await get().loadEmails();
   },
 
   importEmails: async (accountId, folder, files) => {
-    return api.importEmails(accountId, folder, files);
+    const result = await api.importEmails(accountId, folder, files);
+    // Импортированные письма уходят в анализ на сервере — иначе о работе не узнать.
+    get().wakeAnalysisProgress();
+    return result;
   },
 
   fetchAccountRange: async (id, since, until) => {
     await api.fetchAccount(id, { since, until });
+    get().wakeAnalysisProgress();
     await get().loadEmails();
-  }
+  },
+
+  wakeAnalysisProgress: () => set((s) => ({ analysisEpoch: s.analysisEpoch + 1 }))
 }));

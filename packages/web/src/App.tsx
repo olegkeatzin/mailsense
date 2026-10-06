@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Button, Dropdown, Layout, Segmented, Space, Spin, Tooltip, Typography, message } from "antd";
 import {
   MenuOutlined,
@@ -14,6 +14,7 @@ import {
 } from "@ant-design/icons";
 import { useStore } from "./store";
 import { api } from "./api";
+import { createProgressPoller, type ProgressPoller } from "./utils/progressPolling";
 import AccountSidebar from "./components/AccountSidebar";
 import { ApprovalList } from "./components/ApprovalList";
 import IncomingList from "./components/IncomingList";
@@ -89,63 +90,41 @@ function AnalysisProgressBadge() {
     done: number;
     total: number;
   } | null>(null);
-  /** Запуск анализа из интерфейса: счётчик заставляет возобновить опрос очереди. */
+  /** Скан, импорт, ручной анализ: счётчик заставляет проверить очередь немедленно. */
   const analysisEpoch = useStore((s) => s.analysisEpoch);
+  const pollerRef = useRef<ProgressPoller | null>(null);
 
   useEffect(() => {
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-
-    const stop = () => {
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
-      }
-    };
-    const schedule = (ms: number) => {
-      if (!alive) return;
-      stop();
-      timer = setTimeout(() => void tick(), ms);
-    };
-
-    const tick = async () => {
-      if (!alive) return;
-      // Свёрнутое окно не опрашиваем: прогресс всё равно никто не видит.
-      if (document.hidden) {
-        schedule(5000);
-        return;
-      }
-      try {
-        const r = await api.progress();
-        if (!alive) return;
-        setP(r);
-        // Очередь пуста — опрашивать нечего, ждём следующего запуска анализа.
-        if (r.queueLength > 0 || r.stage !== "idle") schedule(1000);
-        else {
-          stop();
-          setP(null);
-        }
-      } catch {
-        // Сервер недоступен — не долбим его каждую секунду.
-        schedule(5000);
-      }
-    };
+    // Опрос не останавливается насовсем: в простое он редкий («пульс»), потому что
+    // анализ запускает и фоновый планировщик — тогда плашка обязана появиться.
+    const poller = createProgressPoller({
+      fetchProgress: () => api.progress(),
+      onProgress: (r) => setP(r),
+      isHidden: () => document.hidden
+    });
+    pollerRef.current = poller;
+    poller.start();
 
     /** Возвращение к окну — повод проверить очередь сразу. */
     const onVisibility = () => {
-      if (!document.hidden) {
-        stop();
-        void tick();
-      }
+      if (!document.hidden) poller.poke();
     };
-
-    void tick();
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
-      alive = false;
-      stop();
+      poller.stop();
+      pollerRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
     };
+  }, []);
+
+  const firstEpoch = useRef(true);
+  useEffect(() => {
+    // На старте опрос и так идёт; будим только на последующие действия.
+    if (firstEpoch.current) {
+      firstEpoch.current = false;
+      return;
+    }
+    pollerRef.current?.poke();
   }, [analysisEpoch]);
 
   if (!p || (p.queueLength === 0 && p.stage === "idle")) return null;
@@ -250,10 +229,9 @@ export default function App() {
   const refreshAll = async () => {
     setRefreshing(true);
     try {
-      for (const a of accounts) {
-        await api.fetchAccount(a.id);
-      }
-      await useStore.getState().loadEmails();
+      // Через стор, а не напрямую: он сообщает индикатору, что сервер ставит
+      // принятые письма в анализ (иначе плашка прогресса не появится).
+      await useStore.getState().fetchAccounts(accounts.map((a) => a.id));
       await useStore.getState().refreshSelected();
     } finally {
       setRefreshing(false);
