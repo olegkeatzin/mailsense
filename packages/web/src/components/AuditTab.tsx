@@ -121,6 +121,8 @@ export default function AuditTab() {
    * устраивал шторм запросов (~430/с по замеру QA), пока открыт.
    */
   const attemptedIds = useRef<Set<string>>(new Set());
+  /** Карта ссылок загружена: до этого добор не запускаем, иначе в /resolutions уходят id сотрудников и ящиков (D9). */
+  const [refsLoaded, setRefsLoaded] = useState(false);
   /** Потолок запросов на одну загрузку данных: больше 40 уникальных id не пробуем. */
   const RESOLVE_LIMIT = 40;
 
@@ -132,7 +134,9 @@ export default function AuditTab() {
       api.users({ includeInactive: true }).then((list) => list.forEach((u) => map.set(u.id, u.fullName || u.email))),
       api.journal({ limit: 300 }).then((page) => page.items.forEach((d) => map.set(d.id, d.regNumber)))
     ]).then(() => {
-      if (alive) setRefs(new Map(map));
+      if (!alive) return;
+      setRefs(new Map(map));
+      setRefsLoaded(true);
     });
     return () => {
       alive = false;
@@ -142,6 +146,8 @@ export default function AuditTab() {
   // Что осталось неразрешённым — пробуем как поручения. Без прав запрос не пройдёт,
   // и значение честно останется нейтральным: UUID в текст не попадёт ни при каком ответе.
   useEffect(() => {
+    // Ждём справочники: без них в добор попадут id, которые поручениями не являются (D9).
+    if (!refsLoaded) return;
     const pending: string[] = [];
     const collect = (v: unknown) => {
       if (Array.isArray(v)) v.forEach(collect);
@@ -158,6 +164,9 @@ export default function AuditTab() {
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           for (const [k, v] of Object.entries(parsed)) {
             if (k === "updatedAt" || k === "createdAt" || k === "id") continue;
+            // Идентификатор письма поручением быть не может: спрашивать о нём /resolutions
+            // бессмысленно, а каждый такой вопрос — лишний 404 в консоли (D9, остаток).
+            if (/email|message/i.test(k)) continue;
             collect(v);
           }
         } catch {
@@ -192,7 +201,7 @@ export default function AuditTab() {
     return () => {
       alive = false;
     };
-  }, [entries, refs]);
+  }, [entries, refs, refsLoaded]);
 
   const valueRefs: ValueRefs = {
     resolve: (_field, id) => refs.get(id) ?? resolutionRefs.get(id) ?? null

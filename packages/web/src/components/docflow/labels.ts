@@ -1,4 +1,5 @@
 import { DOCUMENT_STATUS_TITLES, type DocumentStatus } from "../../types";
+import { RESOLUTION_STATUS_TITLES } from "../../resolutionTypes";
 
 /**
  * Единый источник русских подписей для СЭД (аудит ux-designer, §5).
@@ -181,8 +182,12 @@ export function formatValue(value: unknown, field?: string, refs?: ValueRefs): s
     if (looksLikeId(value)) {
       return refs?.resolve?.(field ?? "", value) ?? UNRESOLVED_VALUE;
     }
-    if (field === "status" && value in DOCUMENT_STATUS_TITLES) {
-      return DOCUMENT_STATUS_TITLES[value as DocumentStatus];
+    if (field === "status") {
+      // Статус бывает и у документа, и у поручения — переводим оба словаря (D10).
+      if (value in DOCUMENT_STATUS_TITLES) return DOCUMENT_STATUS_TITLES[value as DocumentStatus];
+      if (value in RESOLUTION_STATUS_TITLES) {
+        return RESOLUTION_STATUS_TITLES[value as keyof typeof RESOLUTION_STATUS_TITLES];
+      }
     }
     if (looksLikeDate(value)) {
       const iso = value.slice(0, 10);
