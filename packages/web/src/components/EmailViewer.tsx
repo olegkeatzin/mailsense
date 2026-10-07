@@ -252,6 +252,8 @@ export default function EmailViewer() {
   const moveSelected = useStore((s) => s.moveSelected);
   const openCompose = useStore((s) => s.openCompose);
   const canJournal = useStore((s) => s.can("journal.view"));
+  /** Право на отправку: без него ответ и пересылка недоступны. */
+  const canSendMail = useStore((s) => s.canSendMail());
   const [activeTab, setActiveTab] = useState("mail");
 
   if (!view) {
@@ -274,13 +276,29 @@ export default function EmailViewer() {
         </Typography.Title>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
           <Tag color={statusColor(view.analysisStatus)}>{statusLabel(view.analysisStatus)}</Tag>
-          <Button size="small" onClick={() => openCompose("reply", view.id)}>
+          {/* Без права mail.send отвечать и пересылать нельзя: кнопки недоступны с подсказкой. */}
+          <Button
+            size="small"
+            disabled={!canSendMail}
+            title={canSendMail ? undefined : "Недостаточно прав для отправки"}
+            onClick={() => openCompose("reply", view.id)}
+          >
             Ответить
           </Button>
-          <Button size="small" onClick={() => openCompose("replyAll", view.id)}>
+          <Button
+            size="small"
+            disabled={!canSendMail}
+            title={canSendMail ? undefined : "Недостаточно прав для отправки"}
+            onClick={() => openCompose("replyAll", view.id)}
+          >
             Ответить всем
           </Button>
-          <Button size="small" onClick={() => openCompose("forward", view.id)}>
+          <Button
+            size="small"
+            disabled={!canSendMail}
+            title={canSendMail ? undefined : "Недостаточно прав для отправки"}
+            onClick={() => openCompose("forward", view.id)}
+          >
             Переслать
           </Button>
           <Button icon={<ThunderboltOutlined />} onClick={() => void analyze(view.id)}>

@@ -30,9 +30,17 @@ export type AppSection =
   | "tasks"
   | "board";
 
-/** Право, без которого раздел бессмысленен. Почта доступна всегда — у неё права нет. */
+/**
+ * Право на почту предприятия (T39). Раздел «Почта» без него не открывается: вместо пустого
+ * списка и 403 в консоли человек видит объяснение и свои личные разделы.
+ */
+export const MAIL_VIEW_PERMISSION: Permission = "mail.view";
+/** Право на отправку и импорт письма (T39). */
+export const MAIL_SEND_PERMISSION: Permission = "mail.send";
+
+/** Право, без которого раздел бессмысленен. */
 export const SECTION_PERMISSIONS: Record<AppSection, Permission | null> = {
-  mail: null,
+  mail: MAIL_VIEW_PERMISSION,
   journal: "journal.view",
   incoming: "journal.register",
   approvals: "resolution.approve",
@@ -147,6 +155,10 @@ interface State extends FilterState {
   login: (login: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   can: (permission: Permission) => boolean;
+  /** Доступна ли почта предприятия (T39/T44): учитывает автономный режим. */
+  canUseMail: () => boolean;
+  /** Можно ли отправлять письма (T39/T44). */
+  canSendMail: () => boolean;
 
   // -------- этап 5: центр уведомлений --------
   /** Загруженные уведомления текущего пользователя (последние сверху — как отдаёт сервер). */
@@ -417,6 +429,25 @@ export const useStore = create<State>()((set, get) => ({
     return !!s.authUser?.permissions.includes(permission);
   },
 
+  /**
+   * Почта: в автономном режиме и без документооборота она работает всегда (это обычный
+   * почтовый клиент), а при включённом документообороте нужен mail.view.
+   * Права берём ровно оттуда же, откуда их берут остальные экраны — из authUser.permissions.
+   */
+  canUseMail: () => {
+    const s = get();
+    if (s.docflowUnavailable) return true;
+    if (!s.authStatus?.docflowEnabled) return true;
+    return !!s.authUser?.permissions.includes(MAIL_VIEW_PERMISSION);
+  },
+
+  canSendMail: () => {
+    const s = get();
+    if (s.docflowUnavailable) return true;
+    if (!s.authStatus?.docflowEnabled) return true;
+    return !!s.authUser?.permissions.includes(MAIL_SEND_PERMISSION);
+  },
+
   loadNotifications: async (opts) => {
     const unreadOnly = !!opts?.unreadOnly;
     const limit = opts?.append ? get().notifications.length + NOTIFICATIONS_PAGE : opts?.limit ?? NOTIFICATIONS_PAGE;
@@ -524,7 +555,9 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   init: async () => {
-    await get().loadAccounts();
+    // Список ящиков закрыт правом mail.view (T39): у остальных запрос отвечал 403 и попадал
+    // в консоль как ошибка. Проверяем право ДО запроса, а не ловим отказ.
+    if (get().canUseMail()) await get().loadAccounts();
     // Настройки ИИ закрыты правом settings.manage: остальным ролям запрос возвращал
     // 403 и попадал в консоль браузера как ошибка.
     if (get().can("settings.manage")) await get().loadAiConfig();
@@ -532,6 +565,7 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   loadAccounts: async () => {
+    if (!get().canUseMail()) return;
     const accounts = await api.accounts();
     set({ accounts });
   },
@@ -545,6 +579,8 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   loadEmails: async () => {
+    // Без права на почту список не запрашиваем вовсе: раньше это давало пустой экран и 403.
+    if (!get().canUseMail()) return;
     // Предыдущий запрос списка больше не нужен: его ответ описывает старый фильтр.
     emailsAbort?.abort();
     const ctrl = new AbortController();
@@ -576,6 +612,9 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   select: async (id: string) => {
+    // Письмо открывается только с правом на почту: исполнитель смотрит письмо-источник
+    // отдельным маршрутом task.view (/api/docflow/tasks/:id/source-email).
+    if (!get().canUseMail()) return;
     emailAbort?.abort();
     const ctrl = new AbortController();
     emailAbort = ctrl;
@@ -594,6 +633,7 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   refreshSelected: async () => {
+    if (!get().canUseMail()) return;
     const id = get().selectedId;
     if (!id) return;
     try {

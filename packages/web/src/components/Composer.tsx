@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Input, Modal, Select, Space, Spin, Switch, Typography, message } from "antd";
 import { DeleteOutlined, PaperClipOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { useStore } from "../store";
+import { applyPersonalSignature, withoutQuote } from "../utils/personalSignature";
+import type { MailProfile } from "../types";
 import { api, attachmentBase64, materializeAttachments, type ComposerAttachment } from "../api";
 import type {
   Account,
@@ -126,16 +128,8 @@ function fallbackTemplate(
 ): ComposeTemplate {
   const accountId = accountFilter ?? accounts[0]?.id ?? "";
   const account = accounts.find((a) => a.id === accountId);
-  const sigText = ((account?.settings?.signature as string) ?? "").trim();
-  const sigRich = ((account?.settings?.signatureHtml as string) ?? "").trim();
-  const delimiter = account?.settings?.signatureDelimiter !== false;
-  const sigHead = '<div class="mailsense-signature">' + (delimiter ? '<div class="mailsense-signature-delim">-- </div>' : "");
-  const sigHtml =
-    sigRich && sigRich !== "<p></p>"
-      ? sigHead + sigRich + "</div>"
-      : sigText
-        ? sigHead + escapeHtml(sigText).replace(/\n/g, "<br>") + "</div>"
-        : "";
+  // Подпись ЯЩИКА здесь НЕ собирается (T36): шаблон запрашивается с useAccountSignature=false,
+  // а личную подпись работника добавляет клиент по профилю.
   const tpl: ComposeTemplate = {
     accountId,
     mode: compose.mode as ComposeMode,
@@ -193,17 +187,16 @@ function fallbackTemplate(
     const when = v.date ? new Date(v.date).toLocaleString("ru-RU") : "";
     const attr = (when ? when + ", " : "") + who + " пишет:";
     const quoted = v.bodyText.split(/\r?\n/).map((l) => "> " + l).join("\n");
-    tpl.bodyText = "\n\n" + attr + "\n" + quoted + (sigText ? "\n\n" + (delimiter ? "-- \n" : "") + sigText : "");
+    tpl.bodyText = "\n\n" + attr + "\n" + quoted;
     tpl.bodyHtml =
       "<p></p>" +
       '<p class="mailsense-attribution">' + escapeHtml(attr) + "</p>" +
       '<blockquote style="border-left:2px solid #d0d0d0;margin:8px 0;padding-left:10px;color:#555">' +
       (v.bodyHtml || "<pre>" + escapeHtml(v.bodyText) + "</pre>") +
-      "</blockquote>" +
-      sigHtml;
+      "</blockquote>";
   } else {
-    tpl.bodyText = sigText ? "\n\n" + (delimiter ? "-- \n" : "") + sigText : "";
-    tpl.bodyHtml = "<p></p>" + sigHtml;
+    tpl.bodyText = "";
+    tpl.bodyHtml = "<p></p>";
   }
   return tpl;
 }
@@ -296,6 +289,8 @@ function ComposerForm({
   const closeCompose = useStore((s) => s.closeCompose);
   const loadEmails = useStore((s) => s.loadEmails);
   const accounts = useStore((s) => s.accounts);
+  /** Право на отправку (T39/T44): без него кнопка недоступна и есть понятный текст. */
+  const canSendMail = useStore((s) => s.canSendMail());
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [accountId, setAccountId] = useState(template.accountId);
@@ -319,7 +314,70 @@ function ComposerForm({
   const draftIdRef = useRef<string | null>(draftId ?? null);
   const lastSnapRef = useRef<string>("");
 
-  const [bodyHtml, setBodyHtml] = useState(template.bodyHtml && template.bodyHtml.trim() ? template.bodyHtml : "<p></p>");
+  /** Тело из шаблона: цитата ответа уже внутри, личную подпись добавляем поверх. */
+  const baseBodyHtml = (t: ComposeTemplate) => (t.bodyHtml && t.bodyHtml.trim() ? t.bodyHtml : "<p></p>");
+
+  const [bodyHtml, setBodyHtml] = useState(() => baseBodyHtml(template));
+  /**
+   * Человек правил тело вручную — тогда подпись насильно не дописываем.
+   * Флаг, а не сравнение строк: редактор нормализует HTML цитаты, и сравнение
+   * «текущее тело равно телу шаблона» ложно срабатывало — из-за этого в ОТВЕТЕ
+   * подпись не появлялась вовсе (гонка D12).
+   */
+  const bodyTouched = useRef(false);
+  /** Для какого шаблона тело уже собрано: повторно не пересобираем. */
+  const composedFor = useRef("");
+  /** Тело собрано хотя бы раз: до этого события редактора — его собственный эхо-ответ. */
+  const composedOnce = useRef(false);
+  /** Что мы сами записали в редактор последним: по нему отличаем эхо от правки человека. */
+  const lastWritten = useRef("");
+  /** Профиль прочитан (успешно или нет) — можно собирать тело. */
+  const [profileReady, setProfileReady] = useState(false);
+  /** Личные настройки работника: имя подписи и сама подпись. */
+  const [profile, setProfile] = useState<MailProfile | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    // Профиль — вспомогательные данные. Если метод недоступен или запрос не прошёл,
+    // окно письма обязано работать как раньше: ничего не подставляем и не падаем.
+    // Promise.resolve() переводит возможную синхронную ошибку в отказ, который ловит catch.
+    Promise.resolve()
+      .then(() => api.mailProfile())
+      .then((p) => {
+        if (alive) setProfile(p);
+      })
+      .catch(() => {
+        if (alive) setProfile(null);
+      })
+      .finally(() => {
+        if (alive) setProfileReady(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  /**
+   * Тело собирается ОДИН раз для текущего шаблона и ТОЛЬКО когда известен профиль:
+   * сначала тело с цитатой (оно приходит из шаблона), затем личная подпись по положению.
+   * Так подпись не может быть затёрта шаблоном ответа и наоборот — «кто последний» не решает.
+   */
+  useEffect(() => {
+    const base = baseBodyHtml(template);
+    const key = template.mode + "|" + (template.inReplyToEmailId ?? "") + "|" + (template.subject ?? "");
+    if (composedFor.current !== key) {
+      // Другой шаблон — другой контекст письма: считаем тело нетронутым.
+      composedFor.current = key;
+      bodyTouched.current = false;
+    }
+    if (!profileReady || bodyTouched.current) return;
+    const next = applyPersonalSignature(withoutQuote(base, profile), profile);
+    lastWritten.current = next;
+    composedOnce.current = true;
+    // Идемпотентно: то же значение не вызовет лишний рендер.
+    setBodyHtml(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileReady, profile, template]);
 
   useEffect(() => {
     if (!accountId) return;
@@ -356,6 +414,18 @@ function ComposerForm({
   // Пустой редактор = только теги/пробелы.
   const isEmptyHtml = !bodyHtml || bodyHtml.replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim() === "";
 
+  /**
+   * Адрес ящика, куда пришло письмо: он же replyTo для ответа (Р19).
+   * Логин ящика может быть не адресом — тогда replyTo не выдумываем.
+   */
+  const sourceMailbox = (() => {
+    // В форме доступен только сам шаблон: его accountId и есть ящик письма (Р19).
+    if (template.mode === "new" || !template.accountId) return "";
+    const account = accounts.find((a) => a.id === template.accountId);
+    const address = (account?.username ?? "").trim();
+    return address.includes("@") ? address : "";
+  })();
+
   /** Поля формы: данных вложений здесь нет — они подставляются в момент отправки. */
   const formState = (): Omit<ComposeInput, "attachments"> => ({
     accountId,
@@ -367,7 +437,11 @@ function ComposerForm({
     bodyHtml: plainTextOnly || isEmptyHtml ? "" : bodyHtml,
     inReplyToEmailId: template.inReplyToEmailId,
     inReplyToMessageId: template.inReplyToMessageId,
-    references: template.references
+    references: template.references,
+    // Имя подписи работника: адрес остаётся адресом ящика, человек подписывается своим именем.
+    fromName: (profile?.displayName ?? "").trim() || undefined,
+    // Ответ возвращается в тот ящик, куда письмо пришло (Р19).
+    replyTo: sourceMailbox || undefined
   });
 
   /**
@@ -503,6 +577,8 @@ function ComposerForm({
   };
 
   const send = async () => {
+    // Отправка закрыта правом mail.send (T39/T44): объясняем, а не молча не отправляем.
+    if (!canSendMail) return message.warning("Недостаточно прав для отправки");
     if (!accountId) return message.warning("Выберите аккаунт");
     if (to.length === 0) return message.warning("Укажите получателя");
     setSending(true);
@@ -573,7 +649,18 @@ function ComposerForm({
         <AddressSelect value={cc} onChange={setCc} placeholder="Копия (Cc) — поиск по каталогу" />
         <AddressSelect value={bcc} onChange={setBcc} placeholder="Скрытая копия (Bcc) — поиск по каталогу" />
         <Input placeholder="Тема" value={subject} onChange={(e) => setSubject(e.target.value)} />
-        <RichTextEditor value={bodyHtml} onChange={setBodyHtml} placeholder="Напишите письмо…" />
+        <RichTextEditor
+          value={bodyHtml}
+          onChange={(html) => {
+            // Редактор на монтировании отдаёт собственную нормализацию тела (tiptap меняет
+            // разметку цитаты) — это не правка человека. Правкой считаем только то,
+            // что отличается от последнего записанного нами тела и приходит ПОСЛЕ сборки.
+            const isEcho = !composedOnce.current || html === lastWritten.current;
+            if (!isEcho) bodyTouched.current = true;
+            setBodyHtml(html);
+          }}
+          placeholder="Напишите письмо…"
+        />
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
             Письмо уходит как HTML с обычной текстовой копией (цитаты — с «&gt;»).
@@ -612,7 +699,14 @@ function ComposerForm({
           </Typography.Text>
         ) : null}
         <Space style={{ marginTop: 8 }}>
-          <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={() => void send()}>
+          <Button
+            type="primary"
+            icon={<SendOutlined />}
+            loading={sending}
+            disabled={!canSendMail}
+            title={canSendMail ? undefined : "Недостаточно прав для отправки"}
+            onClick={() => void send()}
+          >
             Отправить
           </Button>
           <Button icon={<SaveOutlined />} loading={saving} onClick={() => void saveDraft()}>
@@ -660,7 +754,13 @@ export default function Composer() {
       setTemplate(draftToTemplate(compose.draft));
       return;
     }
-    const accountId = accountFilter ?? accounts[0]?.id ?? "";
+    /**
+     * Р19: в ответе ящик берётся из САМОГО письма — ответ внешнему контрагенту уходит
+     * с внешней приёмной, ответ руководителю — с внутренней. Выбранный в списке ящик
+     * для ответа не подставляем: иначе ответ уйдёт не с того адреса.
+     */
+    const sourceAccountId = compose.mode !== "new" && emailView?.accountId ? emailView.accountId : "";
+    const accountId = sourceAccountId || accountFilter || accounts[0]?.id || "";
     let alive = true;
     setTemplate(null);
     const fb = () => {
@@ -671,7 +771,8 @@ export default function Composer() {
       return;
     }
     api
-      .composeTemplate(accountId, compose.mode, compose.emailId)
+      // useAccountSignature=false: подпись ЯЩИКА не подставляется — свою добавит клиент (T36).
+      .composeTemplate(accountId, compose.mode, compose.emailId, { useAccountSignature: false })
       .then((t) => {
         if (alive) setTemplate(t);
       })

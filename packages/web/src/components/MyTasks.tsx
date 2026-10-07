@@ -5,6 +5,8 @@ import dayjs from "dayjs";
 import { resolutionApi } from "../api";
 import { useStore } from "../store";
 import { PRIORITY_TITLES, type TaskItem } from "../resolutionTypes";
+import type { TaskSourceEmail } from "../types";
+import { SafeLetterHtml } from "./SafeLetterHtml";
 import { DeadlineTag } from "./notifications/deadline";
 import { READY_STYLE } from "./notifications/colors";
 import { humanError } from "../utils/humanError";
@@ -19,13 +21,29 @@ import { humanError } from "../utils/humanError";
  * получил документ, а не когда открыл его в последний раз.
  */
 export function MyTasks() {
-  const setSection = useStore((s) => s.setSection);
   const can = useStore((s) => s.can);
-  const select = useStore((s) => s.select);
-  /** Открывает исходное письмо в почтовом разделе — из задачи виден её предмет. */
-  async function openLetter(emailId: string) {
-    setSection("mail");
-    await select(emailId);
+  /**
+   * Письмо-источник (T41): открывается ПОРУЧЕНИЕМ, а не почтовым разделом.
+   * У исполнителя нет права mail.view, поэтому общий почтовый экран ему закрыт,
+   * но предмет поручения он видеть обязан — сервер отдаёт урезанный вид письма.
+   */
+  const [sourceOpen, setSourceOpen] = useState(false);
+  const [sourceLetter, setSourceLetter] = useState<TaskSourceEmail | null>(null);
+  const [sourceLoading, setSourceLoading] = useState(false);
+  const [sourceError, setSourceError] = useState("");
+
+  async function openSourceLetter(resolutionId: string) {
+    setSourceOpen(true);
+    setSourceLoading(true);
+    setSourceError("");
+    setSourceLetter(null);
+    try {
+      setSourceLetter(await resolutionApi.sourceEmail(resolutionId));
+    } catch (e) {
+      setSourceError(humanError(e));
+    } finally {
+      setSourceLoading(false);
+    }
   }
 
   const [items, setItems] = useState<TaskItem[]>([]);
@@ -90,7 +108,7 @@ export function MyTasks() {
       render: (_v, r) =>
         r.emailId ? (
           // Поручение без предмета бесполезно: исполнитель должен видеть само письмо.
-          <Button size="small" type="link" onClick={() => void openLetter(r.emailId!)}>
+          <Button size="small" type="link" onClick={() => void openSourceLetter(r.resolutionId)}>
             Письмо
           </Button>
         ) : (
@@ -230,6 +248,38 @@ export function MyTasks() {
         <div style={{ color: "#595959", fontSize: 12, marginTop: 8 }}>
           Отчёт увидят аппарат и руководитель. Когда отчитается ответственный, поручение закроется.
         </div>
+      </Modal>
+
+      {/* Письмо-источник: то же письмо, но по маршруту поручения — без доступа к почте. */}
+      <Modal
+        open={sourceOpen}
+        title={sourceLetter?.subject || "Письмо-источник"}
+        footer={null}
+        width={720}
+        onCancel={() => setSourceOpen(false)}
+      >
+        {sourceLoading ? <Spin /> : null}
+        {sourceError ? <Alert type="error" showIcon message={sourceError} /> : null}
+        {sourceLetter ? (
+          <div>
+            <div style={{ color: "#595959", fontSize: 12, marginBottom: 8 }}>
+              От: {(sourceLetter.from?.name || sourceLetter.from?.address) ?? "не указан"} ·{" "}
+              {sourceLetter.date ? dayjs(sourceLetter.date).format("DD.MM.YYYY HH:mm") : "без даты"}
+            </div>
+            {sourceLetter.bodyHtml ? (
+              <SafeLetterHtml html={sourceLetter.bodyHtml} />
+            ) : (
+              <div style={{ whiteSpace: "pre-wrap" }}>{sourceLetter.bodyText}</div>
+            )}
+            {sourceLetter.attachments.length ? (
+              <div style={{ marginTop: 12 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                  Вложения: {sourceLetter.attachments.map((a) => a.filename).join(", ")}
+                </Typography.Text>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </Modal>
 
       <div style={{ marginTop: 12, fontSize: 12, color: "#595959" }}>

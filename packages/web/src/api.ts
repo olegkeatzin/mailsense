@@ -20,7 +20,10 @@ import type {
   EmailView,
   IncomingItem,
   JournalFilter,
+  TaskSourceEmail,
   LdapSettings,
+  MailProfile,
+  MailProfilePatch,
   MailSortRule,
   MailSortRuleInput,
   NotificationSettings,
@@ -141,11 +144,22 @@ export const api = {
   emails: (filter: EmailFilter = {}, init?: RequestInit) =>
     request<Email[]>("/api/emails" + withQuery(emailQuery(filter)), init),
   email: (id: string, init?: RequestInit) => request<EmailView>("/api/emails/" + id, init),
-  composeTemplate: (accountId: string, mode: string, emailId?: string | null) => {
+  composeTemplate: (
+    accountId: string,
+    mode: string,
+    emailId?: string | null,
+    opts?: { useAccountSignature?: boolean }
+  ) => {
     const params = new URLSearchParams({ accountId, mode });
     if (emailId) params.set("emailId", emailId);
+    // T36: подпись ЯЩИКА не подставляется — свою подпись добавляет клиент из профиля.
+    if (opts?.useAccountSignature === false) params.set("useAccountSignature", "0");
     return request<ComposeTemplate>("/api/compose-template?" + params.toString());
   },
+  /** Личные настройки почты работника (локальный профиль): имя подписи и сама подпись. */
+  mailProfile: () => request<MailProfile>("/api/mail-profile"),
+  saveMailProfile: (patch: MailProfilePatch) =>
+    request<MailProfile>("/api/mail-profile", { method: "PUT", body: JSON.stringify(patch) }),
   threads: (filter: EmailFilter = {}, init?: RequestInit) =>
     request<ThreadGroup[]>("/api/threads" + withQuery(emailQuery(filter)), init),
   setFolder: (id: string, folder: string) =>
@@ -427,6 +441,24 @@ export const api = {
  * исполнитель получает задачу. Сервер проверяет права независимо — здесь только удобство.
  */
 export const resolutionApi = {
+  /**
+   * Письмо-источник поручения (T41). Доступно УЧАСТНИКУ поручения по праву task.view,
+   * даже если права на почту у него нет: исполнитель обязан видеть предмет поручения.
+   */
+  sourceEmail(resolutionId: string) {
+    return request<TaskSourceEmail>("/api/docflow/tasks/" + encodeURIComponent(resolutionId) + "/source-email");
+  },
+
+  /** Ссылка на вложение письма-источника: сервер проверит связь с поручением. */
+  sourceEmailAttachmentUrl(resolutionId: string, attachmentId: string) {
+    return (
+      "/api/docflow/tasks/" +
+      encodeURIComponent(resolutionId) +
+      "/source-email/attachments/" +
+      encodeURIComponent(attachmentId)
+    );
+  },
+
   /** ИИ предлагает текст черновика по письму-источнику документа. */
   draft(documentId: string) {
     return request<{ text: string; attachments: number; reason?: string }>("/api/docflow/resolutions/draft", {

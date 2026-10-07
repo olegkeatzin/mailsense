@@ -10,7 +10,9 @@ jest.mock("../api", () => ({
     aiConfig: jest.fn(),
     promptConfig: jest.fn(),
     templates: jest.fn(),
-    directoryStatus: jest.fn()
+    directoryStatus: jest.fn(),
+    testAi: jest.fn(),
+    fetchAccount: jest.fn()
   },
   resolutionApi: { deadlinePresets: jest.fn().mockResolvedValue({ items: [] }) },
   notificationApi: { sortRules: jest.fn(), settings: jest.fn() }
@@ -43,6 +45,12 @@ describe("настройки: «Общие» не пишут ключи доку
     jest.clearAllMocks();
     (api.settings as jest.Mock).mockResolvedValue({ auto_fetch: "true", auto_analyze: "true" });
     (api.saveSetting as jest.Mock).mockResolvedValue({});
+    // Реализации задаём здесь, а не в фабрике мока: restoreMocks стирает заданное в фабрике,
+    // и метод возвращал undefined — на этом падала кнопка «Проверить» в «Почте».
+    (api.fetchAccount as jest.Mock).mockResolvedValue({});
+    // Вкладка «ИИ» при открытии читает подсказки промптов и список моделей.
+    (api.promptConfig as jest.Mock).mockResolvedValue({});
+    (api.testAi as jest.Mock).mockResolvedValue({ ok: true, models: [] });
     (api.accounts as jest.Mock).mockResolvedValue([{ id: "acc-1", username: "post@mail.test" }]);
     useStore.setState({
       ...initial,
@@ -79,5 +87,34 @@ describe("настройки: «Общие» не пишут ключи доку
     fireEvent.click(switches[0]);
 
     await waitFor(() => expect(api.saveSetting).toHaveBeenCalledWith("auto_fetch", "false"));
+  });
+
+  /**
+   * T39: у рядового пользователя настройки отвечают 403. Раньше вызов шёл БЕЗ catch —
+   * отказ оставался необработанным промисом в консоли, а вкладка молчала. Теперь
+   * человек видит объяснение, а консоль чистая.
+   */
+  it("отказ 403 на настройках: понятный текст вместо необработанного отказа", async () => {
+    (api.settings as jest.Mock).mockRejectedValue(new Error("403 Forbidden"));
+    render(<SettingsModal />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Общие" }));
+
+    expect(await screen.findByText(/Недостаточно прав/)).not.toBeNull();
+    expect(screen.getByText(/403 Forbidden/)).not.toBeNull();
+    // Ничего не записали: без права настройки не меняются.
+    expect((api.saveSetting as jest.Mock).mock.calls).toEqual([]);
+  });
+
+  it("отказ при сохранении настройки объясняется, а не глотается", async () => {
+    (api.saveSetting as jest.Mock).mockRejectedValue(new Error("403 Forbidden"));
+    render(<SettingsModal />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: "Общие" }));
+    const switches = await screen.findAllByRole("switch");
+    fireEvent.click(switches[0]);
+
+    // message.error рисуется порталом в document.body — ищем по всему телу документа.
+    await waitFor(() => expect((document.body.textContent ?? "").match(/Недостаточно прав/)).not.toBeNull());
   });
 });

@@ -58,6 +58,51 @@ export interface AccountInput {
   smtpAuthType?: AuthType | null;
 }
 
+/**
+ * Письмо-источник поручения (T41): урезанный вид письма для исполнителя,
+ * у которого нет права mail.view. Ни ящика, ни папок, ни путей к файлам сервер не отдаёт.
+ */
+export interface TaskSourceEmail {
+  resolutionId: string;
+  emailId: string;
+  subject: string;
+  from: EmailAddress | null;
+  to: EmailAddress[];
+  cc: EmailAddress[];
+  date: string;
+  bodyText: string;
+  bodyHtml: string | null;
+  attachments: Array<{ id: string; filename: string; mimeType: string; size: number }>;
+}
+
+/**
+ * Личные настройки почты работника (локальный профиль, только свои данные).
+ *
+ * Имя подписи (displayName) уходит в письмо как fromName: адрес остаётся адресом ящика,
+ * а человек подписывается своим именем. Подпись ЯЩИКА при этом не подставляется —
+ * шаблон запрашивается с useAccountSignature=false, тело дополняет клиент.
+ */
+export interface MailProfile {
+  /** Ключ профиля — логин работника (сервер знает его сам). */
+  userId: string;
+  displayName: string;
+  signatureText: string;
+  /** false — подпись выключена (это НЕ «профиль не заполнен»). */
+  signatureEnabled: boolean;
+  /** above — до цитаты, below — после неё. */
+  signaturePosition: "above" | "below";
+  /** Включать ли цитату в ответ. */
+  replyQuote: boolean;
+  /** Язык строки атрибуции перед цитатой. */
+  replyAttribution: "ru" | "en";
+  updatedAt: string | null;
+}
+
+/** Частичная правка профиля: отправляем только изменённые поля (userId/updatedAt не правим). */
+export type MailProfilePatch = Partial<
+  Pick<MailProfile, "displayName" | "signatureText" | "signatureEnabled" | "signaturePosition" | "replyQuote" | "replyAttribution">
+>;
+
 export interface Email {
   id: string;
   accountId: string;
@@ -148,6 +193,16 @@ export interface ComposeInput {
   inReplyToEmailId?: string | null;
   inReplyToMessageId?: string | null;
   references?: string[];
+  /**
+   * Отображаемое имя отправителя (Т36): берётся из личного профиля работника.
+   * Это ТОЛЬКО имя — адрес всегда адрес ящика accountId, подменить его телом нельзя.
+   */
+  fromName?: string;
+  /**
+   * Адрес для ответа (Р19): у ответа — адрес ящика, куда пришло письмо.
+   * Ядро проверяет формат и отклоняет некорректный.
+   */
+  replyTo?: string;
 }
 
 /**
@@ -291,7 +346,11 @@ export type Permission =
   | "notifications.view"
   | "users.manage"
   | "settings.manage"
-  | "audit.view";
+  | "audit.view"
+  /** Почта предприятия (T39): чтение писем, ящиков, тредов, анализа. */
+  | "mail.view"
+  /** Отправка и импорт письма. */
+  | "mail.send";
 
 export interface Role {
   id: string;

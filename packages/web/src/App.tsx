@@ -17,6 +17,7 @@ import { createProgressPoller, type ProgressPoller } from "./utils/progressPolli
 import AccountSidebar from "./components/AccountSidebar";
 import { ApprovalList } from "./components/ApprovalList";
 import IncomingList from "./components/IncomingList";
+import { MailUnavailable } from "./components/MailUnavailable";
 import { MyTasks } from "./components/MyTasks";
 import { ResolutionBoard } from "./components/ResolutionBoard";
 import Journal from "./components/Journal";
@@ -188,6 +189,9 @@ export default function App() {
   const threadView = useStore((s) => s.threadView);
   const setThreadView = useStore((s) => s.setThreadView);
   const section = useStore((s) => s.section);
+  // Почта предприятия закрыта правом mail.view (T39/T44). В автономном режиме доступна всегда.
+  const mailAvailable = useStore((s) => s.canUseMail());
+  const mailSendAllowed = useStore((s) => s.canSendMail());
 
   const [collapsed, setCollapsed] = useState(false);
   const [listWidth, setListWidth] = useState(360);
@@ -216,6 +220,8 @@ export default function App() {
     const t = setInterval(() => {
       if (document.hidden) return;
       if (useStore.getState().section !== "mail") return;
+      // Без права на почту фоновое обновление только зря дёргало бы сервер и давало 403.
+      if (!useStore.getState().canUseMail()) return;
       void useStore.getState().loadEmails();
       void useStore.getState().refreshSelected();
     }, 4000);
@@ -332,7 +338,8 @@ export default function App() {
                     : "Входящие на регистрацию"}
             </Typography.Text>
           )}
-          {section === "mail" && (
+          {section === "mail" && !mailAvailable && <MailUnavailable />}
+          {section === "mail" && mailAvailable && (
             <>
               <Typography.Text strong style={{ marginRight: 8, whiteSpace: "nowrap" }}>
                 {folder === "INBOX"
@@ -343,7 +350,13 @@ export default function App() {
                       ? "Спам"
                       : "Обработанные"}
               </Typography.Text>
-          <Button type="primary" icon={<EditOutlined />} onClick={() => openCompose("new")}>
+          <Button
+            type="primary"
+            icon={<EditOutlined />}
+            disabled={!mailSendAllowed}
+            title={mailSendAllowed ? undefined : "Недостаточно прав для отправки"}
+            onClick={() => openCompose("new")}
+          >
             Написать
           </Button>
           <DraftsButton />

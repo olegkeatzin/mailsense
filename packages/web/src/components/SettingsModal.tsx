@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { loadAiModelList } from "../utils/aiModels";
 import {
   Alert,
   AutoComplete,
@@ -29,6 +30,8 @@ import AuditTab from "./AuditTab";
 import NumberingTab from "./NumberingTab";
 import { SortingRulesTab } from "./sorting/SortingRulesTab";
 import { ServiceAccountAdmin } from "./ServiceAccountAdmin";
+import { MailProfileTab } from "./MailProfileTab";
+import { ServerAddressCard } from "./ServerAddressCard";
 import { NotificationsTab } from "./sorting/NotificationsTab";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, Template } from "../types";
 import { humanError } from "../utils/humanError";
@@ -407,11 +410,9 @@ function AiTab() {
       .catch(() => setPrompts(null)); // промпты недоступны — не оставляем необработанный отказ
   }, []);
 
-  const loadModelList = async (url: string, apiKey: string): Promise<string[]> => {
-    if (!url) return [];
-    const r = await api.testAi({ baseUrl: url, apiKey });
-    return r.ok ? r.models ?? [] : [];
-  };
+  // Логика отказа живёт в utils/aiModels.ts и покрыта тестом: отказ — пустой список.
+  const loadModelList = (url: string, apiKey: string): Promise<string[]> =>
+    loadAiModelList((args) => api.testAi(args), url, apiKey);
 
   // Подтягиваем списки моделей для основного и OCR-эндпоинтов при открытии настроек.
   useEffect(() => {
@@ -606,19 +607,39 @@ function AiTab() {
 
 function GeneralTab() {
   const [settings, setSettings] = useState<Record<string, string>>({});
+  /** Настройки не удалось получить (например, нет права): говорим об этом, а не молчим отказом. */
+  const [loadError, setLoadError] = useState("");
 
   useEffect(() => {
-    void api.settings().then(setSettings);
+    let alive = true;
+    api
+      .settings()
+      .then((s) => {
+        if (alive) setSettings(s);
+      })
+      .catch((e) => {
+        // Без catch отказ оставался необработанным промисом в консоли (уже обжигались на /api/ai/config).
+        if (alive) setLoadError(humanError(e));
+      });
+    return () => {
+      alive = false;
+    };
   }, []);
 
   const save = async (k: string, v: string | number | boolean) => {
-    await api.saveSetting(k, String(v));
-    setSettings(await api.settings());
-    message.success("Сохранено");
+    try {
+      await api.saveSetting(k, String(v));
+      setSettings(await api.settings());
+      message.success("Сохранено");
+    } catch (e) {
+      // Права или сеть: человеку объяснение, консоли — тишина.
+      message.error(humanError(e));
+    }
   };
 
   return (
     <div>
+      {loadError ? <Alert type="error" showIcon message={loadError} style={{ marginBottom: 12 }} /> : null}
       <Space direction="vertical" size="large">
         <div>
           <Typography.Text>Автоматическая проверка новой почты</Typography.Text>
@@ -1059,8 +1080,11 @@ export default function SettingsModal() {
   const open = useStore((s) => s.settingsOpen);
   const setOpen = useStore((s) => s.setSettingsOpen);
   const can = useStore((s) => s.can);
+  // Почта предприятия закрыта правом mail.view (T39/T44): без него стартовая вкладка —
+  // личные настройки, иначе открывалась «Почта» с запросом списка ящиков и 403 в консоли.
+  const canUseMail = useStore((s) => s.canUseMail());
   const [reloadKey, setReloadKey] = useState(0);
-  const [activeTab, setActiveTab] = useState("mail");
+  const [activeTab, setActiveTab] = useState(canUseMail ? "mail" : "profile");
   // Вкладки администрирования документооборот видны только тем, кто может управлять пользователями.
   const canManageUsers = can("users.manage");
   /** Настройки сервера (ИИ, «Общие») — тоже администраторские. */
@@ -1086,7 +1110,14 @@ export default function SettingsModal() {
         activeKey={activeTab}
         onChange={setActiveTab}
         items={[
-          { key: "mail", label: "Почта", children: <AccountTab /> },
+          // Вкладка «Почта» читает список ящиков — показываем её только с правом mail.view.
+          ...(canUseMail ? [{ key: "mail", label: "Почта", children: <AccountTab /> }] : []),
+          // Личные настройки: свои данные, поэтому доступны ЛЮБОМУ вошедшему (не settings.manage).
+          { key: "profile", label: "Личные настройки", children: <MailProfileTab key={reloadKey} /> },
+          // Адрес сервера — личная настройка работника (Р21): файл предприятия выше и не
+          // редактируется, а свой адрес человек задаёт сам. Поэтому вкладка доступна всем,
+          // а администрирование документооборота осталось у администраторов ниже.
+          { key: "connection", label: "Подключение", children: <ServerAddressCard key={reloadKey} /> },
           ...(canManageUsers
             ? [
                 { key: "users", label: "Пользователи и роли", children: <UsersTab key={reloadKey} /> },

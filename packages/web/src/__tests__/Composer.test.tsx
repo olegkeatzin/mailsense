@@ -23,7 +23,9 @@ jest.mock("../api", () => {
       updateDraft: jest.fn(),
       deleteDraft: jest.fn(),
       createTemplate: jest.fn(),
-      searchContacts: jest.fn()
+      searchContacts: jest.fn(),
+      // Личный профиль: в этих тестах он пуст — подпись не подставляется.
+      mailProfile: jest.fn()
     }
   };
 });
@@ -63,6 +65,12 @@ const forwardTemplate = {
   ]
 } as unknown as ComposeTemplate;
 
+/**
+ * Тяжёлые тесты окна письма: модалка, редактор и сборка вложений в jsdom занимают
+ * секунды, а на загруженной машине не укладывались в 20-30 с — падали по ТАЙМАУТУ,
+ * а не по проверке. Лимиты подняты, проверки те же; ожиданиям текста задан свой timeout.
+ */
+jest.setTimeout(60000);
 describe("Composer: вложение пересылки не теряется", () => {
   beforeAll(installDomEnvironment);
 
@@ -79,6 +87,16 @@ describe("Composer: вложение пересылки не теряется", 
     (api.templates as jest.Mock).mockResolvedValue([]);
     (api.emails as jest.Mock).mockResolvedValue([]);
     (api.sendEmail as jest.Mock).mockResolvedValue({ emailId: "sent-1", messageId: "<m@test>" });
+    (api.mailProfile as jest.Mock).mockResolvedValue({
+      userId: "u-1",
+      displayName: "",
+      signatureText: "",
+      signatureEnabled: true,
+      signaturePosition: "below",
+      replyQuote: true,
+      replyAttribution: "ru",
+      updatedAt: null
+    });
     (attachmentBase64 as jest.Mock).mockResolvedValue("BASE64-ФАЙЛА");
   });
 
@@ -90,7 +108,8 @@ describe("Composer: вложение пересылки не теряется", 
 
   it("на отправку вложение уходит С ДАННЫМИ, а не одним именем", async () => {
     render(<Composer />);
-    await screen.findByText("приказ №1 (кириллица).pdf");
+    // Явный timeout: на загруженной машине отрисовка вложений не успевает за секунду.
+    await screen.findByText("приказ №1 (кириллица).pdf", {}, { timeout: 20000 });
 
     fireEvent.click(screen.getByRole("button", { name: /Отправить/ }));
 
@@ -109,7 +128,8 @@ describe("Composer: вложение пересылки не теряется", 
   it("если файл не удалось достать — письмо НЕ отправляется без вложения", async () => {
     (attachmentBase64 as jest.Mock).mockRejectedValue(new Error("файл недоступен"));
     render(<Composer />);
-    await screen.findByText("приказ №1 (кириллица).pdf");
+    // Явный timeout: на загруженной машине отрисовка вложений не успевает за секунду.
+    await screen.findByText("приказ №1 (кириллица).pdf", {}, { timeout: 20000 });
 
     fireEvent.click(screen.getByRole("button", { name: /Отправить/ }));
 
