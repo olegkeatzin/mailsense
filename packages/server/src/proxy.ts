@@ -12,7 +12,6 @@ import { pipeline } from "node:stream/promises";
  * без SameSite=None и HTTPS.
  */
 
-/** Префиксы, которые обслуживает сервер документооборота. */
 /**
  * Пути, которые обслуживает сервер документооборота.
  *
@@ -32,6 +31,37 @@ const DOCFLOW_PREFIXES = [
   "/api/contacts"
 ];
 
+/**
+ * Почтовые пути, которые в режиме клиента тоже обслуживает сервер (task-22, план Т1).
+ *
+ * Вариант А: почта живёт НА СЕРВЕРЕ — там служебные ящики аппарата (внешний приёмный и
+ * внутренний делопроизводственный). Без этих префиксов аппарат видел очередь писем
+ * с сервера, но не мог открыть само письмо: оно «локальное», а локальная база пуста.
+ *
+ * ⚠️ Локально остаются ТОЛЬКО личные вещи работника: `/api/drafts`, `/api/templates`
+ * и профиль почты `/api/mail-profile` (его вводит Т2). Список ведётся перечислением, а не
+ * «всё остальное»: новый личный путь обязан появиться здесь явно, иначе он молча уедет
+ * на сервер, а личные данные работника уезжать не должны.
+ */
+const MAIL_PREFIXES = [
+  // Список и карточка письма, вложения, отправка, смена папки.
+  "/api/emails",
+  // Ящики предприятия (служебные): их заводит и настраивает администратор.
+  "/api/accounts",
+  "/api/threads",
+  "/api/analysis",
+  "/api/import",
+  // Шаблон письма строится из серверного ящика (подпись, цитирование) — значит сервер.
+  "/api/compose-template",
+  // Настройки предприятия целиком: дробить /api/settings решено НЕ (решение Lead'а).
+  "/api/settings",
+  // Модель, ключ и промпты — настройки предприятия, а не личные.
+  "/api/ai"
+];
+
+/** Всё, что в режиме клиента уходит на сервер: СЭД + почта. */
+const REMOTE_PREFIXES = [...DOCFLOW_PREFIXES, ...MAIL_PREFIXES];
+
 /** Заголовки, которые нельзя переносить в обе стороны. */
 const HOP_BY_HOP = new Set([
   "host",
@@ -46,8 +76,9 @@ const HOP_BY_HOP = new Set([
   "trailer"
 ]);
 
-export function isDocflowPath(path: string): boolean {
-  return DOCFLOW_PREFIXES.some((p) => path === p || path.startsWith(p + "/"));
+/** Обслуживает ли путь удалённый сервер (в режиме клиента) — или он локальный. */
+export function isProxiedPath(path: string): boolean {
+  return REMOTE_PREFIXES.some((p) => path === p || path.startsWith(p + "/"));
 }
 
 export interface ProxyOptions {
@@ -65,7 +96,7 @@ export function createDocflowProxy(options: ProxyOptions) {
     res: express.Response,
     next: express.NextFunction
   ): Promise<void> {
-    if (!isDocflowPath(req.path)) return next();
+    if (!isProxiedPath(req.path)) return next();
 
     const headers = new Headers();
     for (const [key, value] of Object.entries(req.headers)) {

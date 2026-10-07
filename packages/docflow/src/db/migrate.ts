@@ -438,6 +438,55 @@ INSERT INTO notification_templates (key, title, body) VALUES
   ('resolution.overdue', 'Просрочено: {regNumber}', 'Поручение: {text}. Срок был {deadline}.'),
   ('resolution.overdue_escalation', 'Просрочено у исполнителя: {regNumber}', 'Поручение: {text}. Срок был {deadline}.')
 ON CONFLICT (key) DO NOTHING;`
+  },
+  {
+    // Номер сверен с docflow_migrations ЖИВОЙ (mailsense) и ТЕСТОВОЙ (mailsense_test) баз:
+    // в обеих 1..7, значит свободен 8.
+    version: 8,
+    name: "user_activity_stats",
+    sql: `-- Производная агрегация «профиль исполнителя» (task-18): данные под БУДУЩУЮ подсказку
+-- исполнителей. Сама подсказка не реализована (граф знаний — после 0.1.4).
+--
+-- Это ПРОИЗВОДНЫЕ данные: сырые таблицы (documents, resolutions, resolution_assignees,
+-- users) только читаются, результат складывается сюда. Одна строка на пользователя,
+-- чтобы пересчёт был идемпотентным: строка заменяется целиком в одной транзакции,
+-- а raw_fingerprint позволяет вообще не переписывать её, если сырьё не изменилось.
+CREATE TABLE IF NOT EXISTS user_activity_stats (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  documents_registered INTEGER NOT NULL DEFAULT 0,
+  tasks_assigned INTEGER NOT NULL DEFAULT 0,
+  tasks_reported INTEGER NOT NULL DEFAULT 0,
+  tasks_open INTEGER NOT NULL DEFAULT 0,
+  tasks_overdue INTEGER NOT NULL DEFAULT 0,
+  resolutions_prepared INTEGER NOT NULL DEFAULT 0,
+  resolutions_approved INTEGER NOT NULL DEFAULT 0,
+  resolutions_dispatched INTEGER NOT NULL DEFAULT 0,
+  avg_execution_days DOUBLE PRECISION,
+  -- Топы: только счётчики и названия/имена/теги, без текстов писем и адресов (приватность).
+  correspondence_orgs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  top_tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  top_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+  request_departments JSONB NOT NULL DEFAULT '[]'::jsonb,
+  authors JSONB NOT NULL DEFAULT '[]'::jsonb,
+  raw_fingerprint TEXT NOT NULL DEFAULT '',
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Месячная разбивка: «какие письма человек получает по месяцам» — то, из чего потом
+-- собирается краткое описание профиля для графа знаний.
+CREATE TABLE IF NOT EXISTS user_activity_stats_monthly (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  period TEXT NOT NULL,
+  documents_registered INTEGER NOT NULL DEFAULT 0,
+  tasks_assigned INTEGER NOT NULL DEFAULT 0,
+  tasks_reported INTEGER NOT NULL DEFAULT 0,
+  correspondence_orgs JSONB NOT NULL DEFAULT '[]'::jsonb,
+  top_tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  top_categories JSONB NOT NULL DEFAULT '[]'::jsonb,
+  computed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, period)
+);
+CREATE INDEX IF NOT EXISTS user_activity_stats_monthly_period_idx ON user_activity_stats_monthly(period);`
   }
 ];
 

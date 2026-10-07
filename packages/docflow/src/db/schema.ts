@@ -1,8 +1,10 @@
 import { desc, sql } from "drizzle-orm";
 import {
   boolean,
+  doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   text,
@@ -418,6 +420,62 @@ export const mailSortRules = pgTable("mail_sort_rules", {
   updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow()
 });
 
+/** Топ-значение агрегата: название организации, тег, категория, подразделение. */
+export type StatsCountedValue = { value: string; count: number };
+export type StatsOrgValue = { name: string; count: number };
+export type StatsDepartmentValue = { department: string; count: number };
+export type StatsAuthorValue = { userId: string; name: string; count: number };
+
+/**
+ * Агрегат «профиль исполнителя» (task-18). Производные данные под будущую подсказку
+ * исполнителей: сырьё только читается, здесь лежит результат пересчёта.
+ * Одна строка на пользователя — так пересчёт заменяет её целиком и не удваивается.
+ */
+export const userActivityStats = pgTable("user_activity_stats", {
+  userId: text("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  documentsRegistered: integer("documents_registered").notNull().default(0),
+  tasksAssigned: integer("tasks_assigned").notNull().default(0),
+  tasksReported: integer("tasks_reported").notNull().default(0),
+  tasksOpen: integer("tasks_open").notNull().default(0),
+  tasksOverdue: integer("tasks_overdue").notNull().default(0),
+  resolutionsPrepared: integer("resolutions_prepared").notNull().default(0),
+  resolutionsApproved: integer("resolutions_approved").notNull().default(0),
+  resolutionsDispatched: integer("resolutions_dispatched").notNull().default(0),
+  avgExecutionDays: doublePrecision("avg_execution_days"),
+  correspondenceOrgs: jsonb("correspondence_orgs").$type<StatsOrgValue[]>().notNull().default([]),
+  topTags: jsonb("top_tags").$type<StatsCountedValue[]>().notNull().default([]),
+  topCategories: jsonb("top_categories").$type<StatsCountedValue[]>().notNull().default([]),
+  requestDepartments: jsonb("request_departments").$type<StatsDepartmentValue[]>().notNull().default([]),
+  authors: jsonb("authors").$type<StatsAuthorValue[]>().notNull().default([]),
+  /** Хеш сырых входов: совпал — строку не переписываем вообще. */
+  rawFingerprint: text("raw_fingerprint").notNull().default(""),
+  computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow()
+});
+
+/** Месячная разбивка агрегата: (пользователь, месяц) — первичный ключ. */
+export const userActivityStatsMonthly = pgTable(
+  "user_activity_stats_monthly",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    period: text("period").notNull(),
+    documentsRegistered: integer("documents_registered").notNull().default(0),
+    tasksAssigned: integer("tasks_assigned").notNull().default(0),
+    tasksReported: integer("tasks_reported").notNull().default(0),
+    correspondenceOrgs: jsonb("correspondence_orgs").$type<StatsOrgValue[]>().notNull().default([]),
+    topTags: jsonb("top_tags").$type<StatsCountedValue[]>().notNull().default([]),
+    topCategories: jsonb("top_categories").$type<StatsCountedValue[]>().notNull().default([]),
+    computedAt: timestamp("computed_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.period] }),
+    periodIdx: index("user_activity_stats_monthly_period_idx").on(t.period)
+  })
+);
+
 export const docflowSchema = {
   users,
   roles,
@@ -439,7 +497,9 @@ export const docflowSchema = {
   resolutionApprovals,
   notifications,
   notificationTemplates,
-  mailSortRules
+  mailSortRules,
+  userActivityStats,
+  userActivityStatsMonthly
 };
 
 export type DbUsers = typeof users.$inferSelect;

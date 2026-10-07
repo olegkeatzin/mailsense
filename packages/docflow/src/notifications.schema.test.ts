@@ -74,8 +74,12 @@ afterAll(async () => {
 });
 
 describe("миграция v7: таблицы этапа 5", () => {
-  test("свободный номер — 7, и он последний", () => {
-    expect(Math.max(...docflowMigrations.map((m) => m.version))).toBe(7);
+  test("миграция v7 на месте, нумерация непрерывна", () => {
+    const versions = docflowMigrations.map((m) => m.version);
+    // «Последняя» здесь не проверяется: на момент этапа 5 номер 7 был свободен,
+    // следом идут миграции следующих этапов — важно, что 7 в цепочке и нет дыр.
+    expect(versions).toContain(7);
+    expect(versions).toEqual(versions.map((_, i) => i + 1));
   });
 
   test("все три таблицы существуют", async () => {

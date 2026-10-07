@@ -281,3 +281,24 @@ describe("параметры для подсказки аппарату: пар�
     expect(JSON.stringify(view)).toContain("<b>логин</b>");
   });
 });
+
+describe("роль «приём» не требует SMTP (найдено при живом прогоне T25)", () => {
+  test("внешняя приёмная без SMTP — это НЕ проблема: принимать почту SMTP не нужен", () => {
+    // Ящик user2@mail.test на стенде без smtp_host. Для ОТПРАВКИ это блокер,
+    // для ПРИЁМА — норма: письма приходят по IMAP/POP3.
+    const view = serviceAccountView(account({ smtpHost: null }), { configuredId: "acc-1", requiresSmtp: false });
+
+    expect(view.problem).toBeNull();
+    expect(view.problemCode).toBe("ok");
+    // Поля про SMTP остаются в ответе — просто как справка, а не как проблема.
+    expect(view.account?.smtpConfigured).toBe(false);
+    expect(view.account?.smtpHostConfigured).toBe(false);
+  });
+
+  test("для роли отправки та же почта без SMTP — по-прежнему проблема", () => {
+    const view = serviceAccountView(account({ smtpHost: null }), { configuredId: "acc-1" });
+
+    expect(view.problemCode).toBe("smtp_not_configured");
+    expect(String(view.problem)).toContain("SMTP");
+  });
+});

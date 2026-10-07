@@ -451,6 +451,20 @@ const CASES: RouteCase[] = [
     path: "/api/docflow/service-account",
     body: { accountId: "acc-1" },
     allowed: ["admin"]
+  },
+  {
+    // Агрегат «профиль исполнителя» — производные данные о людях: только администратор.
+    what: "GET /api/docflow/stats — агрегат профилей исполнителей только администратор",
+    method: "GET",
+    path: "/api/docflow/stats",
+    allowed: ["admin"]
+  },
+  {
+    what: "POST /api/docflow/stats/recompute — пересчёт агрегата только администратор",
+    method: "POST",
+    path: "/api/docflow/stats/recompute",
+    body: {},
+    allowed: ["admin"]
   }
 ];
 

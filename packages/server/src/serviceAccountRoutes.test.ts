@@ -60,7 +60,9 @@ beforeEach(() => {
   mockedCore.listAccounts.mockReturnValue([account()]);
   mockedCore.getSettingValue.mockReturnValue(null);
   mockedDocflow.getServiceAccountState.mockResolvedValue({ explicit: true, accountId: "acc-1" });
+  mockedDocflow.getExternalAccountState.mockResolvedValue({ explicit: false, accountId: null });
   mockedDocflow.setServiceAccountId.mockResolvedValue("acc-1");
+  mockedDocflow.setServiceAccounts.mockResolvedValue({ internal: "acc-1", external: null });
   mockedDocflow.getDocument.mockResolvedValue({ id: "doc-1", regNumber: "вх1", emailId: null });
   mockedDocflow.getResolutionDetail.mockResolvedValue({
     id: "res-1",
@@ -158,12 +160,21 @@ describe("выбор служебного ящика сохраняется с �
     });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, accountId: "acc-1" });
-    expect(mockedDocflow.setServiceAccountId).toHaveBeenCalledWith("acc-1", expect.objectContaining({ id: "u-admin" }));
+    // PUT возвращает тот же shape, что GET, плюс подтверждение записи: перечитывать не нужно.
+    expect(res.body).toMatchObject({ ok: true, accountId: "acc-1", incomingAccountId: null });
+    expect((res.body as { incoming: Record<string, unknown> }).incoming).toMatchObject({
+      configured: false,
+      account: null,
+      problemCode: "not_configured"
+    });
+    expect(mockedDocflow.setServiceAccounts).toHaveBeenCalledWith(
+      { internal: "acc-1" },
+      expect.objectContaining({ id: "u-admin" })
+    );
   });
 
   test("снять выбор можно явным null", async () => {
-    mockedDocflow.setServiceAccountId.mockResolvedValue(null);
+    mockedDocflow.setServiceAccounts.mockResolvedValue({ internal: null, external: null });
 
     const res = await request(app.baseUrl, "PUT", "/api/docflow/service-account", {
       token: token("admin"),
@@ -171,8 +182,8 @@ describe("выбор служебного ящика сохраняется с �
     });
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, accountId: null });
-    expect(mockedDocflow.setServiceAccountId).toHaveBeenCalledWith(null, expect.anything());
+    expect(res.body).toMatchObject({ ok: true, accountId: null });
+    expect(mockedDocflow.setServiceAccounts).toHaveBeenCalledWith({ internal: null }, expect.anything());
   });
 
   test("несуществующий ящик не сохраняется: 400 и ни одной записи", async () => {
@@ -183,7 +194,7 @@ describe("выбор служебного ящика сохраняется с �
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "unknown_account" });
-    expect(mockedDocflow.setServiceAccountId).not.toHaveBeenCalled();
+    expect(mockedDocflow.setServiceAccounts).not.toHaveBeenCalled();
   });
 
   test("без поля accountId — 400: молча снять выбор нельзя", async () => {
@@ -194,7 +205,7 @@ describe("выбор служебного ящика сохраняется с �
 
     expect(res.status).toBe(400);
     expect(res.body).toMatchObject({ code: "bad_account" });
-    expect(mockedDocflow.setServiceAccountId).not.toHaveBeenCalled();
+    expect(mockedDocflow.setServiceAccounts).not.toHaveBeenCalled();
   });
 
   test("аппарат менять служебный ящик не может — 403", async () => {
@@ -203,7 +214,7 @@ describe("выбор служебного ящика сохраняется с �
       body: { accountId: "acc-1" }
     });
     expect(res.status).toBe(403);
-    expect(mockedDocflow.setServiceAccountId).not.toHaveBeenCalled();
+    expect(mockedDocflow.setServiceAccounts).not.toHaveBeenCalled();
   });
 });
 
@@ -313,5 +324,170 @@ describe("отправка поручения использует служеб�
     expect(mockedCore.sendEmail).toHaveBeenCalledWith(
       expect.objectContaining({ accountId: "acc-post" })
     );
+  });
+});
+
+describe("две служебные почты: внешняя приёмная и внутренняя (T25)", () => {
+  const externalAccount = (patch: Record<string, unknown> = {}) =>
+    account({ id: "acc-ext", username: "manufactory@kaluga.net", ...patch });
+
+  beforeEach(() => {
+    mockedCore.listAccounts.mockReturnValue([account(), externalAccount()]);
+  });
+
+  test("GET отдаёт ОБЕ роли, а прежние поля остаются про внутреннюю (совместимость)", async () => {
+    mockedDocflow.getExternalAccountState.mockResolvedValue({ explicit: true, accountId: "acc-ext" });
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/service-account", { token: token("secretary") });
+
+    expect(res.status).toBe(200);
+    // Прежний контракт: accountId здесь — ВНУТРЕННЯЯ почта, старый клиент продолжает работать.
+    expect(res.body).toMatchObject({
+      configured: true,
+      account: { accountId: "acc-1", username: "test@mail.test" },
+      problem: null,
+      problemCode: "ok",
+      sameAccount: false,
+      notice: null
+    });
+    // Новая роль — отдельным блоком, с теми же полями.
+    expect((res.body as { incoming: Record<string, unknown> }).incoming).toMatchObject({
+      configured: true,
+      account: { accountId: "acc-ext", username: "manufactory@kaluga.net" },
+      problem: null,
+      problemCode: "ok"
+    });
+    // И на сервер уходит ровно одна, внешняя, роль — внутренняя не подменяется.
+    expect(mockedDocflow.getExternalAccountState).toHaveBeenCalledTimes(1);
+  });
+
+  test("одна и та же почта на обеих ролях: разрешено, но с предупреждением", async () => {
+    mockedDocflow.getExternalAccountState.mockResolvedValue({ explicit: true, accountId: "acc-1" });
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/service-account", { token: token("secretary") });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ sameAccount: true });
+    expect(String((res.body as { notice: string }).notice)).toContain("один и тот же");
+  });
+
+  test("внешняя роль не задана — своя честная подсказка, внутренняя при этом работает", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/service-account", { token: token("secretary") });
+
+    expect(res.body).toMatchObject({ configured: true, problemCode: "ok" });
+    expect((res.body as { incoming: Record<string, unknown> }).incoming).toMatchObject({
+      configured: false,
+      account: null,
+      problemCode: "not_configured"
+    });
+  });
+
+  test("старый клиент: PUT {accountId} меняет ТОЛЬКО внутреннюю роль", async () => {
+    const res = await request(app.baseUrl, "PUT", "/api/docflow/service-account", {
+      token: token("admin"),
+      body: { accountId: "acc-1" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedDocflow.setServiceAccounts).toHaveBeenCalledWith({ internal: "acc-1" }, expect.anything());
+    expect(res.body).toMatchObject({ ok: true, accountId: "acc-1" });
+  });
+
+  test("PUT {incomingAccountId} меняет ТОЛЬКО внешнюю роль", async () => {
+    mockedDocflow.setServiceAccounts.mockResolvedValue({ internal: "acc-1", external: "acc-ext" });
+
+    const res = await request(app.baseUrl, "PUT", "/api/docflow/service-account", {
+      token: token("admin"),
+      body: { incomingAccountId: "acc-ext" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedDocflow.setServiceAccounts).toHaveBeenCalledWith({ external: "acc-ext" }, expect.anything());
+    expect(res.body).toMatchObject({ ok: true, incomingAccountId: "acc-ext" });
+  });
+
+  test("PUT с обеими ролями — одна операция, обе сохраняются", async () => {
+    mockedDocflow.setServiceAccounts.mockResolvedValue({ internal: "acc-1", external: "acc-ext" });
+
+    const res = await request(app.baseUrl, "PUT", "/api/docflow/service-account", {
+      token: token("admin"),
+      body: { accountId: "acc-1", incomingAccountId: "acc-ext" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedDocflow.setServiceAccounts).toHaveBeenCalledWith(
+      { internal: "acc-1", external: "acc-ext" },
+      expect.anything()
+    );
+  });
+
+  test("несуществующая внешняя почта — 400, ничего не записано", async () => {
+    const res = await request(app.baseUrl, "PUT", "/api/docflow/service-account", {
+      token: token("admin"),
+      body: { incomingAccountId: "acc-призрак" }
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "unknown_account" });
+    expect(String((res.body as { error: string }).error)).toContain("Внешн");
+    expect(mockedDocflow.setServiceAccounts).not.toHaveBeenCalled();
+  });
+
+  test("внешняя приёмная без SMTP остаётся рабочей ролью (приём, не отправка)", async () => {
+    mockedDocflow.getExternalAccountState.mockResolvedValue({ explicit: true, accountId: "acc-ext" });
+    mockedCore.listAccounts.mockReturnValue([account(), externalAccount({ smtpHost: null })]);
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/service-account", { token: token("secretary") });
+
+    expect(res.status).toBe(200);
+    expect((res.body as { incoming: Record<string, unknown> }).incoming).toMatchObject({
+      configured: true,
+      problem: null,
+      problemCode: "ok"
+    });
+    // И при этом видно, что отправлять с неё нечем — как справка, а не как ошибка выбора.
+    expect(
+      (res.body as { incoming: { account: { smtpConfigured: boolean } } }).incoming.account.smtpConfigured
+    ).toBe(false);
+  });
+
+  test("PUT без обеих ролей — 400: молча ничего не снимаем", async () => {
+    const res = await request(app.baseUrl, "PUT", "/api/docflow/service-account", {
+      token: token("admin"),
+      body: {}
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "bad_account" });
+    expect(mockedDocflow.setServiceAccounts).not.toHaveBeenCalled();
+  });
+
+  test("исполнитель не может менять ни одну из ролей — 403", async () => {
+    const res = await request(app.baseUrl, "PUT", "/api/docflow/service-account", {
+      token: token("executor"),
+      body: { incomingAccountId: "acc-ext" }
+    });
+
+    expect(res.status).toBe(403);
+    expect(mockedDocflow.setServiceAccounts).not.toHaveBeenCalled();
+  });
+
+  test("пересылка руководителю всегда с ВНУТРЕННЕЙ почты, внешняя роль на неё не влияет", async () => {
+    // Внешняя роль указывает на ящик без SMTP: если бы отправка брала её, был бы 400.
+    mockedDocflow.getExternalAccountState.mockResolvedValue({ explicit: true, accountId: "acc-ext" });
+    mockedCore.listAccounts.mockReturnValue([
+      account({ id: "acc-1", username: "test@mail.test" }),
+      externalAccount({ smtpHost: null })
+    ]);
+    mockedDocflow.getUser.mockResolvedValue({ id: "u-manager", fullName: "Руководитель", email: "m@stand.test" });
+    mockedDocflow.getDocument.mockResolvedValue({ id: "doc-1", regNumber: "вх1", emailId: null });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", toUserId: "u-manager" }
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockedCore.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ accountId: "acc-1" }));
   });
 });

@@ -85,7 +85,7 @@ describe("лимит тела запроса", () => {
   });
 
   it("у импорта писем свой, больший лимит: пачка .eml проходит", async () => {
-    coreMocks.importEmails.mockResolvedValueOnce({ added: 1, skipped: 0 });
+    coreMocks.importEmails.mockResolvedValueOnce({ added: 1, skipped: 0, knownOutOfRange: 0 });
     const res = await request(app.baseUrl, "POST", "/api/import", {
       token: "token:admin",
       rawBody: JSON.stringify({
@@ -96,6 +96,6 @@ describe("лимит тела запроса", () => {
       })
     });
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ added: 1, skipped: 0 });
+    expect(res.body).toEqual({ added: 1, skipped: 0, knownOutOfRange: 0 });
   });
 });

@@ -6,6 +6,7 @@ import {
   initDocflowDb,
   installLdapSettingsStore,
   isDocflowEnabled,
+  recomputeUserStats,
   seedLocalAdmin
 } from "@mailsense/docflow";
 import { createApp } from "./app.js";
@@ -54,6 +55,16 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     } catch (err) {
       logger.warn({ err: (err as Error).message }, "Не удалось инициализировать документооборот");
     }
+    // Агрегат «профиль исполнителя» (task-18): полный фоновый пересчёт при старте —
+    // страховка на случай, если процесс падал до события закрытия поручения.
+    void recomputeUserStats()
+      .then((r) => logger.info(r, "Агрегат профилей исполнителей пересчитан при старте"))
+      .catch((err) =>
+        logger.warn(
+          { err: (err as Error).message },
+          "Не удалось пересчитать агрегат профилей исполнителей при старте"
+        )
+      );
   } else {
     // База документооборота не задана — приложение работает как почтовый клиент.
     logger.info(

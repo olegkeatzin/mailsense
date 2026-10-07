@@ -267,8 +267,18 @@ const NOT_CONFIGURED =
  */
 export function serviceAccountView(
   account: SendAccountLike | null,
-  opts: { configuredId?: string | null } = {}
+  opts: {
+    configuredId?: string | null;
+    /**
+     * Нужна ли этой роли возможность ОТПРАВКИ. Внутренняя делопроизводства отправляет —
+     * ей SMTP обязателен. Внешняя приёмная только принимает почту (IMAP/POP3), и отсутствие
+     * SMTP у неё — не проблема, а справка: иначе администратор видит «ошибку» там, где всё
+     * работает (нашлось при живом прогоне T25: ящик директора без SMTP годится как приёмный).
+     */
+    requiresSmtp?: boolean;
+  } = {}
 ): ServiceAccountView {
+  const requiresSmtp = opts.requiresSmtp !== false;
   const configuredId = String(opts.configuredId ?? "").trim();
   if (!account) {
     // «Задан, но не найден» — не то же самое, что «не задан»: у первого есть мёртвая ссылка,
@@ -287,7 +297,9 @@ export function serviceAccountView(
     }
     return { configured: false, account: null, problem: NOT_CONFIGURED, problemCode: "not_configured" };
   }
-  const ready = smtpReady(account);
+  // Факт про ящик (нужен ли он роли — отдельный вопрос) и решение по роли.
+  const smtpOk = smtpReady(account);
+  const problemFree = requiresSmtp ? smtpOk : true;
   return {
     configured: true,
     account: {
@@ -304,9 +316,10 @@ export function serviceAccountView(
       smtpPort: account.smtpPort ?? null,
       smtpTls: account.smtpTls ?? null,
       smtpHostConfigured: smtpHostConfigured(account),
-      smtpConfigured: ready
+      // Справка о ящике: «отправлять с него можно/нельзя». Для приёмной роли это не ошибка.
+      smtpConfigured: smtpOk
     },
-    problem: ready ? null : notReadyProblem(account),
-    problemCode: ready ? "ok" : "smtp_not_configured"
+    problem: problemFree ? null : notReadyProblem(account),
+    problemCode: problemFree ? "ok" : "smtp_not_configured"
   };
 }

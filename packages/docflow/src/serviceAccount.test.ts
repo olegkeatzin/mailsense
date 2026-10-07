@@ -5,9 +5,12 @@ import { initDb as initCoreDb, closeDb as closeCoreDb } from "../../core/src/db/
 import { closeDocflowDb, getDocflowPool, initDocflowDb } from "./db/index.js";
 import type { Actor } from "./journal.js";
 import {
+  EXTERNAL_ACCOUNT_SETTING,
   SERVICE_ACCOUNT_SETTING,
+  getExternalAccountState,
   getServiceAccountId,
   getServiceAccountState,
+  setServiceAccounts,
   setServiceAccountId
 } from "./serviceAccount.js";
 
@@ -169,5 +172,95 @@ describe("смена служебного ящика и её след — одн
     // Настройка осталась прежней: изменение без следа невозможно.
     expect(await getServiceAccountId()).toBe("acc-old");
     expect(await count("SELECT count(*)::int AS n FROM audit_log WHERE action = 'docflow.service_account'")).toBe(1);
+  });
+});
+
+describe("две служебные почты: внешняя приёмная и внутренняя делопроизводства (T25)", () => {
+  test("внешняя роль по умолчанию не задана и задаётся отдельно от внутренней", async () => {
+    expect(await getExternalAccountState()).toEqual({ explicit: false, accountId: null });
+
+    await setServiceAccounts({ external: "acc-ext" }, actor);
+
+    expect(await getExternalAccountState()).toEqual({ explicit: true, accountId: "acc-ext" });
+    // Внутренняя этим вызовом не тронута: роли независимы.
+    expect(await getServiceAccountState()).toEqual({ explicit: false, accountId: null });
+  });
+
+  test("обе роли пишутся одной операцией, след — по строке на каждую роль", async () => {
+    await setServiceAccounts({ internal: "acc-int", external: "acc-ext" }, actor);
+
+    expect(await getServiceAccountId()).toBe("acc-int");
+    expect((await getExternalAccountState()).accountId).toBe("acc-ext");
+
+    const rows = await getDocflowPool().query<{ entity_id: string }>(
+      "SELECT entity_id FROM audit_log WHERE action = 'docflow.service_account' ORDER BY entity_id"
+    );
+    expect(rows.rows.map((r) => r.entity_id)).toEqual([EXTERNAL_ACCOUNT_SETTING, SERVICE_ACCOUNT_SETTING]);
+  });
+
+  test("смена ТОЛЬКО внешней не переписывает внутреннюю и не оставляет по ней следа", async () => {
+    await setServiceAccounts({ internal: "acc-int" }, actor);
+    await setServiceAccounts({ external: "acc-ext" }, actor);
+
+    expect(await getServiceAccountId()).toBe("acc-int");
+    expect(
+      await count("SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1", [SERVICE_ACCOUNT_SETTING])
+    ).toBe(1);
+  });
+
+  test("сбой аудита откатывает ОБЕ настройки", async () => {
+    await setServiceAccounts({ internal: "acc-int-old", external: "acc-ext-old" }, actor);
+    await blockAudit();
+
+    await expect(setServiceAccounts({ internal: "acc-int-new", external: "acc-ext-new" }, actor)).rejects.toThrow();
+
+    expect(await getServiceAccountId()).toBe("acc-int-old");
+    expect((await getExternalAccountState()).accountId).toBe("acc-ext-old");
+  });
+
+  test("одна и та же почта на обеих ролях разрешена (пилот)", async () => {
+    await setServiceAccounts({ internal: "acc-one", external: "acc-one" }, actor);
+
+    expect(await getServiceAccountId()).toBe("acc-one");
+    expect((await getExternalAccountState()).accountId).toBe("acc-one");
+  });
+
+  test("снятие внешней роли — тоже запись: пустое значение перебивает «не задано»", async () => {
+    await setServiceAccounts({ external: "acc-ext" }, actor);
+
+    const result = await setServiceAccounts({ external: null }, actor);
+
+    expect(result.external).toBeNull();
+    expect(await getExternalAccountState()).toEqual({ explicit: true, accountId: null });
+  });
+});
+
+describe("аудит отражает ИЗМЕНЕНИЕ, а не факт вызова (найдено живой проверкой T25)", () => {
+  test("повторная запись того же значения следа не оставляет", async () => {
+    await setServiceAccounts({ internal: "acc-int" }, actor);
+    const first = await count("SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1", [SERVICE_ACCOUNT_SETTING]);
+    expect(first).toBe(1);
+
+    // Тот же выбор второй раз: ничего не изменилось — значит и «смены» в аудите быть не должно.
+    // На стенде PUT с тем же значением писал строку «d45c… → d45c…», и это вводило в заблуждение.
+    await setServiceAccounts({ internal: "acc-int" }, actor);
+
+    expect(await count("SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1", [SERVICE_ACCOUNT_SETTING])).toBe(first);
+  });
+
+  test("снятие выбора при ОТСУТСТВУЮЩЕЙ строке — это изменение: строка появляется, след пишется", async () => {
+    await setServiceAccounts({ internal: null }, actor);
+
+    expect(await getServiceAccountState()).toEqual({ explicit: true, accountId: null });
+    expect(await count("SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1", [SERVICE_ACCOUNT_SETTING])).toBe(1);
+  });
+
+  test("внешняя роль: повторная запись тоже молчит, а смена — пишет", async () => {
+    await setServiceAccounts({ external: "acc-ext" }, actor);
+    await setServiceAccounts({ external: "acc-ext" }, actor);
+    expect(await count("SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1", [EXTERNAL_ACCOUNT_SETTING])).toBe(1);
+
+    await setServiceAccounts({ external: "acc-ext-2" }, actor);
+    expect(await count("SELECT count(*)::int AS n FROM audit_log WHERE entity_id = $1", [EXTERNAL_ACCOUNT_SETTING])).toBe(2);
   });
 });

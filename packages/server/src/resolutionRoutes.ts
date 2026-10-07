@@ -38,6 +38,7 @@ import {
   permissionsOfRoles,
   markEmailApproval,
   markTaskReceived,
+  recomputeUserStats,
   rejectResolution,
   reportExecution,
   requestApproval,
@@ -70,6 +71,37 @@ export interface ResolutionDeps {
 
 function actorOf(req: express.Request): Actor {
   return { id: req.user?.id ?? null, name: req.user?.fullName ?? "" };
+}
+
+/**
+ * Пересчёт агрегата «профиль исполнителя» после закрытия поручения (task-18).
+ *
+ * Fire-and-forget: агрегат — ПРОИЗВОДНЫЕ данные. Он не должен ни удлинять ответ аппарату,
+ * ни ломать закрытие: ошибку пишем в лог, а полный пересчёт при старте сервера доберёт
+ * потерянное, если процесс упал между закрытием и пересчётом.
+ */
+function scheduleStatsRecompute(result: { id?: string; status?: string } | null | undefined): void {
+  if (!result || result.status !== "done" || !result.id) return;
+  const resolutionId = result.id;
+  void (async () => {
+    try {
+      const detail = await getResolutionDetail(resolutionId);
+      if (!detail) return;
+      const users = [
+        ...new Set(
+          [...(detail.assignees ?? []).map((a) => a.userId), detail.preparedBy, detail.approvedBy].filter(
+            (v): v is string => !!v
+          )
+        )
+      ];
+      await recomputeUserStats({ userIds: users });
+    } catch (err) {
+      logger.warn(
+        { err: (err as Error).message, resolutionId },
+        "Не удалось пересчитать агрегат профиля исполнителя"
+      );
+    }
+  })();
 }
 
 /**
@@ -810,14 +842,14 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       if (!req.user) throw new AppError("Требуется вход", 401, "unauthorized");
       const b = req.body ?? {};
       // Отчитывается тот, кто вошёл: «отчёт за другого» не принимаем.
-      res.json(
-        await reportExecution(
-          req.params.id,
-          req.user.id,
-          { text: String(b.text ?? ""), emailId: b.emailId ? String(b.emailId) : null },
-          actorOf(req)
-        )
+      const reported = await reportExecution(
+        req.params.id,
+        req.user.id,
+        { text: String(b.text ?? ""), emailId: b.emailId ? String(b.emailId) : null },
+        actorOf(req)
       );
+      scheduleStatsRecompute(reported);
+      res.json(reported);
     })
   );
 
@@ -828,7 +860,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     asyncHandler(async (req, res) => {
       const comment = String((req.body ?? {}).comment ?? "");
       if (!comment.trim()) throw new AppError("Укажите, на каком основании закрываете", 400, "no_comment");
-      res.json(await closeResolution(req.params.id, actorOf(req), comment));
+      const closed = await closeResolution(req.params.id, actorOf(req), comment);
+      scheduleStatsRecompute(closed);
+      res.json(closed);
     })
   );
 
@@ -850,14 +884,14 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       if (!detail.assignees.some((a) => a.userId === userId)) {
         throw new AppError("Этот пользователь не исполнитель поручения", 400, "not_assignee");
       }
-      res.json(
-        await confirmReport(
-          req.params.id,
-          userId,
-          { text: b.text !== undefined ? String(b.text) : undefined },
-          actorOf(req)
-        )
+      const confirmed = await confirmReport(
+        req.params.id,
+        userId,
+        { text: b.text !== undefined ? String(b.text) : undefined },
+        actorOf(req)
       );
+      scheduleStatsRecompute(confirmed);
+      res.json(confirmed);
     })
   );
 

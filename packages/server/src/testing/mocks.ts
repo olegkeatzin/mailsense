@@ -40,6 +40,12 @@ export function testUser(id: string, roles: string[], extra: Partial<TestUser> =
  * Подставное почтовое ядро. Возвращает Proxy: любой импортированный из ядра символ
  * существует и по умолчанию ничего не делает — тест настраивает нужное сам.
  */
+/**
+ * Отказ по данным запроса на отправку (fromName/replyTo). Ядро бросает именно этот класс,
+ * и маршрут обязан отличить его от сбоя: это 400, а не 500.
+ */
+export class ComposeInputError extends Error {}
+
 export function coreMockModule(): Record<string, unknown> {
   const module: Record<string, unknown> = {
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
@@ -75,8 +81,23 @@ export function coreMockModule(): Record<string, unknown> {
     listThreadsGrouped: jest.fn(() => []),
     listDrafts: jest.fn(() => []),
     listTemplates: jest.fn(() => []),
-    importEmails: jest.fn(async () => ({ added: 0, skipped: 0 })),
+    importEmails: jest.fn(async () => ({ added: 0, skipped: 0, knownOutOfRange: 0 })),
+    // Приём писем (T30): у FetchResult есть счётчик известных-вне-диапазона — форма обязана быть полной.
+    fetchEmails: jest.fn(async () => ({ added: 0, skipped: 0, knownOutOfRange: 0 })),
     sendEmail: jest.fn(async () => ({ emailId: "sent-1", messageId: "<sent-1@stand.test>" })),
+    ComposeInputError,
+    // Шаблон письма (T27): маршрут обязан пробросить useAccountSignature как есть.
+    buildComposeTemplate: jest.fn((input: Record<string, unknown>) => ({
+      accountId: input.accountId,
+      mode: input.mode,
+      useAccountSignature: input.useAccountSignature,
+      to: [],
+      cc: [],
+      bcc: [],
+      subject: "",
+      bodyText: "",
+      bodyHtml: ""
+    })),
     buildXlsx: jest.fn(() => Buffer.from("xlsx")),
     exportFileName: jest.fn((name: string) => name + ".xlsx"),
     directoryStatus: jest.fn(() => ({ configured: false, connected: false })),
@@ -119,6 +140,12 @@ export function docflowMockModule(): Record<string, unknown> {
 
     isDocflowEnabled: jest.fn(async () => true),
     hasDocflowDb: jest.fn(() => true),
+    // Старт автономного сервера: адрес базы и «документооборот в PostgreSQL».
+    docflowDatabaseUrl: jest.fn(() => null),
+    initDocflowDb: jest.fn(async () => undefined),
+    installLdapSettingsStore: jest.fn(async () => undefined),
+    cleanupSessions: jest.fn(async () => undefined),
+    seedLocalAdmin: jest.fn(async () => undefined),
     resolveToken: jest.fn(async (token: string | null) =>
       token ? sessions.get(token) ?? null : null
     ),
@@ -289,10 +316,22 @@ export function docflowMockModule(): Record<string, unknown> {
     /** Аудит вне транзакции: незаурядные случаи вроде отказа в подписи (прецедент register_denied). */
     writeAudit: jest.fn(async () => null),
 
+    // Task-18: агрегат «профиль исполнителя» (данные под будущую подсказку).
+    recomputeUserStats: jest.fn(async () => ({ users: 0, updated: 0, skipped: 0, monthly: 0 })),
+    listUserActivityStats: jest.fn(async () => ({ items: [], total: 0, computedAt: null })),
+    setUserStatsMailFactsProvider: jest.fn(),
+
     // Р12: служебный ящик отправки. explicit = «администратор выбор делал» (в т.ч. снял).
     getServiceAccountState: jest.fn(async () => ({ explicit: false, accountId: null })),
+    getExternalAccountState: jest.fn(async () => ({ explicit: false, accountId: null })),
     getServiceAccountId: jest.fn(async () => null),
+    getExternalAccountId: jest.fn(async () => null),
     setServiceAccountId: jest.fn(async (accountId: string | null) => accountId),
+    /** Парная запись двух ролей (T25): undefined — роль не трогаем. */
+    setServiceAccounts: jest.fn(async (input: { internal?: string | null; external?: string | null }) => ({
+      internal: input?.internal ?? null,
+      external: input?.external ?? null
+    })),
 
     // Этап 5: центр уведомлений.
     listNotifications: jest.fn(async () => ({ items: [], unread: 0, total: 0, enabled: true })),

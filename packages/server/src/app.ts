@@ -51,6 +51,7 @@ import {
   setPromptSettings,
   setSettingValue,
   getSettingValue,
+  ComposeInputError,
   sendEmail,
   stopAnalysis,
   testAiConnection,
@@ -110,6 +111,7 @@ import { mountJournalRoutes } from "./journalRoutes.js";
 import { mountResolutionRoutes } from "./resolutionRoutes.js";
 import { mountNotificationRoutes } from "./notificationRoutes.js";
 import { mountServiceAccountRoutes } from "./serviceAccountRoutes.js";
+import { mountStatsRoutes } from "./statsRoutes.js";
 import { createDocflowProxy } from "./proxy.js";
 import { intParam } from "./params.js";
 
@@ -461,7 +463,19 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     if (!accountId) return res.status(400).json({ error: "Укажите accountId" });
     const mode = ((req.query.mode as string) || "new") as ComposeMode;
     const emailId = (req.query.emailId as string) || null;
-    res.json(buildComposeTemplate({ accountId, mode, emailId }));
+    // Личная подпись работника (T27): `useAccountSignature=0` — подпись ЯЩИКА не подставляется,
+    // её добавит клиент из личных настроек работника. Без параметра поведение прежнее.
+    const sig = req.query.useAccountSignature;
+    const useAccountSignature =
+      sig === undefined ? undefined : !(sig === "0" || sig === "false");
+    res.json(
+      buildComposeTemplate({
+        accountId,
+        mode,
+        emailId,
+        ...(useAccountSignature === undefined ? {} : { useAccountSignature })
+      })
+    );
   });
 
   app.get("/api/emails/:id", (req, res) => {
@@ -626,6 +640,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   app.post(
     "/api/emails/send",
     asyncHandler(async (req, res) => {
+      // Тело запроса и есть `ComposeInput`: поля `fromName` и `replyTo` (Р19) проходят
+      // в ядро КАК ЕСТЬ — маршрут их не чистит и не подставляет. Адрес отправителя берётся
+      // из ящика (`accountId`), из тела его подменить нельзя — это правило ядра.
       const compose = (req.body ?? {}) as ComposeInput;
       const bad = attachmentsError(compose.attachments, true);
       if (bad) return res.status(400).json({ error: bad });
@@ -644,6 +661,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
       } catch (err) {
         // Файл мог исчезнуть между проверкой и чтением — это тоже отказ запроса.
         if (err instanceof DraftAttachmentError) return res.status(400).json({ error: err.message });
+        // Данные запроса не годятся (имя отправителя, адрес для ответа): это 400 с готовым
+        // русским текстом ядра. Показывать человеку «ошибка сервера» здесь нельзя: он не поймёт,
+        // что именно поправить в письме.
+        if (err instanceof ComposeInputError) return res.status(400).json({ error: err.message });
         throw err;
       }
     })
@@ -1164,6 +1185,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   mountNotificationRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });
   // Служебный ящик отправки (Р12): параметры — аппарату, смена — администратору с аудитом.
   mountServiceAccountRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+  // Агрегат «профиль исполнителя» (task-18): данные под будущую подсказку, читает только админ.
+  mountStatsRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
 
   // Ответ руководителя распознаётся сразу после синхронизации ящика: письмо приходит
   // в тред, резолюция переходит в «ждёт подтверждения», аппарат видит её в своей очереди.
