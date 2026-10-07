@@ -48,6 +48,10 @@ services:
       # Пароль аварийного локального администратора (вход при недоступности AD).
       - MAILSENSE_ADMIN_LOGIN=${MAILSENSE_ADMIN_LOGIN:-}
       - MAILSENSE_ADMIN_PASSWORD=${MAILSENSE_ADMIN_PASSWORD:-}
+      # День предприятия для сроков и журнала (T47): «сегодня», «просрочено» и напоминания
+      # считаются по этому поясу. Без TZ берётся пояс хоста — на сервере это часто UTC,
+      # и тогда вчерашний срок до 03:00 МСК выглядит сегодняшним, а «просрочено» приходит позже.
+      - TZ=${TZ:-Europe/Moscow}
       # ИИ-контур (внутренний, облачные провайдеры запрещены)
       - MAILSENSE_AI_BASE_URL=${MAILSENSE_AI_BASE_URL:-}
       - MAILSENSE_AI_MODEL=${MAILSENSE_AI_MODEL:-}
