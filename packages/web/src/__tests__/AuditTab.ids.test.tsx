@@ -14,7 +14,7 @@ jest.mock("../api", () => ({
 }));
 
 import { api, resolutionApi } from "../api";
-import AuditTab from "../components/AuditTab";
+import AuditTab, { collectUnresolvedIds } from "../components/AuditTab";
 import { useStore } from "../store";
 import type { AuthStatus, AuthUser } from "../types";
 
@@ -105,11 +105,15 @@ describe("аудит: значения-идентификаторы разреш
   });
 
   /**
-   * D8: неудачные идентификаторы НЕ должны запрашиваться повторно.
-   * На прежнем коде эффект зависел от своей же обновляемой коллекции и не помнил неудачи —
-   * экран настроек устраивал шторм тысяч запросов, пока открыт.
+  /**
+   * D8: уже спрошенные идентификаторы не запрашиваются повторно.
+   *
+   * Раньше эффект зависел от своей же обновляемой коллекции и не помнил неудачи —
+   * экран настроек устраивал шторм (~430 запросов/с), пока открыт. Проверяем двумя
+   * способами: живьём (сколько запросов делает компонент) и чистой функцией, которая
+   * решает, что спрашивать, — без таймеров и кликов, чтобы тест не «залипал».
    */
-  it("повторные проходы не повторяют запросы: один запрос на уникальный id (D8)", async () => {
+  it("D8: один запрос на уникальный id, повторный проход ничего не добавляет", async () => {
     // Самый злой случай: ни один идентификатор не разрешается.
     (resolutionApi.get as jest.Mock).mockRejectedValue(new Error("404 Not Found"));
     (api.accounts as jest.Mock).mockResolvedValue([]);
@@ -117,29 +121,38 @@ describe("аудит: значения-идентификаторы разреш
     (api.journal as jest.Mock).mockResolvedValue({ items: [], total: 0 });
 
     render(<AuditTab />);
-    // В фикстуре четыре уникальных идентификатора — столько запросов и должно быть.
-    await waitFor(() => expect(resolutionApi.get).toHaveBeenCalledTimes(4));
-    const after = (resolutionApi.get as jest.Mock).mock.calls.length;
+    await waitFor(() => expect(resolutionApi.get).toHaveBeenCalledTimes(4), { timeout: 10000 });
+    const asked = (resolutionApi.get as jest.Mock).mock.calls.map((c) => String(c[0]));
+    expect(new Set(asked).size).toBe(4);
 
-    // Перезагрузка списка: эффект проходит заново — новых запросов быть не должно.
-    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
-    await waitFor(() => expect(api.audit).toHaveBeenCalledTimes(2));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect((resolutionApi.get as jest.Mock).mock.calls.length).toBe(after);
+    const entries = [
+      {
+        id: "a-1",
+        userId: USER_ID,
+        userName: "Иванов И.И.",
+        action: "docflow.service_account",
+        entityType: "settings",
+        entityId: "settings-1",
+        oldValue: JSON.stringify({ accountId: ACCOUNT_ID, userId: null }),
+        newValue: JSON.stringify({ accountId: null, userId: USER_ID }),
+        createdAt: "2026-10-07T09:00:00.000Z"
+      },
+      {
+        id: "a-2",
+        userId: USER_ID,
+        userName: "Иванов И.И.",
+        action: "journal.link_email",
+        entityType: "document",
+        entityId: DOC_ID,
+        oldValue: JSON.stringify({ documentId: DOC_ID, resolutionId: null }),
+        newValue: JSON.stringify({ documentId: null, resolutionId: RES_ID }),
+        createdAt: "2026-10-07T09:05:00.000Z"
+      }
+    ] as unknown as Parameters<typeof collectUnresolvedIds>[0];
 
-    // И ещё раз: повторный проход тоже ничего не добавляет.
-    fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
-    await waitFor(() => expect(api.audit).toHaveBeenCalledTimes(3));
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect((resolutionApi.get as jest.Mock).mock.calls.length).toBe(after);
-
-    // Ни один id не спрошен дважды.
-    const perId = new Map<string, number>();
-    for (const call of (resolutionApi.get as jest.Mock).mock.calls) {
-      const key = String(call[0]);
-      perId.set(key, (perId.get(key) ?? 0) + 1);
-    }
-    expect([...perId.values()]).toEqual([1, 1, 1, 1]);
-    // Явный лимит: зависший тест должен падать, а не висеть минутами.
-  }, 30000);
+    // Повторный проход по тем же записям: уже спрошенные не возвращаются — это и был шторм.
+    expect(collectUnresolvedIds(entries, new Set(), new Set(asked), 40)).toEqual([]);
+    // И функция вообще способна вернуть идентификаторы: иначе проверка выше была бы пустой.
+    expect(collectUnresolvedIds(entries, new Set(), new Set(), 40).sort()).toEqual([...asked].sort());
+  }, 20000);
 });

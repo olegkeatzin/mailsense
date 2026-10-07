@@ -73,6 +73,46 @@ function diffText(entry: AuditEntry, refs: ValueRefs): { text: string; rawIds: s
   }
 }
 
+/**
+ * Какие идентификаторы из записей аудита ещё нужно спросить у сервера.
+ *
+ * Чистая функция без React: её проверяет тест D8. Смысл — уже спрошенные (attempted)
+ * и уже известные (known) идентификаторы НЕ возвращаются, иначе экран зацикливается.
+ */
+export function collectUnresolvedIds(
+  entries: AuditEntry[],
+  known: Set<string>,
+  attempted: Set<string>,
+  limit: number
+): string[] {
+  const pending: string[] = [];
+  const collect = (v: unknown) => {
+    if (Array.isArray(v)) v.forEach(collect);
+    else if (looksLikeId(v)) {
+      const id = String(v);
+      if (!known.has(id) && !attempted.has(id)) pending.push(id);
+    }
+  };
+  for (const e of entries) {
+    for (const raw of [e.oldValue, e.newValue]) {
+      if (!raw) continue;
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        for (const [k, v] of Object.entries(parsed)) {
+          if (k === "updatedAt" || k === "createdAt" || k === "id") continue;
+          // Идентификатор письма поручением быть не может: спрашивать о нём /resolutions
+          // бессмысленно, а каждый такой вопрос — лишний 404 в консоли.
+          if (/email|message/i.test(k)) continue;
+          collect(v);
+        }
+      } catch {
+        /* запись аудита может быть не JSON — тогда просто не разрешаем значения */
+      }
+    }
+  }
+  return [...new Set(pending)].slice(0, limit);
+}
+
 export default function AuditTab() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [total, setTotal] = useState(0);
@@ -148,33 +188,8 @@ export default function AuditTab() {
   useEffect(() => {
     // Ждём справочники: без них в добор попадут id, которые поручениями не являются (D9).
     if (!refsLoaded) return;
-    const pending: string[] = [];
-    const collect = (v: unknown) => {
-      if (Array.isArray(v)) v.forEach(collect);
-      else if (looksLikeId(v)) {
-        const id = String(v);
-        // Спрашиваем только то, чего нет ни в справочниках, ни в кэше, ни среди уже спрошенных.
-        if (!refs.has(id) && !resolutionRefs.has(id) && !attemptedIds.current.has(id)) pending.push(id);
-      }
-    };
-    for (const e of entries) {
-      for (const raw of [e.oldValue, e.newValue]) {
-        if (!raw) continue;
-        try {
-          const parsed = JSON.parse(raw) as Record<string, unknown>;
-          for (const [k, v] of Object.entries(parsed)) {
-            if (k === "updatedAt" || k === "createdAt" || k === "id") continue;
-            // Идентификатор письма поручением быть не может: спрашивать о нём /resolutions
-            // бессмысленно, а каждый такой вопрос — лишний 404 в консоли (D9, остаток).
-            if (/email|message/i.test(k)) continue;
-            collect(v);
-          }
-        } catch {
-          /* запись аудита может быть не JSON — тогда просто не разрешаем значения */
-        }
-      }
-    }
-    const unique = [...new Set(pending)].slice(0, RESOLVE_LIMIT);
+    const known = new Set<string>([...refs.keys(), ...resolutionRefs.keys()]);
+    const unique = collectUnresolvedIds(entries, known, attemptedIds.current, RESOLVE_LIMIT);
     if (!unique.length) return;
     // Помечаем ДО запроса: неудачный id больше не спрашиваем никогда (негативный кэш).
     unique.forEach((id) => attemptedIds.current.add(id));
