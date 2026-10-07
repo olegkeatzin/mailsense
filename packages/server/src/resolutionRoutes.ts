@@ -1,4 +1,5 @@
 import type express from "express";
+import fs from "node:fs";
 import { findReplyContext, suggestFields } from "./replySuggestions.js";
 import { intParam } from "./params.js";
 import { selectSendAccount, type SendAccountLike } from "./serviceAccount.js";
@@ -448,6 +449,109 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     asyncHandler(async (req, res) => {
       const kind = (req.body ?? {}).kind === "report" ? "report" : "approval";
       res.json(await suggestFields(req.params.emailId, kind));
+    })
+  );
+
+  /**
+   * Письмо-источник по задаче (T41, план Т5).
+   *
+   * После закрытия прав на почту (D-4/T39) у исполнителя нет `mail.view`, но он обязан видеть,
+   * ЧТО именно исполняет. Поэтому тело письма отдаётся здесь — через документооборот и только
+   * участнику ЭТОГО поручения: исполнителю, подписанту/утвердившему, а также аппарату, который
+   * поручение готовил, отправлял или подтверждал. Чужая задача → 403, письмо без связи с
+   * поручением → 404: посторонний не получает даже факта существования письма.
+   */
+  const taskView = [requireDocflowDb, requirePermission("task.view")];
+
+  async function sourceEmailOf(req: express.Request): Promise<{ detail: ResolutionDetail; emailId: string }> {
+    const user = req.user;
+    if (!user) throw new AppError("Требуется вход в систему", 401, "unauthorized");
+
+    const detail = await getResolutionDetail(req.params.resolutionId);
+    if (!detail) throw new AppError("Поручение не найдено", 404, "not_found");
+
+    const participant =
+      detail.assignees.some((a) => a.userId === user.id) ||
+      detail.approvedBy === user.id ||
+      detail.preparedBy === user.id ||
+      detail.dispatchedBy === user.id ||
+      detail.confirmedBy === user.id;
+
+    if (!participant) {
+      // Отказ фиксируем вне транзакции, как другие отказы доступа (прецедент approve_denied).
+      // ⚠️ Сбой следа не подменяет отказ: человек должен увидеть «не ваше поручение», а не 500.
+      try {
+        await writeAudit({
+          userId: user.id,
+          userName: user.fullName,
+          action: "resolution.source_email_denied",
+          entityType: "resolution",
+          entityId: detail.id,
+          newValue: JSON.stringify({ reason: "not_participant" })
+        });
+      } catch (err) {
+        logger.warn({ err: (err as Error).message, resolutionId: detail.id }, "Не удалось записать отказ доступа к письму-источнику");
+      }
+      throw new AppError("Это поручение не ваше", 403, "forbidden");
+    }
+
+    const emailId = detail.documentEmailId ?? "";
+    if (!emailId) throw new AppError("Письмо-источник не связано с поручением", 404, "not_found");
+    return { detail, emailId };
+  }
+
+  app.get(
+    "/api/docflow/tasks/:resolutionId/source-email",
+    ...taskView,
+    asyncHandler(async (req, res) => {
+      const { detail, emailId } = await sourceEmailOf(req);
+      const mail = getEmailView(emailId);
+      if (!mail) throw new AppError("Письмо не найдено", 404, "not_found");
+      // ⚠️ Отдаём только то, что нужно по делу: ни accountId, ни uid/папки, ни путей к файлам —
+      // иначе маршрут стал бы обходным путём к служебному ящику.
+      res.json({
+        resolutionId: detail.id,
+        emailId,
+        subject: mail.subject,
+        from: mail.from,
+        to: mail.to,
+        cc: mail.cc,
+        date: mail.date,
+        bodyText: mail.bodyText,
+        bodyHtml: mail.bodyHtml,
+        attachments: listAttachments(emailId).map((a) => ({
+          id: a.id,
+          filename: a.filename,
+          mimeType: a.mimeType,
+          size: a.size
+        }))
+      });
+    })
+  );
+
+  app.get(
+    "/api/docflow/tasks/:resolutionId/source-email/attachments/:attachmentId",
+    ...taskView,
+    asyncHandler(async (req, res) => {
+      // Та же проверка связи: вложение достаётся только вместе с правом на это поручение.
+      const { emailId } = await sourceEmailOf(req);
+      const att = listAttachments(emailId).find((a) => a.id === req.params.attachmentId);
+      if (!att || !att.storagePath || !fs.existsSync(att.storagePath)) {
+        throw new AppError("Файл не найден", 404, "not_found");
+      }
+      res.setHeader("Content-Type", att.mimeType);
+      res.setHeader("Content-Disposition", "attachment; filename*=UTF-8''" + encodeURIComponent(att.filename));
+      const stream = fs.createReadStream(att.storagePath);
+      // Обрыв скачивания: pipe не закрывает чтение — дескриптор остался бы открытым.
+      res.on("close", () => {
+        if (!stream.destroyed) stream.destroy();
+      });
+      stream.on("error", (err: Error) => {
+        logger.warn({ err: err.message, path: att.storagePath }, "Не удалось прочитать вложение письма-источника");
+        if (res.headersSent) res.destroy();
+        else res.status(404).json({ error: "Файл не найден" });
+      });
+      stream.pipe(res);
     })
   );
 

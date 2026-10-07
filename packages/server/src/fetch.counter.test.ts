@@ -16,11 +16,12 @@ jest.mock("@mailsense/docflow", () => require("./testing/mocks.js").docflowMockM
 const coreMocks = core as unknown as Record<string, jest.Mock>;
 const mockedDocflow = docflow as unknown as Record<string, jest.Mock> & { __sessions: Map<string, unknown> };
 
-const TOKEN = "token:secretary";
+// Ручной скан ящика — ПОЧТОВАЯ операция: право mail.view (матрица T39).
+const TOKEN = "token:admin";
 let app: RunningApp;
 
 beforeAll(async () => {
-  mockedDocflow.__sessions.set(TOKEN, testUser("u-secretary", ["secretary"]));
+  mockedDocflow.__sessions.set(TOKEN, testUser("u-admin", ["admin"]));
   app = await listen(await createApp({}));
 });
 

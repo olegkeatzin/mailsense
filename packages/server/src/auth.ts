@@ -188,7 +188,74 @@ export const requireAdmin = requirePermission("users.manage");
  * падения удалённого сервера уже подтверждённая сессия должна продолжать работать —
  * почта-то локальная.
  */
-const remoteVerified = new Map<string, number>();
+/**
+ * Что мы знаем о работнике из ПОДТВЕРЖДЁННОЙ удалённой сессии (T45).
+ *
+ * ⚠️ Только идентификация: id, логин каталога и ФИО. Роли и права сюда НЕ попадают: локальным
+ * маршрутам (личный профиль, аудит) нужны ключ и имя, а держать полномочия пользователя
+ * в памяти локального процесса на время TTL незачем (вердикт безопасности, остаточный риск R-1).
+ */
+export interface RemoteSessionUser {
+  id: string;
+  ldapUid: string | null;
+  fullName: string;
+}
+
+/** Разбирает ответ удалённого /api/auth/me, оставляя ТОЛЬКО id, логин каталога и ФИО. */
+export function parseRemoteSessionUser(body: unknown): RemoteSessionUser | null {
+  const raw = (body ?? {}) as { user?: Record<string, unknown> | null };
+  const user = raw.user;
+  if (!user || typeof user !== "object") return null;
+  const id = typeof user.id === "string" ? user.id : "";
+  if (!id) return null;
+  return {
+    id,
+    ldapUid: typeof user.ldapUid === "string" && user.ldapUid ? user.ldapUid : null,
+    fullName: typeof user.fullName === "string" ? user.fullName : ""
+  };
+}
+
+/**
+ * Собирает `req.user` режима клиента из урезанной записи.
+ *
+ * Роли и права ПУСТЫЕ осознанно: в клиентском режиме права локально не проверяются (СЭД
+ * удалённый), а если локальная проверка однажды появится — она не должна получать полномочия
+ * из кэша. Ключ профиля (ldapUid || id) и ФИО при этом сохраняются.
+ */
+export function remoteSessionAuthUser(user: RemoteSessionUser): AuthUser {
+  return {
+    id: user.id,
+    ldapUid: user.ldapUid,
+    ldapDn: null,
+    email: "",
+    fullName: user.fullName,
+    department: "",
+    position: "",
+    managerDn: null,
+    managerId: null,
+    phone: "",
+    source: "ldap",
+    isActive: true,
+    blocked: false,
+    lastLoginAt: null,
+    createdAt: "",
+    updatedAt: "",
+    roles: [],
+    permissions: []
+  };
+}
+
+/**
+ * ⚠️ ТОЛЬКО ДЛЯ ТЕСТОВ; в боевом коде НЕ вызывается.
+ *
+ * Открывает кэш подтверждённых сессий, чтобы тест проверял ФОРМУ записи: в ней не должно
+ * быть ролей и прав (T45). Имя намеренно с двойным подчёркиванием — видно, что это не API.
+ */
+export function __remoteSessionCacheForTests(): Map<string, { at: number; user: RemoteSessionUser | null }> {
+  return remoteVerified;
+}
+
+const remoteVerified = new Map<string, { at: number; user: RemoteSessionUser | null }>();
 /** Сколько держать положительный ответ: иначе каждый запрос к почте ходил бы на сервер. */
 const REMOTE_CHECK_TTL_MS = 5000;
 const REMOTE_CHECK_TIMEOUT_MS = 3000;
@@ -196,24 +263,29 @@ const REMOTE_CHECK_TIMEOUT_MS = 3000;
 const REMOTE_CACHE_MAX = 200;
 
 /** Спрашивает удалённый СЭД, жива ли сессия. «unknown» — сервер не ответил. */
-async function checkRemoteSession(baseUrl: string, token: string): Promise<"valid" | "invalid" | "unknown"> {
+async function checkRemoteSession(
+  baseUrl: string,
+  token: string
+): Promise<{ kind: "valid"; user: RemoteSessionUser | null } | { kind: "invalid" } | { kind: "unknown" }> {
   try {
     const res = await fetch(baseUrl + "/api/auth/me", {
       headers: { authorization: "Bearer " + token },
       signal: AbortSignal.timeout(REMOTE_CHECK_TIMEOUT_MS)
     });
-    if (res.status >= 500) return "unknown";
-    if (res.status !== 200) return "invalid";
-    const body = (await res.json().catch(() => null)) as { user?: unknown } | null;
-    return body && body.user ? "valid" : "invalid";
+    if (res.status >= 500) return { kind: "unknown" };
+    if (res.status !== 200) return { kind: "invalid" };
+    // Пользователя запоминаем в УРЕЗАННОМ виде: id/логин/ФИО. Роли и права удалённого
+    // пользователя в локальный кэш не попадают — держать их в памяти процесса незачем.
+    const user = parseRemoteSessionUser(await res.json().catch(() => null));
+    return user ? { kind: "valid", user } : { kind: "invalid" };
   } catch {
-    return "unknown";
+    return { kind: "unknown" };
   }
 }
 
-function rememberRemoteSession(token: string, at: number): void {
+function rememberRemoteSession(token: string, at: number, user: RemoteSessionUser | null): void {
   remoteVerified.delete(token);
-  remoteVerified.set(token, at);
+  remoteVerified.set(token, { at, user });
   while (remoteVerified.size > REMOTE_CACHE_MAX) {
     const oldest = remoteVerified.keys().next().value;
     if (oldest === undefined) break;
@@ -243,21 +315,29 @@ export function requireRemoteSession(options: { baseUrl: string }): express.Requ
       return;
     }
     const now = Date.now();
-    const verifiedAt = remoteVerified.get(token);
-    if (verifiedAt !== undefined && now - verifiedAt < REMOTE_CHECK_TTL_MS) return next();
-
-    const verdict = await checkRemoteSession(baseUrl, token);
-    if (verdict === "valid") {
-      rememberRemoteSession(token, now);
+    const cached = remoteVerified.get(token);
+    if (cached && now - cached.at < REMOTE_CHECK_TTL_MS) {
+      if (cached.user) req.user = req.user ?? remoteSessionAuthUser(cached.user);
       return next();
     }
-    if (verdict === "invalid") {
+
+    const verdict = await checkRemoteSession(baseUrl, token);
+    if (verdict.kind === "valid") {
+      rememberRemoteSession(token, now, verdict.user);
+      if (verdict.user) req.user = req.user ?? remoteSessionAuthUser(verdict.user);
+      return next();
+    }
+    if (verdict.kind === "invalid") {
       remoteVerified.delete(token);
       res.status(401).json({ error: "Сессия недействительна — войдите заново" });
       return;
     }
-    // Сервер недоступен: сессию, подтверждённую раньше, пропускаем — почта локальная.
-    if (verifiedAt !== undefined) return next();
+    // Сервер недоступен: сессию, подтверждённую раньше, пропускаем — почта локальная,
+    // и пользователя берём из кэша (личные данные не должны «терять хозяина»).
+    if (cached) {
+      if (cached.user) req.user = req.user ?? remoteSessionAuthUser(cached.user);
+      return next();
+    }
     res.status(503).json({ error: "Не удалось проверить сессию: сервер документооборота недоступен" });
   };
 }

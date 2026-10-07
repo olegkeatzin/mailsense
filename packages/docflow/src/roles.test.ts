@@ -4,7 +4,7 @@ import path from "node:path";
 import { initDb as initCoreDb, closeDb as closeCoreDb } from "../../core/src/db/index.js";
 import { closeDocflowDb, getDocflowPool, initDocflowDb } from "./db/index.js";
 import { ROLE_DEFINITIONS, permissionsOfRoles } from "./roles.js";
-import { listRoles } from "./repo.js";
+import { getUserRoles, insertUser, listRoles, setUserRoles } from "./repo.js";
 import type { BuiltinRoleId, Permission } from "./types.js";
 
 /**
@@ -155,5 +155,48 @@ describe("объединение ролей (совмещение, О2)", () => 
 
   test("неизвестная роль прав не даёт", () => {
     expect(permissionsOfRoles(["нет-такой"])).toEqual([]);
+  });
+});
+describe("права на почту служебных ящиков (D-4, план Т5)", () => {
+  test("почта доступна только администратору и аппарату", () => {
+    for (const role of ["admin", "secretary"] as BuiltinRoleId[]) {
+      expect(has(role, "mail.view")).toBe(true);
+      expect(has(role, "mail.send")).toBe(true);
+    }
+    // Исполнитель, руководитель и подписант переписку аппарата НЕ читают: свои поручения
+    // они видят через документооборот (план Т5). Это и есть суть закрытия D-4.
+    for (const role of ["manager", "executor", "signer"] as BuiltinRoleId[]) {
+      expect(has(role, "mail.view")).toBe(false);
+      expect(has(role, "mail.send")).toBe(false);
+    }
+  });
+
+  test("роль из БАЗЫ получает новые права без миграции: набор прав считается по id роли", async () => {
+    // ⚠️ Права ролей в базе НЕ хранятся — там только id/имя/описание/порядок. Значит новое
+    // право, появившееся в коде, само доезжает до уже существующих ролей, и миграция данных
+    // не нужна. Если кто-то однажды перенесёт набор прав в таблицу, этот тест напомнит,
+    // что тогда понадобится миграция — иначе аппарат получит 403 на живом стенде.
+    const cols = await getDocflowPool().query<{ column_name: string }>(
+      "SELECT column_name FROM information_schema.columns WHERE table_name = 'roles'"
+    );
+    expect(cols.rows.map((r) => r.column_name)).not.toContain("permissions");
+
+    // Роль сидируется миграцией и уже лежит в базе…
+    const seeded = await listRoles();
+    expect(seeded.map((r) => r.id)).toContain("secretary");
+
+    // …а её носитель получает оба права почты, хотя строка роли про них ничего не знает.
+    const user = await insertUser({
+      ldapUid: "pochta-check",
+      email: "pochta-check@stand.test",
+      fullName: "Проверка прав почты",
+      source: "manual"
+    });
+    await setUserRoles(user.id, ["secretary"], "test");
+
+    const roleIds = await getUserRoles(user.id);
+
+    expect(roleIds).toEqual(["secretary"]);
+    expect(permissionsOfRoles(roleIds)).toEqual(expect.arrayContaining(["mail.view", "mail.send"]));
   });
 });

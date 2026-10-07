@@ -5,6 +5,7 @@
  * поиск, дубли, справочники. Почтовые данные сюда не попадают — связь с письмами
  * идёт по строковому email_id, потому что почта лежит в базе клиента.
  */
+import { companyDayIso } from "./companyDay.js";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
 import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
@@ -57,10 +58,12 @@ function now(): string {
   return new Date().toISOString();
 }
 
-/** Сегодняшняя дата в виде YYYY-MM-DD. */
+/**
+ * Сегодняшняя дата в виде ГГГГ-ММ-ДД — день предприятия (T47).
+ * Журнал и сроки обязаны считать день одинаково, поэтому живёт это в одном месте.
+ */
 export function todayIso(d: Date = new Date()): string {
-  const p = (n: number): string => (n < 10 ? "0" + n : String(n));
-  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+  return companyDayIso(d);
 }
 
 function mapDocument(row: typeof documents.$inferSelect): DocumentRecord {

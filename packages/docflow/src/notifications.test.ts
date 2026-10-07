@@ -1,3 +1,4 @@
+import { companyDayIso } from "./companyDay.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -372,7 +373,8 @@ describe("чтение и прочтение: своё видно, чужое �
   });
 
   test("deadline и daysLeft считаются на чтении из резолюции", async () => {
-    const inFiveDays = new Date(Date.now() + 5 * 86400000).toISOString().slice(0, 10);
+    // День предприятия (T47): при фикстуре по UTC тест падал бы в окне 00:00–03:00 МСК.
+    const inFiveDays = companyDayIso(new Date(Date.now() + 5 * 86400000));
     await seedResolution("res-1", inFiveDays);
     await seedNotification({ id: "n-1", userId: USER_A, kind: "resolution.due_soon", dedupeKey: "k1", entityId: "res-1" });
 

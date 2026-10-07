@@ -107,3 +107,51 @@ describe("шаблон письма: личная подпись работни�
     expect(input.useAccountSignature).toBeUndefined();
   });
 });
+
+describe("F-5: шаблон письма не падает 500 на негодных данных", () => {
+  test("несуществующий ящик → 404 с русским текстом", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/compose-template?accountId=нет-такого&mode=new", { token: TOKEN });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Ящик не найден" });
+    expect(coreMocks.buildComposeTemplate).not.toHaveBeenCalled();
+  });
+
+  test("без accountId → 400 «Укажите accountId»", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/compose-template?mode=new", { token: TOKEN });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Укажите accountId" });
+  });
+
+  test("неизвестный режим письма → 400", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/compose-template?accountId=acc-1&mode=сам-придумал", { token: TOKEN });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Неизвестный режим письма" });
+  });
+
+  test("ответ по несуществующему письму → 404, а не пустой шаблон", async () => {
+    coreMocks.getEmailView.mockReturnValue(null);
+
+    const res = await request(app.baseUrl, "GET", "/api/compose-template?accountId=acc-1&mode=reply&emailId=нет-такого", { token: TOKEN });
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Письмо не найдено" });
+    expect(coreMocks.buildComposeTemplate).not.toHaveBeenCalled();
+  });
+
+  test("ответ без письма → 400: цитировать нечего", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/compose-template?accountId=acc-1&mode=reply", { token: TOKEN });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Укажите письмо для ответа или пересылки" });
+  });
+
+  test("годный ящик и новое письмо → 200 (поведение не изменилось)", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/compose-template?accountId=acc-1&mode=new", { token: TOKEN });
+
+    expect(res.status).toBe(200);
+    expect(coreMocks.buildComposeTemplate).toHaveBeenCalled();
+  });
+});

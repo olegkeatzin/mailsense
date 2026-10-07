@@ -39,7 +39,10 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
       "users.manage",
       "settings.manage",
       "audit.view",
-      "notifications.view"
+      "notifications.view",
+      // Почта предприятия (D-4): администратор видит и отправляет со служебных ящиков.
+      "mail.view",
+      "mail.send"
     ]
   },
   {
@@ -59,7 +62,11 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
       "task.view",
       "task.report",
       // Аппарат ведёт сроки и подтверждает отчёты — без центра уведомлений он их не увидит.
-      "notifications.view"
+      "notifications.view",
+      // Почта служебных ящиков — рабочее место аппарата (Р16, D-4). Остальным ролям
+      // почта недоступна: свои поручения они видят через документооборот (план Т5).
+      "mail.view",
+      "mail.send"
     ]
   },
   {

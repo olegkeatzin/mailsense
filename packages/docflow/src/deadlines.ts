@@ -7,10 +7,16 @@
  * на сегодняшнее; та же ошибка была видна в «Моих задачах». Клиент считает дни по дате
  * (packages/web/src/utils/deadline.ts), поэтому сервер обязан считать так же.
  *
- * Даты — только YYYY-MM-DD (или ISO-строка, начинающаяся с даты). Сравниваем в UTC-полночь:
- * new Date("2026-10-10") в разных часовых поясах даёт разный день, и «сегодня»
- * превращалось бы во «вчера». Мусор на входе — null, а не NaN.
+ * Даты — только YYYY-MM-DD (или ISO-строка, начинающаяся с даты). Обе даты приводим к метке
+ * UTC-полночи СВОЕЙ календарной даты: тогда вычитание даёт ровно целые сутки и не зависит от
+ * часового пояса. new Date("2026-10-10") в разных поясах даёт разный день — так считать нельзя.
+ *
+ * ⚠️ А вот «сегодня» берётся по ЛОКАЛЬНОЙ дате процесса (день предприятия, T47), а не по UTC:
+ * иначе для МСК граница суток сдвигается на 03:00 и вчерашний срок до трёх ночи выглядит
+ * сегодняшним. Мусор на входе — null, а не NaN.
  */
+import { companyDayStart } from "./companyDay.js";
+
 const DAY_MS = 86_400_000;
 
 /** Начало дня (UTC-полночь) для строки с датой; null — если даты в строке нет. */
@@ -26,16 +32,21 @@ function startOfDay(value: string | null | undefined): number | null {
   return Number.isNaN(t) ? null : t;
 }
 
-/** Сколько дней осталось до срока: отрицательное — просрочено. */
-export function daysLeft(deadline: string | null, today = new Date()): number | null {
+/**
+ * Сколько дней осталось до срока: отрицательное — просрочено.
+ *
+ * `today` — либо мгновение (тогда день берётся по поясу предприятия, T47), либо уже готовая
+ * дата ГГГГ-ММ-ДД (так день задают тесты: явно и независимо от машины).
+ */
+export function daysLeft(deadline: string | null, today: Date | string = new Date()): number | null {
   const due = startOfDay(deadline);
   if (due === null) return null;
-  // День «сегодня» берём по UTC — так же, как клиент (toISOString().slice(0,10)).
-  const now = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const now = typeof today === "string" ? startOfDay(today) : companyDayStart(today);
+  if (now === null) return null;
   return Math.round((due - now) / DAY_MS);
 }
 
-export function isOverdue(deadline: string | null, today = new Date()): boolean {
+export function isOverdue(deadline: string | null, today: Date | string = new Date()): boolean {
   const d = daysLeft(deadline, today);
   return d !== null && d < 0;
 }

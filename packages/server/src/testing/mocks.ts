@@ -46,6 +46,23 @@ export function testUser(id: string, roles: string[], extra: Partial<TestUser> =
  */
 export class ComposeInputError extends Error {}
 
+/** Пустой личный профиль почты: поля есть, значений нет (форма заморожена T33). */
+export function EMPTY_MAIL_PROFILE(): Record<string, string | boolean | null> {
+  // Значения по умолчанию — как у ядра (task-34): пустой профиль НЕ null.
+  return {
+    displayName: "",
+    signatureText: "",
+    signatureEnabled: true,
+    signaturePosition: "below",
+    replyQuote: true,
+    replyAttribution: "ru",
+    updatedAt: null
+  };
+}
+
+/** Отказ ядра по данным профиля: маршрут обязан отдать 400 с его текстом, а не 500. */
+export class MailProfileInputError extends Error {}
+
 export function coreMockModule(): Record<string, unknown> {
   const module: Record<string, unknown> = {
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
@@ -82,6 +99,14 @@ export function coreMockModule(): Record<string, unknown> {
     listDrafts: jest.fn(() => []),
     listTemplates: jest.fn(() => []),
     importEmails: jest.fn(async () => ({ added: 0, skipped: 0, knownOutOfRange: 0 })),
+    // Личный профиль почты (T34/T35): пустой профиль по умолчанию, без ошибки.
+    MailProfileInputError,
+    getMailProfile: jest.fn(async (userId: string) => ({ ...EMPTY_MAIL_PROFILE(), userId })),
+    setMailProfile: jest.fn(async (userId: string, patch: Record<string, unknown>) => ({
+      ...EMPTY_MAIL_PROFILE(),
+      userId,
+      ...patch
+    })),
     // Приём писем (T30): у FetchResult есть счётчик известных-вне-диапазона — форма обязана быть полной.
     fetchEmails: jest.fn(async () => ({ added: 0, skipped: 0, knownOutOfRange: 0 })),
     sendEmail: jest.fn(async () => ({ emailId: "sent-1", messageId: "<sent-1@stand.test>" })),

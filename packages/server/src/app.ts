@@ -24,6 +24,7 @@ import {
   getAccountById,
   getTemplate,
   getAccounts,
+  listAccounts,
   getAiConfig,
   getEmailView,
   getProgress,
@@ -111,6 +112,7 @@ import { mountJournalRoutes } from "./journalRoutes.js";
 import { mountResolutionRoutes } from "./resolutionRoutes.js";
 import { mountNotificationRoutes } from "./notificationRoutes.js";
 import { mountServiceAccountRoutes } from "./serviceAccountRoutes.js";
+import { mountMailProfileRoutes } from "./mailProfileRoutes.js";
 import { mountStatsRoutes } from "./statsRoutes.js";
 import { createDocflowProxy } from "./proxy.js";
 import { intParam } from "./params.js";
@@ -323,11 +325,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json({ ok: true, name: "mailsense", time: new Date().toISOString() });
   });
 
-  app.get("/api/settings", (_req, res) => {
-    // ⚠️ Секреты наружу не отдаём. Маршрут открыт любому вошедшему (рядовой видит настройки
-    // только для чтения), а `getAllSettings` возвращает ВСЮ таблицу — включая `ai.apiKey`
-    // и зашифрованный пароль каталога. Ни одному экрану этого маршрута они не нужны:
-    // форма ИИ берёт ключ из `/api/ai/config`, а он закрыт правом.
+  app.get("/api/settings", requirePermission("settings.manage"), (_req, res) => {
+    // ⚠️ Секреты наружу не отдаём: `getAllSettings` возвращает ВСЮ таблицу — включая `ai.apiKey`
+    // и зашифрованный пароль каталога, поэтому ключи вырезаем здесь.
+    // Чтение настроек предприятия закрыто правом settings.manage (матрица T39): раньше маршрут
+    // был открыт любому вошедшему, но настройки — это предприятие, а не личные данные работника.
+    // Форма ИИ берёт ключ из `/api/ai/config`, он закрыт тем же правом.
     const all = getAllSettings();
     delete all["ai.apiKey"];
     delete all["ldap.passwordEncrypted"];
@@ -356,7 +359,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json(getAiConfig());
   });
 
-  app.get("/api/ai/prompt", (_req, res) => {
+  app.get("/api/ai/prompt", requirePermission("settings.manage"), (_req, res) => {
     res.json(getPromptSettings());
   });
 
@@ -377,12 +380,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     })
   );
 
-  app.get("/api/analysis/progress", (_req, res) => {
+  app.get("/api/analysis/progress", requirePermission("mail.view"), (_req, res) => {
     res.json(getProgress());
   });
 
   // -------- accounts --------
-  app.get("/api/accounts", (_req, res) => {
+  app.get("/api/accounts", requirePermission("mail.view"), (_req, res) => {
     res.json(getAccounts().map(accountDto));
   });
 
@@ -415,6 +418,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post(
     "/api/accounts/:id/fetch",
+    // Забрать новые письма — ПОЧТОВАЯ операция, а не администрирование: у аппарата нет
+    // settings.manage, но есть mail.view. Иначе секретариат терял бы ручной скан (регрессия T39).
+    requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
       // Ручной скан пользователя: удалённые письма можно скачать заново
       // (авто-скан по-прежнему уважает надгробия — см. scheduler.ts).
@@ -429,6 +435,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post(
     "/api/import",
+    requirePermission("mail.send"),
     asyncHandler(async (req, res) => {
       const accountId = (req.body?.accountId as string) || "";
       const folder = (req.body?.folder as string) || "INBOX";
@@ -448,21 +455,35 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   );
 
   // -------- emails --------
-  app.get("/api/emails", (req, res) => {
+  app.get("/api/emails", requirePermission("mail.view"), (req, res) => {
     res.json(listEmailsWithAnalysis(parseEmailFilter(req.query)));
   });
 
-  app.post("/api/emails/bulk/analyze", (req, res) => {
+  app.post("/api/emails/bulk/analyze", requirePermission("mail.view"), (req, res) => {
     const n = analyzeEmails((req.body?.ids as string[]) ?? []);
     res.json({ queued: n });
   });
 
   // Шаблон письма для ответа/пересылки/нового: получатели, тема, цитата, подпись.
-  app.get("/api/compose-template", (req, res) => {
+  app.get("/api/compose-template", requirePermission("mail.view"), (req, res) => {
     const accountId = (req.query.accountId as string) || "";
     if (!accountId) return res.status(400).json({ error: "Укажите accountId" });
-    const mode = ((req.query.mode as string) || "new") as ComposeMode;
+    const modeRaw = (req.query.mode as string) || "new";
+    if (modeRaw !== "new" && modeRaw !== "reply" && modeRaw !== "forward") {
+      return res.status(400).json({ error: "Неизвестный режим письма" });
+    }
+    const mode = modeRaw as ComposeMode;
     const emailId = (req.query.emailId as string) || null;
+    // ⚠️ F-5: данные проверяем ДО вызова ядра. Ядро бросает обычное исключение на неизвестный
+    // ящик или письмо, а обработчик здесь синхронный — наружу уходил 500 «Внутренняя ошибка»
+    // вместо понятного отказа. 500 остаётся только для настоящих сбоев.
+    if (!listAccounts().some((a) => a.id === accountId)) {
+      return res.status(404).json({ error: "Ящик не найден" });
+    }
+    if (mode !== "new") {
+      if (!emailId) return res.status(400).json({ error: "Укажите письмо для ответа или пересылки" });
+      if (!getEmailView(emailId)) return res.status(404).json({ error: "Письмо не найдено" });
+    }
     // Личная подпись работника (T27): `useAccountSignature=0` — подпись ЯЩИКА не подставляется,
     // её добавит клиент из личных настроек работника. Без параметра поведение прежнее.
     const sig = req.query.useAccountSignature;
@@ -478,31 +499,31 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     );
   });
 
-  app.get("/api/emails/:id", (req, res) => {
+  app.get("/api/emails/:id", requirePermission("mail.view"), (req, res) => {
     const view = getEmailView(req.params.id);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     res.json(view);
   });
 
-  app.patch("/api/emails/:id/folder", (req, res) => {
+  app.patch("/api/emails/:id/folder", requirePermission("mail.view"), (req, res) => {
     const folder = (req.body?.folder as string) ?? "INBOX";
     setEmailFolder(req.params.id, folder);
     res.json({ ok: true });
   });
 
-  app.patch("/api/emails/:id/external-number", (req, res) => {
+  app.patch("/api/emails/:id/external-number", requirePermission("mail.view"), (req, res) => {
     const value = typeof req.body?.externalNumber === "string" ? req.body.externalNumber.trim() || null : null;
     setExternalNumber(req.params.id, value);
     res.json({ ok: true, externalNumber: value });
   });
 
-  app.patch("/api/emails/:id/send-date", (req, res) => {
+  app.patch("/api/emails/:id/send-date", requirePermission("mail.view"), (req, res) => {
     const value = typeof req.body?.sendDate === "string" ? req.body.sendDate.trim() || null : null;
     setSendDate(req.params.id, value);
     res.json({ ok: true, sendDate: value });
   });
 
-  app.get("/api/emails/:id/ics", (req, res) => {
+  app.get("/api/emails/:id/ics", requirePermission("mail.view"), (req, res) => {
     const view = getEmailView(req.params.id);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     const eventDate = view.analysis?.eventDate ?? null;
@@ -546,17 +567,17 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.send(ics);
   });
 
-  app.post("/api/emails/:id/analyze", (req, res) => {
+  app.post("/api/emails/:id/analyze", requirePermission("mail.view"), (req, res) => {
     analyzeEmail(req.params.id);
     res.json({ ok: true });
   });
 
-  app.post("/api/emails/analyze-all", (req, res) => {
+  app.post("/api/emails/analyze-all", requirePermission("mail.view"), (req, res) => {
     const n = analyzeAllPending();
     res.json({ queued: n });
   });
 
-  app.post("/api/emails/analyze-range", (req, res) => {
+  app.post("/api/emails/analyze-range", requirePermission("mail.view"), (req, res) => {
     const n = analyzeRange(
       (req.body?.since as string) || undefined,
       (req.body?.until as string) || undefined,
@@ -565,12 +586,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json({ queued: n });
   });
 
-  app.post("/api/emails/analyze-stop", (_req, res) => {
+  app.post("/api/emails/analyze-stop", requirePermission("mail.view"), (_req, res) => {
     const cleared = stopAnalysis();
     res.json({ cleared });
   });
 
-  app.post("/api/emails/bulk/folder", (req, res) => {
+  app.post("/api/emails/bulk/folder", requirePermission("mail.view"), (req, res) => {
     const ids = (req.body?.ids as string[]) ?? [];
     const folder = (req.body?.folder as string) ?? "INBOX";
     setEmailsFolder(ids, folder);
@@ -579,6 +600,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post(
     "/api/emails/bulk/delete",
+    requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
       const ids = (req.body?.ids as string[]) ?? [];
       cancelAnalysis(ids);
@@ -600,7 +622,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     })
   );
 
-  app.patch("/api/analysis/:emailId", (req, res) => {
+  app.patch("/api/analysis/:emailId", requirePermission("mail.view"), (req, res) => {
     const view = getEmailView(req.params.emailId);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     const body = req.body ?? {};
@@ -625,13 +647,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json(result);
   });
 
-  app.get("/api/threads", (req, res) => {
+  app.get("/api/threads", requirePermission("mail.view"), (req, res) => {
     // Тот же фильтр, что и у списка писем: поиск/категории/даты работают и в переписке.
     res.json(listThreadsGrouped(parseEmailFilter(req.query)));
   });
 
   // Полная пересборка переписок (на случай, если данные были собраны старой версией).
-  app.post("/api/threads/rebuild", (req, res) => {
+  app.post("/api/threads/rebuild", requirePermission("mail.view"), (req, res) => {
     const accountId = (req.body?.accountId as string) || undefined;
     res.json({ rethreaded: rebuildThreads(accountId) });
   });
@@ -639,6 +661,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   // -------- отправка / черновики --------
   app.post(
     "/api/emails/send",
+    requirePermission("mail.send"),
     asyncHandler(async (req, res) => {
       // Тело запроса и есть `ComposeInput`: поля `fromName` и `replyTo` (Р19) проходят
       // в ядро КАК ЕСТЬ — маршрут их не чистит и не подставляет. Адрес отправителя берётся
@@ -860,6 +883,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   // -------- attachments --------
   app.get(
     "/api/emails/:id/attachments/:attId/file",
+    requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
       const atts = listAttachments(req.params.id);
       const att = atts.find((a) => a.id === req.params.attId);
@@ -892,6 +916,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.get(
     "/api/emails/:id/attachments/:attId/preview",
+    requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
       const atts = listAttachments(req.params.id);
       const att = atts.find((a) => a.id === req.params.attId);
@@ -1185,6 +1210,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   mountNotificationRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });
   // Служебный ящик отправки (Р12): параметры — аппарату, смена — администратору с аудитом.
   mountServiceAccountRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+  // Личный профиль почты (T34/T35): локальный маршрут, в проксирование не входит.
+  mountMailProfileRoutes(app, { asyncHandler });
   // Агрегат «профиль исполнителя» (task-18): данные под будущую подсказку, читает только админ.
   mountStatsRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
 

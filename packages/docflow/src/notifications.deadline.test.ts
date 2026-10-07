@@ -5,6 +5,7 @@ import { initDb as initCoreDb, closeDb as closeCoreDb } from "../../core/src/db/
 import { closeDocflowDb, getDocflowPool, initDocflowDb } from "./db/index.js";
 import { runDocflowMigrations } from "./db/migrate.js";
 import { daysLeft, isOverdue } from "./deadlines.js";
+import { companyDayIso } from "./companyDay.js";
 import {
   DEFAULT_DUE_SOON_DAYS,
   materializeDeadlineNotifications,
@@ -46,9 +47,14 @@ async function count(query: string, params: unknown[] = []): Promise<number> {
   return Number(rows.rows[0]?.n ?? 0);
 }
 
-/** Дата со сдвигом в днях от сегодняшнего (UTC-день, как считает deadlines.ts). */
+/**
+ * Дата со сдвигом в днях от сегодняшнего.
+ *
+ * ⚠️ День считаем тем же правилом, что и сервер (день предприятия, T47): иначе в окне
+ * 00:00–03:00 МСК тест строил бы «сегодня» по UTC и падал бы на ВЕРНОМ коде.
+ */
 function dayOffset(days: number): string {
-  return new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+  return companyDayIso(new Date(Date.now() + days * 86_400_000));
 }
 
 async function seedTask(opts: {
@@ -143,7 +149,8 @@ beforeEach(async () => {
 
 describe("сроки считаются в календарных днях", () => {
   test("сегодня — 0, завтра — 1, вчера — −1", () => {
-    const today = new Date("2026-10-07T12:00:00.000Z");
+    // День задаём строкой: результат не зависит ни от пояса машины, ни от часа запуска.
+  const today = "2026-10-07";
     expect(daysLeft("2026-10-07", today)).toBe(0);
     expect(daysLeft("2026-10-08", today)).toBe(1);
     expect(daysLeft("2026-10-06", today)).toBe(-1);

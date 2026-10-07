@@ -3,6 +3,7 @@ import { createApp } from "./app.js";
 import * as core from "@mailsense/core";
 import * as docflow from "@mailsense/docflow";
 import { listen, request, sleep, type RunningApp } from "./testing/harness.js";
+import { __remoteSessionCacheForTests } from "./auth.js";
 
 jest.mock("@mailsense/core", () => require("./testing/mocks.js").coreMockModule());
 jest.mock("@mailsense/docflow", () => require("./testing/mocks.js").docflowMockModule());
@@ -24,17 +25,27 @@ jest.mock("@mailsense/docflow", () => require("./testing/mocks.js").docflowMockM
 const coreMocks = core as unknown as Record<string, jest.Mock>;
 const mockedDocflow = docflow as unknown as Record<string, jest.Mock>;
 
-/** Удалённый СЭД: сессию принимает только токен token:valid; остальное отдаёт как «серверное». */
+/**
+ * Удалённый СЭД: /api/auth/me подтверждает только известные токены, остальное отдаёт
+ * как «серверное». `revoked` позволяет тесту «отозвать» сессию на живой стороне.
+ */
 const remotePaths: string[] = [];
+// ⚠️ Настоящий /api/auth/me отдаёт ещё роли и права — пусть отдаёт и мок: иначе тест
+// на форму кэша ничего бы не ловил (нечего было бы отбрасывать).
+const remoteUsers = new Map<string, Record<string, unknown>>([
+  ["token:valid", { id: "u-1", ldapUid: "ivanov_ii", fullName: "Иванов И.И.", roles: ["secretary"], permissions: ["mail.view", "mail.send"] }],
+  ["token:petrova", { id: "u-2", ldapUid: "petrova_ma", fullName: "Петрова М.А.", roles: ["executor"], permissions: ["task.view"] }]
+]);
+const revoked = new Set<string>();
 async function remoteDocflow(): Promise<RunningApp> {
   return listen((req: http.IncomingMessage, res: http.ServerResponse) => {
     const path = (req.url ?? "").split("?")[0];
     remotePaths.push(path);
     if (path === "/api/auth/me") {
       const token = String(req.headers.authorization ?? "").replace(/^Bearer\s+/i, "");
-      const valid = token === "token:valid";
+      const user = revoked.has(token) ? null : remoteUsers.get(token) ?? null;
       res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ docflowEnabled: true, user: valid ? { id: "u-1" } : null }));
+      res.end(JSON.stringify({ docflowEnabled: true, user }));
       return;
     }
     res.writeHead(200, { "content-type": "application/json" });
@@ -118,6 +129,25 @@ describe("личные вещи работника остаются в клие�
     expect(remotePaths).not.toContain("/api/drafts");
   });
 
+  it("личный профиль почты остаётся в клиенте и на сервер не уходит", async () => {
+    // Личные настройки работника (Р18) — то же правило, что у черновиков и шаблонов:
+    // в клиентском режиме их обслуживает LOCAL обработчик, а не сервер СЭД.
+    const get = await request(app.baseUrl, "GET", "/api/mail-profile", { token: "token:valid" });
+    const put = await request(app.baseUrl, "PUT", "/api/mail-profile", {
+      token: "token:valid",
+      body: { displayName: "Иванов И.И., аппарат" }
+    });
+
+    expect(get.status).toBe(200);
+    expect(put.status).toBe(200);
+    expect(put.body).toMatchObject({ displayName: "Иванов И.И., аппарат" });
+    // Ключ — учётка работника из ПОДТВЕРЖДЁННОЙ удалённой сессии (не id и не ящик).
+    expect(coreMocks.getMailProfile).toHaveBeenCalledWith("ivanov_ii");
+    expect(coreMocks.setMailProfile).toHaveBeenCalledWith("ivanov_ii", { displayName: "Иванов И.И., аппарат" });
+    // На удалённый сервер профиль не уезжает вообще.
+    expect(remotePaths).not.toContain("/api/mail-profile");
+  });
+
   it("шаблоны тоже локальные", async () => {
     const res = await request(app.baseUrl, "GET", "/api/templates", { token: "token:valid" });
     expect(res.status).toBe(200);
@@ -168,4 +198,74 @@ describe("сервер недоступен: честная ошибка вме�
       await offline.close();
     }
   }, 30000);
+});
+
+describe("кэш подтверждённой сессии не даёт доступа в обход проверки", () => {
+  it("незнакомая сессия при упавшем сервере НЕ получает профиль — 503, ядро не спрашивают", async () => {
+    const offline = await listen(await createApp({ docflowServerUrl: await deadPortUrl() }));
+    try {
+      const res = await request(offline.baseUrl, "GET", "/api/mail-profile", { token: "token:never-seen" });
+
+      expect(res.status).toBe(503);
+      expect(coreMocks.getMailProfile).not.toHaveBeenCalled();
+    } finally {
+      await offline.close();
+    }
+  }, 20000);
+
+  it("кэш не смешивает работников: у каждого токена свой профиль", async () => {
+    const ivanov = await request(app.baseUrl, "GET", "/api/mail-profile", { token: "token:valid" });
+    const petrova = await request(app.baseUrl, "GET", "/api/mail-profile", { token: "token:petrova" });
+
+    expect(ivanov.status).toBe(200);
+    expect(petrova.status).toBe(200);
+    expect(coreMocks.getMailProfile).toHaveBeenNthCalledWith(1, "ivanov_ii");
+    expect(coreMocks.getMailProfile).toHaveBeenNthCalledWith(2, "petrova_ma");
+  });
+
+  it("отозванная сессия закрывает доступ и НЕ остаётся в кэше", async () => {
+    // Сначала сессию подтверждаем (она попадает в кэш)…
+    const before = await request(app.baseUrl, "GET", "/api/mail-profile", { token: "token:petrova" });
+    expect(before.status).toBe(200);
+
+    // …затем сервер её отзывает, и по истечении срока кэша запрос обязан получить отказ.
+    revoked.add("token:petrova");
+    await sleep(Number(process.env.MAILSENSE_TEST_SESSION_CACHE_MS ?? 5200));
+    const rejected = await request(app.baseUrl, "GET", "/api/mail-profile", { token: "token:petrova" });
+    expect(rejected.status).toBe(401);
+
+    // И главное: отозванный токен не должен «оживать» на упавшем сервере из старого кэша.
+    const offline = await listen(await createApp({ docflowServerUrl: await deadPortUrl() }));
+    try {
+      const res = await request(offline.baseUrl, "GET", "/api/mail-profile", { token: "token:petrova" });
+      expect(res.status).toBe(503);
+      expect(coreMocks.getMailProfile).toHaveBeenCalledTimes(1); // только первый, успешный вызов
+    } finally {
+      await offline.close();
+    }
+  }, 30000);
+});
+
+describe("T45: в кэше подтверждённой сессии нет ролей и прав", () => {
+  it("запись кэша — ровно id, логин и ФИО (роли и права сервера отброшены)", async () => {
+    __remoteSessionCacheForTests().clear();
+
+    const res = await request(app.baseUrl, "GET", "/api/mail-profile", { token: "token:valid" });
+
+    expect(res.status).toBe(200);
+    const entry = __remoteSessionCacheForTests().get("token:valid");
+    expect(entry).toBeDefined();
+    expect(entry?.user).toEqual({ id: "u-1", ldapUid: "ivanov_ii", fullName: "Иванов И.И." });
+    expect(Object.keys(entry?.user ?? {}).sort()).toEqual(["fullName", "id", "ldapUid"]);
+  });
+
+  it("поведение не изменилось: ключ профиля по-прежнему логин каталога", async () => {
+    __remoteSessionCacheForTests().clear();
+    // Предыдущий тест этого файла отзывает token:petrova — здесь он снова действующий.
+    revoked.delete("token:petrova");
+
+    await request(app.baseUrl, "GET", "/api/mail-profile", { token: "token:petrova" });
+
+    expect(coreMocks.getMailProfile).toHaveBeenCalledWith("petrova_ma");
+  });
 });
