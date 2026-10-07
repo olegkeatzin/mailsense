@@ -45,6 +45,8 @@ import { intParam } from "./params.js";
 export interface NotificationDeps {
   requireDocflowDb: express.RequestHandler;
   requirePermission: (permission: Permission) => express.RequestHandler;
+  /** «Любое из прав»: справочник нужен и тому, кто поручает, и тому, кто подписывает. */
+  requireAnyPermission: (...permissions: Permission[]) => express.RequestHandler;
   asyncHandler: (
     fn: (req: express.Request, res: express.Response) => Promise<unknown>
   ) => express.RequestHandler;
@@ -101,13 +103,18 @@ function assertIsoDay(value: string, message: string): void {
 }
 
 export function mountNotificationRoutes(app: express.Express, deps: NotificationDeps): void {
-  const { requireDocflowDb, requirePermission, asyncHandler } = deps;
+  const { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler } = deps;
   // Регистрируем проверку правил из ядра в хранилище docflow: тогда границы §5 действуют
   // для ЛЮБОГО вызывающего (маршрут, сид, будущий CRUD), а реализация проверки одна — core.
   setSortRuleValidator(validateSortRule);
   const view = [requireDocflowDb, requirePermission("notifications.view")];
   const manage = [requireDocflowDb, requirePermission("settings.manage")];
-  const prepare = [requireDocflowDb, requirePermission("resolution.create")];
+  // Типовые сроки нужны и подписанту: при утверждении он ВПРАВЕ поставить срок (этап 3),
+  // а без справочника чипы сроков у него пустые. Исполнителю он по-прежнему не нужен.
+  const deadlinePresets = [
+    requireDocflowDb,
+    requireAnyPermission("resolution.create", "resolution.approve")
+  ];
 
   // -------- Служебные пути объявляются ДО /:id --------
 
@@ -321,7 +328,7 @@ export function mountNotificationRoutes(app: express.Express, deps: Notification
    */
   app.get(
     "/api/docflow/deadline-presets",
-    ...prepare,
+    ...deadlinePresets,
     asyncHandler(async (req, res) => {
       const from = str(req.query.from) ?? new Date().toISOString().slice(0, 10);
       assertIsoDay(from, "Дата отсчёта должна быть в виде ГГГГ-ММ-ДД");

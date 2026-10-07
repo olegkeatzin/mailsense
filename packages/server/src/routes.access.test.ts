@@ -317,13 +317,8 @@ const CASES: RouteCase[] = [
     body: {},
     allowed: ["admin", "secretary", "manager"]
   },
-  {
-    what: "POST /api/docflow/resolutions/:id/email-approval — отметить ответ подписанта письмом",
-    method: "POST",
-    path: "/api/docflow/resolutions/res-1/email-approval",
-    body: { emailId: "e-1" },
-    allowed: ["admin", "secretary"]
-  },
+  // Кейс POST /:id/email-approval убран вместе с маршрутом (D-2, task-14): он позволял
+  // аппарату записать подписантом себя. Отсутствие маршрута проверяет signature.audit.test.ts.
   {
     what: "POST /api/docflow/resolutions/:id/reject — вернуть на доработку",
     method: "POST",
@@ -434,11 +429,28 @@ const CASES: RouteCase[] = [
     allowed: ["admin"]
   },
   {
-    // Подсказки срока нужны тому, кто назначает срок: аппарат, руководитель, администратор.
-    what: "GET /api/docflow/deadline-presets — типовые сроки поручающим",
+    // Типовые сроки нужны тому, кто назначает срок (аппарат, руководитель, администратор),
+    // и подписанту: при утверждении он вправе поставить срок. Исполнителю — нет.
+    what: "GET /api/docflow/deadline-presets — типовые сроки поручающим и подписанту",
     method: "GET",
     path: "/api/docflow/deadline-presets?from=2026-05-12",
-    allowed: ["admin", "secretary", "manager"]
+    allowed: ["admin", "secretary", "manager", "signer"]
+  },
+  {
+    // Р12: параметры служебного ящика нужны аппарату, который подключается к нему в почте.
+    // Что пароль в ответе не отдаётся — проверяет serviceAccountRoutes.test.ts.
+    what: "GET /api/docflow/service-account — параметры служебного ящика аппарату",
+    method: "GET",
+    path: "/api/docflow/service-account",
+    allowed: ["admin", "secretary"]
+  },
+  {
+    // Смена служебного ящика меняет, от чьего имени уходят официальные письма: только администратор.
+    what: "PUT /api/docflow/service-account — выбор служебного ящика администратором",
+    method: "PUT",
+    path: "/api/docflow/service-account",
+    body: { accountId: "acc-1" },
+    allowed: ["admin"]
   }
 ];
 

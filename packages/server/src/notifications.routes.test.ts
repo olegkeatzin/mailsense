@@ -314,6 +314,20 @@ describe("правила автосортировки", () => {
     expect(mockedCore.addWorkingDays).toHaveBeenCalledWith("2026-05-12", 3, []);
   });
 
+  test("подписант получает типовые сроки: при утверждении он вправе поставить срок", async () => {
+    const signer = await request(app.baseUrl, "GET", "/api/docflow/deadline-presets?from=2026-05-12", {
+      token: token("signer")
+    });
+    const secretary = await request(app.baseUrl, "GET", "/api/docflow/deadline-presets?from=2026-05-12", {
+      token: token("secretary")
+    });
+    const executor = await request(app.baseUrl, "GET", "/api/docflow/deadline-presets?from=2026-05-12", {
+      token: token("executor")
+    });
+
+    expect([signer.status, secretary.status, executor.status]).toEqual([200, 200, 403]);
+  });
+
   test("кривая дата отсчёта отклоняется, расчёт не запускается", async () => {
     mockedCore.isWorkingDay.mockImplementationOnce(() => {
       throw new RangeError("нет такой даты");

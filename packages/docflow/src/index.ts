@@ -24,4 +24,5 @@ export * from "./resolutions.js";
 export * from "./notifications.js";
 export * from "./sortingRules.js";
 export * from "./deadlinePresets.js";
+export * from "./serviceAccount.js";
 export * from "./approvalReplies.js";

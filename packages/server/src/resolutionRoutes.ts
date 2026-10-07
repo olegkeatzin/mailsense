@@ -1,11 +1,11 @@
 import type express from "express";
 import { findReplyContext, suggestFields } from "./replySuggestions.js";
 import { intParam } from "./params.js";
+import { selectSendAccount, type SendAccountLike } from "./serviceAccount.js";
 import {
   draftResolution,
   getAiConfig,
   getEmailView,
-  getSettingValue,
   listAccounts,
   listAttachments,
   logger,
@@ -24,6 +24,7 @@ import {
   dispatchResolution,
   forwardToManager,
   getDocument,
+  getServiceAccountState,
   getUser,
   getUserByEmail,
   getResolution,
@@ -42,6 +43,7 @@ import {
   requestApproval,
   revertDispatch,
   updateResolution,
+  writeAudit,
   type Actor,
   type AssigneeKind,
   type Permission,
@@ -68,6 +70,40 @@ export interface ResolutionDeps {
 
 function actorOf(req: express.Request): Actor {
   return { id: req.user?.id ?? null, name: req.user?.fullName ?? "" };
+}
+
+/**
+ * Ящик отправки служебных писем (Р12, task-11).
+ *
+ * Один помощник на /forward и /dispatch: раньше в обоих местах была копипаста «первый imap»,
+ * и на стенде им оказывался ящик директора без SMTP.
+ *
+ * ⚠️ Отказ бросается ДО перехода резолюции: иначе поручение осталось бы «отправлено»
+ * без письма, а причина была бы видна только в логе почтового сервера.
+ */
+async function resolveSendAccount(explicitId: string | null): Promise<SendAccountLike> {
+  // Единственный источник выбора — настройки СЭД. Ключ в настройках ПОЧТЫ
+  // (docflow.serviceAccountId) больше не читается совсем: пока он был запасным,
+  // «снять служебный ящик» не отключало отправку — дефект, пойманный живой проверкой.
+  const state = await getServiceAccountState();
+  const selection = selectSendAccount(listAccounts(), {
+    explicitId,
+    configuredId: state.accountId,
+    // Выбор снят явно (строка настроек есть, значение пустое) — «первый попавшийся» запрещён.
+    cleared: state.explicit && state.accountId === null
+  });
+
+  if (selection.warning) {
+    logger.warn({ source: selection.source, accountId: selection.account?.id ?? null }, selection.warning);
+  }
+  if (!selection.account || selection.problem) {
+    throw new AppError(
+      selection.problem ?? "Не настроен почтовый ящик для отправки",
+      400,
+      selection.problemCode === "ok" ? "no_account" : selection.problemCode
+    );
+  }
+  return selection.account;
 }
 
 function str(v: unknown): string | undefined {
@@ -132,11 +168,45 @@ function assertResolutionVisible(req: express.Request, detail: ResolutionDetail)
   if (isResolutionParticipant(detail, user.id)) return;
   throw new AppError("Поручение не ваше: карточка доступна участнику поручения", 403, "not_participant");
 }
-async function assertSignRight(userId: string, message = "У пользователя нет права подписи"): Promise<void> {
+/**
+ * Проверяет право подписи у названного человека.
+ *
+ * ⚠️ Отказ в подписи — событие безопасности, и он оставляет след (D-3, task-14): без записи
+ * спор «кто пытался подписать и кого назвал подписантом» разрешить нечем. Пишем через
+ * `writeAudit` ВНЕ транзакции: отказ ничего не меняет, откатывать нечего — тот же приём,
+ * что у `journal.register_denied`. Сбой записи следа не подменяет отказ наружу.
+ */
+async function assertSignRight(
+  userId: string,
+  message = "У пользователя нет права подписи",
+  ctx: { actor: Actor; resolutionId?: string; email?: string | null } = { actor: { id: null, name: "" } }
+): Promise<void> {
   const user = await getUser(userId);
+  const perms = user ? permissionsOfRoles(await getUserRoles(user.id)) : [];
+  if (user && perms.includes("resolution.approve")) return;
+
+  try {
+    await writeAudit({
+      userId: ctx.actor.id,
+      userName: ctx.actor.name,
+      action: "resolution.approve_denied",
+      entityType: "resolution",
+      entityId: ctx.resolutionId ?? "",
+      newValue: JSON.stringify({
+        reason: user ? "no_sign_right" : "no_signer",
+        message,
+        candidateId: userId,
+        candidateEmail: ctx.email ?? user?.email ?? null
+      })
+    });
+  } catch (err) {
+    // Сбой следа не подменяет сам отказ: человек должен увидеть «недостаточно прав»,
+    // а не 500. Причину пишем в лог (прецедент journal.register_denied).
+    logger.warn({ err: (err as Error).message, resolutionId: ctx.resolutionId }, "Не удалось записать отказ в подписи");
+  }
+
   if (!user) throw new AppError("Утверждающий не найден", 400, "no_signer");
-  const perms = permissionsOfRoles(await getUserRoles(user.id));
-  if (!perms.includes("resolution.approve")) throw new AppError(message, 403, "no_sign_right");
+  throw new AppError(message, 403, "no_sign_right");
 }
 
 export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps): void {
@@ -211,14 +281,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       // Ящик отправки: явно указанный → служебный из настроек → первый подходящий.
       // Служебный задаёт администратор: на предприятии ящиков несколько, и «первый попавшийся»
       // означал бы, что письмо руководителю уходит не от того адреса.
-      const accounts = listAccounts();
-      const configured = getSettingValue("docflow.serviceAccountId");
-      const account =
-        (b.accountId ? accounts.find((a) => a.id === String(b.accountId)) : undefined) ??
-        (configured ? accounts.find((a) => a.id === configured) : undefined) ??
-        accounts.find((a) => a.protocol === "imap") ??
-        accounts[0];
-      if (!account) throw new AppError("Не настроен почтовый ящик для отправки", 400, "no_account");
+      // Ящик отправки: явно указанный → служебный из настроек → первый готовый (Р12).
+      const account = await resolveSendAccount(b.accountId ? String(b.accountId) : null);
 
       // Письмо-источник: из него берём тему и цепочку, чтобы ответ руководителя
       // нашёлся в том же треде, а не повис отдельно.
@@ -372,7 +436,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const from = mail?.from?.address ?? "";
       const signer = from ? await getUserByEmail(from) : null;
       if (!signer) throw new AppError("Не удалось определить отправителя письма", 400, "no_sender");
-      await assertSignRight(signer.id, "Отправитель письма не имеет права подписи");
+      await assertSignRight(signer.id, "Отправитель письма не имеет права подписи", {
+        actor: actorOf(req),
+        resolutionId: req.params.id,
+        email: from
+      });
       // Если поручение уже помечено как «ответ письмом» (повторная разметка или старые данные),
       // первый шаг пропускаем: он допустим только из состояния «на утверждении».
       const current = await getResolution(req.params.id);
@@ -558,23 +626,14 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     })
   );
 
-  /** Зафиксировать, что подписант ответил письмом: способ В, шаг 1. */
-  app.post(
-    "/api/docflow/resolutions/:id/email-approval",
-    ...dispatch,
-    asyncHandler(async (req, res) => {
-      const b = req.body ?? {};
-      const emailId = String(b.emailId ?? "");
-      if (!emailId) throw new AppError("Не указано письмо с ответом", 400, "bad_email");
-      res.json(
-        await markEmailApproval(
-          req.params.id,
-          { emailId, replyText: String(b.replyText ?? "") },
-          actorOf(req)
-        )
-      );
-    })
-  );
+  /**
+   * ⚠️ Маршрут POST /:id/email-approval УДАЛЁН (D-2, task-14).
+   *
+   * Он стоял под правом аппарата (resolution.dispatch) и вызывал markEmailApproval, который
+   * записывал подписантом САМОГО аппарата: штатным маршрутом обходилось правило «подписант —
+   * только обладатель resolution.approve». Веб этот маршрут не использовал — он был чистым
+   * вектором обхода. Человеческий путь один: аппарат отмечает письмо через
+   * POST /:id/mark-approval, где отправитель письма проверяется правом подписи.
 
   /** Способ В, шаг 2: аппарат подтвердил разбор и утверждение (Р9). */
   app.post(
@@ -585,7 +644,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       // Подписанта вписывает аппарат, но право подписи проверяет сервер: без этого
       // подписантом можно было назвать кого угодно — лишь бы он был в базе.
       const approvedBy = b.approvedBy ? String(b.approvedBy) : null;
-      if (approvedBy) await assertSignRight(approvedBy);
+      if (approvedBy) {
+        await assertSignRight(approvedBy, undefined, { actor: actorOf(req), resolutionId: req.params.id });
+      }
       res.json(
         await confirmEmailApproval(req.params.id, actorOf(req), {
           approvedBy,
@@ -621,13 +682,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const withEmail = detail.assignees.filter((a) => !!a.email);
       if (!withEmail.length) throw new AppError("У исполнителей не заполнены адреса", 400, "no_emails");
 
-      const accounts = listAccounts();
-      const configured = getSettingValue("docflow.serviceAccountId");
-      const account =
-        (configured ? accounts.find((a) => a.id === configured) : undefined) ??
-        accounts.find((a) => a.protocol === "imap") ??
-        accounts[0];
-      if (!account) throw new AppError("Не настроен почтовый ящик для отправки", 400, "no_account");
+      // Тот же помощник, что в /forward: одна логика выбора ящика на оба маршрута.
+      const account = await resolveSendAccount(b.accountId ? String(b.accountId) : null);
 
       // Одно письмо на всех исполнителей — как в бумажном журнале, где в графе 8
       // перечислены все. Разные письма раздули бы переписку и разошлись бы по тредам.

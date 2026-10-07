@@ -48,7 +48,27 @@ export function coreMockModule(): Record<string, unknown> {
     getAiConfig: jest.fn(() => ({})),
     getPromptSettings: jest.fn(() => ({})),
     getProgress: jest.fn(() => ({ emailId: null, stage: "idle", queueLength: 0 })),
-    listAccounts: jest.fn(() => [{ id: "acc-1", protocol: "imap", username: "stand@mail.test" }]),
+    // Ящик стенда — с НАСТРОЕННОЙ отправкой: иначе выбор ящика (Р12) останавливал бы
+    // отправку, и падал бы не тот тест, который проверяет.
+    listAccounts: jest.fn(() => [
+      {
+        id: "acc-1",
+        protocol: "imap",
+        host: "mail.test",
+        port: 993,
+        tls: "ssl",
+        username: "stand@mail.test",
+        passwordEncrypted: "ШИФР-ПАРОЛЬ",
+        authType: "password",
+        settings: {},
+        smtpHost: "mail.test",
+        smtpPort: 465,
+        smtpTls: "ssl",
+        smtpUsername: "stand@mail.test",
+        smtpPasswordEncrypted: null,
+        smtpAuthType: "password"
+      }
+    ]),
     listAttachments: jest.fn(() => []),
     getEmailView: jest.fn(() => null),
     listEmailsWithAnalysis: jest.fn(() => []),
@@ -266,6 +286,13 @@ export function docflowMockModule(): Record<string, unknown> {
     // Аудит.
     listAudit: stub([]),
     countAudit: stub(0),
+    /** Аудит вне транзакции: незаурядные случаи вроде отказа в подписи (прецедент register_denied). */
+    writeAudit: jest.fn(async () => null),
+
+    // Р12: служебный ящик отправки. explicit = «администратор выбор делал» (в т.ч. снял).
+    getServiceAccountState: jest.fn(async () => ({ explicit: false, accountId: null })),
+    getServiceAccountId: jest.fn(async () => null),
+    setServiceAccountId: jest.fn(async (accountId: string | null) => accountId),
 
     // Этап 5: центр уведомлений.
     listNotifications: jest.fn(async () => ({ items: [], unread: 0, total: 0, enabled: true })),
