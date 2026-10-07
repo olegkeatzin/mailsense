@@ -7,6 +7,7 @@ import { useStore } from "../store";
 import { priorityLabel } from "../utils";
 import type { IncomingItem } from "../types";
 import { READY_STYLE, SOON_STYLE } from "./notifications/colors";
+import { ServiceAccountHint } from "./ServiceAccountHint";
 
 /**
  * «Входящие на регистрацию» — рабочее место аппарата.
@@ -81,6 +82,9 @@ export default function IncomingList() {
           Обновить
         </Button>
       </div>
+
+      {/* Куда входить аппарату: служебный ящик выбирает администратор, здесь только подсказка. */}
+      <ServiceAccountHint />
 
       {/* Важное утверждение, а не мелочь: поэтому всегда видно, а не в Tooltip. */}
       <div style={{ color: "#595959", fontSize: 12, margin: "8px 0 12px" }}>

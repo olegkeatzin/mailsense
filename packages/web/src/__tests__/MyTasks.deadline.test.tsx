@@ -74,6 +74,21 @@ describe("срок в «Моих задачах»", () => {
     expect(await screen.findByText("не указан")).not.toBeNull();
   });
 
+  it("служебный комментарий про пресет НЕ рендерится в колонке «Отчёт» (D5)", async () => {
+    mockTasks.mockResolvedValue([
+      task({ reportAt: "2026-10-06T12:00:00.000Z", reportText: "Ответ отправлен" })
+    ]);
+    render(<MyTasks />);
+
+    const tag = await screen.findByText(/сдан /);
+    // Ячейка «Отчёт» должна содержать только плашку: отладочный комментарий однажды
+    // попал в JSX и был виден на экране как текст. Проверяем ЛЮБОЙ такой текст,
+    // а не конкретные слова — иначе инъекция «другим текстом» пройдёт мимо.
+    const cellText = tag.closest("td")?.textContent ?? "";
+    expect(cellText).not.toContain("//");
+    expect(cellText).not.toMatch(/Пресет|норма AA|комментар/i);
+  });
+
   it("кнопка «В календарь» остаётся единственным напоминанием вне приложения (Р11)", async () => {
     mockTasks.mockResolvedValue([task()]);
     render(<MyTasks />);

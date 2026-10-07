@@ -28,6 +28,7 @@ import { DocflowTab, UsersTab } from "./DocflowAdmin";
 import AuditTab from "./AuditTab";
 import NumberingTab from "./NumberingTab";
 import { SortingRulesTab } from "./sorting/SortingRulesTab";
+import { ServiceAccountAdmin } from "./ServiceAccountAdmin";
 import { NotificationsTab } from "./sorting/NotificationsTab";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, Template } from "../types";
 
@@ -604,12 +605,9 @@ function AiTab() {
 
 function GeneralTab() {
   const [settings, setSettings] = useState<Record<string, string>>({});
-  /** Ящики нужны для выбора служебного: без него письмо руководителю уйдёт не от того адреса. */
-  const [accounts, setAccounts] = useState<Array<{ id: string; email?: string; login?: string }>>([]);
 
   useEffect(() => {
     void api.settings().then(setSettings);
-    void api.accounts().then((list) => setAccounts(list as Array<{ id: string; email?: string; login?: string }>)).catch(() => setAccounts([]));
   }, []);
 
   const save = async (k: string, v: string | number | boolean) => {
@@ -633,22 +631,10 @@ function GeneralTab() {
             (при необходимости с диапазоном дат).
           </Typography.Text>
         </div>
-        <div>
-          <Typography.Text>Служебный ящик аппарата</Typography.Text>
-          <br />
-          <Select
-            style={{ minWidth: 320, marginTop: 4 }}
-            allowClear
-            placeholder="не выбран — берётся первый подходящий"
-            value={settings["docflow.serviceAccountId"] || undefined}
-            onChange={(v) => void save("docflow.serviceAccountId", v ?? "")}
-            options={accounts.map((a) => ({ value: a.id, label: a.email || a.login || a.id }))}
-          />
-          <Typography.Text type="secondary" style={{ fontSize: 12, display: "block" }}>
-            С него уходят письма руководителю на резолюцию. Если не выбрать, система возьмёт первый
-            подходящий ящик — на предприятии с несколькими ящиками это может быть не тот адрес.
-          </Typography.Text>
-        </div>
+        {/* Служебный ящик настраивается ТОЛЬКО во вкладке «Служебный ящик» через
+            /api/docflow/service-account. Старый селектор писал legacy-ключ в настройки ПОЧТЫ
+            и ПЕРЕБИВАЛ явное снятие выбора: агент снимал ящик, а письмо руководителю всё
+            равно уходило первым подходящим. Поле удалено — иначе дефект вернётся. */}
         <div>
           <Typography.Text>Автоматический анализ новых писем</Typography.Text>
           <br />
@@ -1109,6 +1095,8 @@ export default function SettingsModal() {
           ...(canManageSettings
             ? [
                 // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
+                // Служебный ящик: аппарат видит подсказку, выбирает администратор (settings.manage).
+                { key: "service", label: "Служебный ящик", children: <ServiceAccountAdmin key={reloadKey} /> },
                 { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
                 { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> }
               ]

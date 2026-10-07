@@ -30,6 +30,7 @@ import type {
   NumberingState,
   RegisterSuggest,
   Role,
+  ServiceAccountState,
   SortPreview,
   Template,
   ThreadGroup,
@@ -395,6 +396,15 @@ export const api = {
     request<CaseRecord[]>("/api/docflow/cases" + (onlyActive ? "?active=1" : "")),
   saveCase: (c: Partial<CaseRecord> & { code: string }) =>
     request<CaseRecord>("/api/docflow/cases", { method: "POST", body: JSON.stringify(c) }),
+
+  /** Служебный ящик отправки (Р12): подсказка аппарату и выбор администратора. */
+  serviceAccount: () => request<ServiceAccountState>("/api/docflow/service-account"),
+  /** PUT возвращает тот же shape, что GET, плюс { ok, accountId } — перечитывать GET не нужно. */
+  setServiceAccount: (accountId: string | null) =>
+    request<{ ok: boolean; accountId: string | null } & ServiceAccountState>("/api/docflow/service-account", {
+      method: "PUT",
+      body: JSON.stringify({ accountId })
+    }),
 
   settings: () => request<Record<string, string>>("/api/settings"),
   saveSetting: (key: string, value: string) =>

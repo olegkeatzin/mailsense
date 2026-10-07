@@ -160,7 +160,7 @@ export function MyTasks() {
         v ? (
           // Видно и когда сдан, и что именно написал исполнитель — без открытия карточки.
           <Tooltip title={r.reportText || ""}>
-            // Пресет color="green" даёт 3.37:1 — норма AA не проходит, поэтому свой стиль.
+            {/* Пресет color="green" даёт 3.37:1 — норма AA не проходит, поэтому свой стиль. */}
             <Tag style={{ ...READY_STYLE, cursor: "help" }}>
               сдан {dayjs(v).format("DD.MM HH:mm")}
             </Tag>

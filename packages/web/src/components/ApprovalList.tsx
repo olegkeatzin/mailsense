@@ -31,6 +31,8 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
   const allowed = can(requiredPermission);
   /** Справочник людей — управленческий вид: тот, кто поручает, или тот, кто подписывает. */
   const canLoadCandidates = can("resolution.create") || can("resolution.approve");
+  /** Подтверждение разбора — работа АППАРАТА, а не подписанта (D4). */
+  const canConfirm = can("resolution.dispatch");
   const [items, setItems] = useState<Resolution[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -356,13 +358,21 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                   {byEmail ? (
                     // Аппарат НЕ утверждает — директор уже утвердил. Он подтверждает, что
                     // разбор ответа верен. Поэтому и формулировка про подтверждение.
-                    <Button
-                      type="primary"
-                      loading={busyId === r.id}
-                      onClick={() => confirm(r)}
-                    >
-                      Подтвердить утверждение
-                    </Button>
+                    // Подписанту этой кнопки быть не должно: он утверждает, а не подтверждает
+                    // чужой разбор (нашёл QA: кнопка показывалась роли signer).
+                    canConfirm ? (
+                      <Button
+                        type="primary"
+                        loading={busyId === r.id}
+                        onClick={() => confirm(r)}
+                      >
+                        Подтвердить утверждение
+                      </Button>
+                    ) : (
+                      <span style={{ color: "#595959", fontSize: 12 }}>
+                        Подтверждает аппарат — у вас нет права подтверждения разбора
+                      </span>
+                    )
                   ) : (
                     <Button type="primary" loading={busyId === r.id} onClick={() => approve(r)}>Утвердить</Button>
                   )}

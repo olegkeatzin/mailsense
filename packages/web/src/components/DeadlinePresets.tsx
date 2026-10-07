@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Space, Tag, Tooltip } from "antd";
 import dayjs from "dayjs";
 import { resolutionApi } from "../api";
+import { useStore } from "../store";
 
 /**
  * Подсказки-чипы для поля «срок» (А9 приложения к контракту).
@@ -11,9 +12,16 @@ import { resolutionApi } from "../api";
  * готовую дату в поле; поле остаётся редактируемым вручную.
  */
 export function DeadlinePresets({ onPick }: { onPick: (dueDate: string) => void }) {
+  const can = useStore((s) => s.can);
+  const authStatus = useStore((s) => s.authStatus);
+  const authUser = useStore((s) => s.authUser);
+  /** Маршрут открыт тому, кто поручает или подписывает. */
+  const allowed = !!authStatus?.docflowEnabled && !!authUser && (can("resolution.create") || can("resolution.approve"));
   const [items, setItems] = useState<Array<{ id: string; title: string; days: number; isWorkday: boolean; dueDate: string }>>([]);
 
   useEffect(() => {
+    // Без права — ни запроса, ни чипов: иначе у подписанта сыпались 403 по каждой карточке (D4).
+    if (!allowed) return;
     let alive = true;
     // Сегодняшняя дата — параметр запроса, а не расчёт срока: расчёт делает сервер.
     const from = dayjs().format("YYYY-MM-DD");
@@ -27,7 +35,7 @@ export function DeadlinePresets({ onPick }: { onPick: (dueDate: string) => void 
     return () => {
       alive = false;
     };
-  }, []);
+  }, [allowed]);
 
   if (!items.length) return null;
 

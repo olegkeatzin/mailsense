@@ -581,3 +581,53 @@ export interface SortPreview {
   total: number;
   samples: SortPreviewSample[];
 }
+
+// ---------------- Р12: служебный ящик отправки ----------------
+
+/** Параметры служебного ящика. Пароли сервер не отдаёт вообще — их здесь нет и быть не должно. */
+export interface ServiceAccount {
+  accountId: string;
+  /** Человекочитаемая подпись и логин ящика. */
+  name: string;
+  username: string;
+  protocol: Protocol;
+  host: string;
+  port: number;
+  tls: TlsMode | string;
+  authType: string;
+  smtpHost: string;
+  smtpPort: number | null;
+  smtpTls: string | null;
+  smtpUsername: string;
+  /** Заполнен ли адрес SMTP. */
+  smtpHostConfigured: boolean;
+  /** Отправка РЕАЛЬНО возможна: адрес И пароль (свой SMTP либо пароль ящика) — как в sendService. */
+  smtpConfigured: boolean;
+}
+
+/**
+ * Машинный код проблемы. Нужен, чтобы выбрать действие в интерфейсе, не разбирая
+ * русский текст (правило проекта: тексты не парсить). Сервер может его не отдавать —
+ * тогда интерфейс показывает problem как есть и не гадает.
+ */
+export type ServiceAccountProblemCode =
+  /** Проблемы нет. */
+  | "ok"
+  /** Служебный ящик не выбран. */
+  | "not_configured"
+  /** Выбранный ящик больше не существует. */
+  | "account_missing"
+  /** У ящика не настроена отправка. */
+  | "smtp_not_configured"
+  /** Только при попытке отправки. */
+  | "unknown_account"
+  | "no_account";
+
+export interface ServiceAccountState {
+  configured: boolean;
+  account: ServiceAccount | null;
+  /** Готовый текст для человека; разметки не содержит. */
+  problem: string | null;
+  /** Машинный код: "ok" — проблем нет. */
+  problemCode: ServiceAccountProblemCode;
+}

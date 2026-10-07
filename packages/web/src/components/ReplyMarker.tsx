@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, DatePicker, Form, Input, Modal, Select, Space, Tag, message } from "antd";
+import dayjs from "dayjs";
+import { parseTypedDate } from "../utils/deadlineInput";
 import { RobotOutlined } from "@ant-design/icons";
 import { resolutionApi } from "../api";
 import { useStore } from "../store";
@@ -25,6 +27,21 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
   const [assignees, setAssignees] = useState<string[]>([]);
   const [responsible, setResponsible] = useState<string | undefined>();
   const [deadline, setDeadline] = useState<string | null>(null);
+  /**
+   * Ввод срока нельзя терять.
+   *
+   * DatePicker применяет НАБРАННОЕ значение только по Enter или blur, а человек набирает дату
+   * и сразу жмёт «Отметить и утвердить» — срок уходил null, и подписант молча терял ввод
+   * (нашёл QA в живом прогоне: в резолюции deadline=null, в задаче «нет срока»).
+   * Поэтому: держим ref на пикер, на отправке фиксируем ввод (blur) и читаем значение из ref,
+   * а не из состояния, которое на момент нажатия ещё пустое.
+   */
+  const deadlineWrapRef = useRef<HTMLSpanElement | null>(null);
+  const deadlineRef = useRef<string | null>(null);
+  const commitDeadline = (v: string | null) => {
+    deadlineRef.current = v;
+    setDeadline(v);
+  };
   const [people, setPeople] = useState<Array<{ id: string; fullName: string }>>([]);
 
   const load = useCallback(async () => {
@@ -48,7 +65,7 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
     setText("");
     setAssignees(item.assignees.map((a) => a.userId));
     setResponsible(item.assignees.find((a) => a.kind === "responsible")?.userId);
-    setDeadline(null);
+    commitDeadline(null);
     if (kind === "approval" && !people.length) {
       try {
         const list = await resolutionApi.executorCandidates();
@@ -84,6 +101,13 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
       message.warning("Заполните текст");
       return;
     }
+    // Набранный срок мог ещё не примениться: DatePicker фиксирует ввод по Enter/blur.
+    // Просим поле применить ввод и, если оно этого не сделало, читаем то, что человек
+    // реально видит в поле, и разбираем сами — иначе дата теряется молча.
+    const deadlineInput = deadlineWrapRef.current?.querySelector("input") as HTMLInputElement | null;
+    deadlineInput?.blur();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const deadlineValue = deadlineRef.current ?? parseTypedDate(deadlineInput?.value);
     setSaving(true);
     try {
       if (mode.kind === "approval") {
@@ -98,7 +122,7 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
             userId: uid,
             kind: (uid === responsible ? "responsible" : "coexecutor") as AssigneeKind
           })),
-          deadline,
+          deadline: deadlineValue,
           priority: "normal"
         });
         message.success("Отмечено как резолюция руководителя — можно отправлять исполнителям");
@@ -213,10 +237,16 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
                   />
                 </Form.Item>
                 <Form.Item label="Срок" style={{ marginBottom: 0 }}>
-                  <DatePicker
-                    onChange={(_d, s) => setDeadline(s ? String(s) : null)}
-                    placeholder="не указан"
-                  />
+                  {/* Обёртка нужна, чтобы прочитать набранное в поле значение на отправке. */}
+                  <span ref={deadlineWrapRef}>
+                    <DatePicker
+                      // Обе формы ввода принимаем: «12.10.2026» и «2026-10-12».
+                      format={["DD.MM.YYYY", "YYYY-MM-DD"]}
+                      value={deadline ? dayjs(deadline) : null}
+                      onChange={(d) => commitDeadline(d ? d.format("YYYY-MM-DD") : null)}
+                      placeholder="не указан"
+                    />
+                  </span>
                 </Form.Item>
               </Space>
             </>
