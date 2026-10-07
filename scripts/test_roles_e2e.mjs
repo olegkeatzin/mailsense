@@ -294,27 +294,103 @@ async function main() {
   check("подготовил и утвердил — разные люди", card.body?.preparedByName !== card.body?.approvedByName,
     card.body?.preparedByName + " / " + card.body?.approvedByName);
 
-  // ---------- 9. Способ В: ответ письмом ----------
+  // ---------- 9. Способ В: ответ подписанта ПИСЬМОМ (реальный путь) ----------
+  // ⚠️ Раньше здесь использовался маршрут POST /:id/email-approval, который позволял аппарату
+  // сделать подписантом кого угодно (D-2). Маршрут УДАЛЁН. Теперь способ В идёт настоящим путём:
+  // письмо подписанта лежит в ящике, подписант определяется по адресу отправителя, аппарат
+  // подтверждает разбор через mark-approval. Письмо импортируем сырым MIME в служебный ящик —
+  // это тот же разбор, что и после скана IMAP, только без ожидания доставки.
   console.log("\n--- способ В: ответ подписанта письмом ---");
-  const res2 = await sess.secretary.post("/api/docflow/resolutions", {
-    ...resBody,
-    text: "Проверка способа В: утверждение ответом письмом."
-  });
-  const rid2 = res2.body?.id;
-  await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/request-approval");
-  expect("подписант НЕ подтверждает сам себя", await sess.signer.post("/api/docflow/resolutions/" + rid2 + "/confirm", { approvedBy: null }), [403]);
-  expect("аппарат фиксирует ответ письмом", await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/email-approval", {
-    emailId: "e2e-reply-" + Date.now(),
-    replyText: "Утверждаю"
-  }), [200]);
-  expect("из «ждёт подтверждения» отправлять нельзя", await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/dispatch"), [409]);
-  const confirmed = await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/confirm", {
-    approvedBy: byLogin(ACCOUNTS.signer.login)?.id ?? null
-  });
-  expect("аппарат подтверждает разбор", confirmed, [200]);
-  check("способ утверждения — письмо", confirmed.body?.approvalMethod === "email", confirmed.body?.approvalMethod);
-  check("подтвердил аппарат, а не подписант", confirmed.body?.confirmedBy !== confirmed.body?.approvedBy);
-  expect("после подтверждения можно отправлять", await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/dispatch"), [200]);
+  const accountsRes = await sess.secretary.get("/api/accounts");
+  const accountsList = Array.isArray(accountsRes.body) ? accountsRes.body : [];
+  const serviceAcc = accountsList.find((a) => String(a.username ?? "").toLowerCase() === "test@mail.test");
+  check("служебный ящик найден для способа В", !!serviceAcc, "test@mail.test");
+
+  // Поручение идёт РЕАЛЬНЫМ путём способа В: аппарат направляет письмо директору (forward).
+  // Маршрут создаёт резолюцию в состоянии «на утверждении» и записывает requestEmailId — именно
+  // по нему затем ищется ответ в треде. Прежний ручной email-approval удалён (D-2).
+  const replySigner = byLogin(ACCOUNTS.signer.login);
+  const fwd2 = await sess.secretary.post("/api/docflow/resolutions/forward", { documentId, toUserId: replySigner.id });
+  expect("аппарат направляет письмо директору (способ В)", fwd2, [201]);
+  const rid2 = fwd2.body?.id;
+  check("состояние — на утверждении", fwd2.body?.status === "pending_approval", String(fwd2.body?.status));
+  const reqEmailId = fwd2.body?.requestEmailId;
+  const reqView = reqEmailId ? await sess.secretary.get("/api/emails/" + reqEmailId) : { status: 0, body: {} };
+  const reqMessageId = reqView.body?.messageId;
+  check("записано письмо-запрос (по нему ищется ответ в треде)", !!reqMessageId, String(reqMessageId));
+  // 400 «у исполнителей не заполнены адреса» — тоже отказ: направленное директору поручение
+  // ещё не содержит исполнителей, их определяет руководитель при утверждении.
+  expect("неутверждённое письмом поручение не уходит", await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/dispatch"), [400, 409]);
+
+  const mailToken = "e2e-v-" + Date.now();
+  const rawMail = (from, subject, body, inReplyTo) =>
+    [
+      "From: " + from,
+      "To: test@mail.test",
+      "Subject: " + subject,
+      "Date: " + new Date().toUTCString(),
+      "Message-ID: <" + Math.random().toString(36).slice(2) + "@qa.local>",
+      ...(inReplyTo ? ["In-Reply-To: <" + inReplyTo + ">", "References: <" + inReplyTo + ">"] : []),
+      "MIME-Version: 1.0",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      body,
+      ""
+    ].join("\r\n");
+  const importMail = async (from, subject, body, inReplyTo) => {
+    if (!serviceAcc) return null;
+    return sess.secretary.post("/api/import", {
+      accountId: serviceAcc.id,
+      folder: "INBOX",
+      files: [{ filename: mailToken + ".eml", data: Buffer.from(rawMail(from, subject, body, inReplyTo), "utf8").toString("base64") }]
+    });
+  };
+  const findIncoming = async (token) => {
+    const inc = await sess.secretary.get("/api/docflow/journal/incoming?limit=300");
+    return (inc.body?.items ?? []).find((i) => String(i.subject ?? "").includes(token));
+  };
+
+  // (а) НЕГАТИВ: аппарат приносит письмо ОТ СЕБЯ и пытается стать подписантом.
+  // Письмо аппарата — В ТОМ ЖЕ треде (иначе отказ был бы «не нашлось поручение», а не «нет права»).
+  await importMail('"Иванов И.И." <ivanov_ii@mail.test>', "Способ В негатив " + mailToken, "Утверждаю сам себе. " + mailToken, reqMessageId);
+  const selfMail = await findIncoming("Способ В негатив " + mailToken);
+  check("письмо аппарата попало во «Входящие»", !!selfMail, "нет письма с токеном " + mailToken);
+  if (selfMail) {
+    const denied = await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/mark-approval", {
+      emailId: selfMail.emailId,
+      text: "Утверждаю сам себе"
+    });
+    expect("аппарат НЕ утверждает вместо подписанта (у отправителя нет права подписи)", denied, [400, 403]);
+    const stillPending = await sess.secretary.get("/api/docflow/resolutions/" + rid2);
+    check("поручение осталось на утверждении", stillPending.body?.status === "pending_approval", String(stillPending.body?.status));
+  }
+
+  // (б) РЕАЛЬНЫЙ ПУТЬ: письмо от подписанта.
+  const replyBody = "Петрова М.А.! Подготовить ответ в срок. Утверждаю. " + mailToken;
+  await importMail('"User Two Mail Test" <user2@mail.test>', "Способ В ответ " + mailToken, replyBody, reqMessageId);
+  const signerMail = await findIncoming("Способ В ответ " + mailToken);
+  check("ответ подписанта попал во «Входящие»", !!signerMail, "нет письма с токеном " + mailToken);
+  if (signerMail) {
+    const ctx = await sess.secretary.get("/api/docflow/emails/" + signerMail.emailId + "/reply-context");
+    // ⚠️ Маршрут отдаёт МАССИВ кандидатов: без ветки Array.isArray(ctx.body) тест оборачивал
+    // массив в массив и «не находил» поручение там, где оно есть.
+    const cands = Array.isArray(ctx.body?.items) ? ctx.body.items : (Array.isArray(ctx.body) ? ctx.body : (ctx.body ? [ctx.body] : []));
+    check("ответ сопоставлен с поручением по треду", cands.some((c) => c.resolutionId === rid2),
+      "rid2=" + String(rid2) + " reqMessageId=" + String(reqMessageId) + " кандидаты=" + JSON.stringify(cands.map((c) => c.resolutionId)));
+    const mark = await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/mark-approval", {
+      emailId: signerMail.emailId,
+      text: replyBody,
+      assignees: [{ userId: execUser.id, kind: "responsible" }],
+      deadline
+    });
+    expect("аппарат подтверждает разбор ответа", mark, [200]);
+    check("способ утверждения — письмо", mark.body?.approvalMethod === "email", mark.body?.approvalMethod);
+    const signerUser = byLogin(ACCOUNTS.signer.login);
+    check("утвердил именно подписант (отправитель письма)", mark.body?.approvedBy === signerUser?.id,
+      "approvedBy = " + String(mark.body?.approvedBy));
+    check("подтвердил аппарат, а не подписант", mark.body?.confirmedBy !== mark.body?.approvedBy);
+    expect("после подтверждения можно отправлять", await sess.secretary.post("/api/docflow/resolutions/" + rid2 + "/dispatch"), [200]);
+  }
 
 // ---------- 10. Реальный пайплайн: письмо от внешнего -> руководитель -> исполнитель ----------
   console.log("\n--- пайплайн: аппарат направляет письмо руководителю ---");

@@ -682,7 +682,13 @@ async function main() {
   // ---------- 13b. А9: типовые сроки в рабочих днях ----------
   console.log("\n--- типовые сроки (рабочие дни, А9) ---");
   expect("исполнителю закрыты типовые сроки", await executor.get("/api/docflow/deadline-presets"), [403]);
-  expect("подписанту закрыты типовые сроки", await signer.get("/api/docflow/deadline-presets"), [403]);
+  // ⚠️ Подписанту маршрут ОТКРЫТ: это условие фикса D4 (иначе очередь «На утверждении» получала 403
+  // на каждой карточке, и подписант не мог выбрать типовой срок). Раньше здесь ожидался 403 — ожидание устарело.
+  const presetsSigner = await signer.get("/api/docflow/deadline-presets");
+  expect("подписанту типовые сроки ОТКРЫТЫ (условие фикса D4)", presetsSigner, [200]);
+  check("подписанту приходят те же пресеты, что и поручающему",
+    Array.isArray(presetsSigner.body?.items) && presetsSigner.body.items.length >= 3,
+    "пунктов: " + (Array.isArray(presetsSigner.body?.items) ? presetsSigner.body.items.length : "нет"));
   expect("кривой from отвергается", await secretary.get("/api/docflow/deadline-presets?from=2026-2-3"), [400]);
   expect("мусор в from отвергается", await secretary.get("/api/docflow/deadline-presets?from=abc"), [400]);
   const presetsDefault = await secretary.get("/api/docflow/deadline-presets");
