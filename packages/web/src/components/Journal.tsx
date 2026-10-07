@@ -89,10 +89,16 @@ export default function Journal() {
   }, [filter, page]);
 
   useEffect(() => {
+    // Права нет — журнал не запрашивается: иначе 403 в консоли у чужой роли.
+    if (!can("journal.view")) {
+      setLoading(false);
+      return;
+    }
     void load();
   }, [load, reloadKey]);
 
   useEffect(() => {
+    if (!can("journal.view")) return;
     api
       .journalStatusCounts()
       .then(setCounts)

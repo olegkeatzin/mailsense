@@ -7,3 +7,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
 .mail-list-row.selected { background: #e6f4ff; }
 .email-body { white-space: pre-wrap; word-break: break-word; }
 .tag-pill { margin: 2px; }
+/* Только для скринридера: смысл, который иначе нёс бы один цвет (непрочитано, счётчик). */
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

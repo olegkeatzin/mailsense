@@ -82,6 +82,15 @@ export interface Resolution {
   documentSummary: string;
   /** Письмо, из которого вырос документ. */
   documentEmailId: string | null;
+  /**
+   * Срок в днях и признак просрочки — как у TaskItem.
+   * Поля необязательные: сервер отдаёт их, если карточка канбана их несёт; интерфейс
+   * НЕ считает «сегодня» сам (иначе часовой пояс и рабочие дни разойдутся с сервером).
+   */
+  daysLeft?: number | null;
+  overdue?: boolean;
+  /** «Срок близко» по настроенному порогу — считает сервер (А5/А11). */
+  dueSoon?: boolean;
   preparedByName: string;
   approvedByName: string;
   dispatchedByName: string;
@@ -111,6 +120,12 @@ export interface TaskItem {
   emailId: string | null;
   overdue: boolean;
   daysLeft: number | null;
+  /**
+   * Серверный признак «срок близко» — по НАСТРОЕННОМУ порогу notifications.dueSoonDays (А5).
+   * Плашка в «Моих задачах» и уведомление resolution.due_soon обязаны совпадать,
+   * поэтому свой порог в интерфейсе не считаем.
+   */
+  dueSoon: boolean;
 }
 
 

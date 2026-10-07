@@ -287,6 +287,8 @@ export type Permission =
   | "resolution.dispatch"
   | "task.view"
   | "task.report"
+  /** Центр уведомлений (этап 5). Есть у всех пяти ролей — иначе у части сотрудников его не будет. */
+  | "notifications.view"
   | "users.manage"
   | "settings.manage"
   | "audit.view";
@@ -417,6 +419,18 @@ export interface IncomingItem {
   priority: number | null;
   tags: string[];
   attachmentsCount: number;
+  /**
+   * Метки правил сортировки (этап 5, §6 контракта).
+   * Поля необязательные: сервер отдаёт их только после того, как подключён
+   * matchSortRules из core. До этого список честно работает без меток.
+   */
+  sortLabels?: string[];
+  /** Приоритет от правил: больше — важнее; null — правила не подсказали. */
+  sortPriority?: number | null;
+  /** Подсказки аппарату от сработавших правил. */
+  sortNotes?: string[];
+  /** Совпало ли письмо хотя бы с одним активным правилом. */
+  sortMatched?: boolean;
 }
 
 /** Подсказки для формы регистрации: то, что удалось взять из письма и ИИ. */
@@ -464,4 +478,106 @@ export interface CaseRecord {
   title: string;
   isActive: boolean;
   sortOrder: number;
+}
+
+// ---------------- Этап 5: уведомления и правила сортировки ----------------
+// Имена полей — ровно из §6 контракта (согласованы с server-backend 2026-10-07).
+
+export type NotificationSeverity = "info" | "warning" | "danger";
+
+/** Раздел интерфейса, в который ведёт уведомление (§7 контракта). */
+export type NotificationLink = "tasks" | "approvals" | "confirmation" | "board" | "journal";
+
+/** Уведомление центра уведомлений (§6 контракта). */
+export interface AppNotification {
+  id: string;
+  /** Вид из §3: resolution.assigned, resolution.due_soon, resolution.overdue и т.д. */
+  kind: string;
+  entityType: "resolution" | "document";
+  entityId: string;
+  title: string;
+  body: string;
+  severity: NotificationSeverity;
+  createdAt: string;
+  readAt: string | null;
+  /** Срок задачи, к которому относится напоминание (для `due_*`/`overdue`). */
+  deadline: string | null;
+  daysLeft: number | null;
+  link: NotificationLink | null;
+}
+
+export interface NotificationTemplate {
+  key: string;
+  title: string;
+  body: string;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface NotificationSettings {
+  enabled: boolean;
+  /** За сколько дней предупреждать о сроке: 0..30. */
+  dueSoonDays: number;
+  /** Считать типовой срок в рабочих днях. */
+  workdayDeadlines: boolean;
+  templates: NotificationTemplate[];
+  /**
+   * Доступные подстановки шаблона с русскими подписями — приходят с сервера (А2).
+   * Свой список в интерфейсе не хардкодим: он разъедется с тем, что подставляет сервер.
+   */
+  variables: Array<{ key: string; title: string }>;
+  /** Праздничные дни YYYY-MM-DD (А3): в рабочие дни не считаются. */
+  holidays: string[];
+}
+
+/** Тело PUT /notifications/settings: меняем только то, что реально правили. */
+export interface NotificationSettingsPatch {
+  enabled?: boolean;
+  dueSoonDays?: number;
+  workdayDeadlines?: boolean;
+  holidays?: string[];
+  templates?: Array<Pick<NotificationTemplate, "key" | "title" | "body" | "isActive">>;
+}
+
+export interface NotificationsPage {
+  items: AppNotification[];
+  unread: number;
+  total: number;
+  /** Уведомления включены администратором (А4). Иначе честный текст, а не пустой список. */
+  enabled: boolean;
+}
+
+/** Правило автосортировки почты (§5 контракта — маршрутизация и подсветка, не авторегистрация). */
+export interface MailSortRule {
+  id: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  matchFrom: string;
+  matchTo: string;
+  matchSubject: string;
+  label: string;
+  /** 1..5, больше — важнее; null — приоритет не подсказывать. */
+  priority: number | null;
+  note: string;
+}
+
+/** Тело POST/PATCH правила и предпросмотра (camelCase, без id). */
+export type MailSortRuleInput = Partial<Omit<MailSortRule, "id">>;
+
+export interface SortPreviewSample {
+  emailId: string;
+  subject: string;
+  from: string;
+  labels: string[];
+  notes: string[];
+  priority: number | null;
+}
+
+export interface SortPreview {
+  /** Сколько писем поймало правило. */
+  matched: number;
+  /** Сколько писем вообще проверено. */
+  total: number;
+  samples: SortPreviewSample[];
 }

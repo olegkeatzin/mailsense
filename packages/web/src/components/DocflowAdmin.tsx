@@ -20,6 +20,7 @@ import { PlusOutlined, ReloadOutlined, SyncOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api";
 import { useStore } from "../store";
+import { READY_STYLE, SOON_STYLE } from "./notifications/colors";
 import type { AuthStatus, Role, User } from "../types";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -205,8 +206,9 @@ export function UsersTab() {
             width: 130,
             render: (_v, u) => {
               if (!u.isActive) return <Tag color="red">Уволен (AD)</Tag>;
-              if (u.blocked) return <Tag color="orange">Заблокирован</Tag>;
-              return <Tag color="green">Активен</Tag>;
+              // Пресеты orange/green норму AA не проходят (3.34 / 3.37) — свои стили.
+              if (u.blocked) return <Tag style={SOON_STYLE}>Заблокирован</Tag>;
+              return <Tag style={READY_STYLE}>Активен</Tag>;
             }
           },
           {
@@ -356,7 +358,7 @@ export function DocflowTab() {
       <Card size="small" title="Каталог сотрудников">
         <Descriptions size="small" column={1}>
           <Descriptions.Item label="Подключение к каталогу">
-            {dirStatus?.loggedIn ? <Tag color="green">выполнен вход: {dirStatus.login}</Tag> : <Tag>не выполнен</Tag>}
+            {dirStatus?.loggedIn ? <Tag style={READY_STYLE}>выполнен вход: {dirStatus.login}</Tag> : <Tag>не выполнен</Tag>}
           </Descriptions.Item>
           <Descriptions.Item label="Контактов в кэше">{dirStatus?.contacts ?? 0}</Descriptions.Item>
           <Descriptions.Item label="Справочник пользователей">

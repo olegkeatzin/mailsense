@@ -9,7 +9,9 @@ jest.mock("../api", () => ({
     executorCandidates: jest.fn(),
     approve: jest.fn(),
     reject: jest.fn(),
-    confirm: jest.fn()
+    confirm: jest.fn(),
+    // Форма срока теперь показывает типовые сроки (А9) — маршрут должен быть в моке.
+    deadlinePresets: jest.fn().mockResolvedValue({ items: [] })
   }
 }));
 

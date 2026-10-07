@@ -43,7 +43,8 @@ describe("канбан резолюций", () => {
       documentIntent: null,
       docflowUnavailable: false,
       authStatus: { docflowEnabled: true } as unknown as AuthStatus,
-      authUser: { permissions: ["journal.view", "resolution.approve"], roles: ["signer"] } as unknown as AuthUser
+      // Канбан требует resolution.create (сервер проверяет то же право).
+      authUser: { permissions: ["journal.view", "resolution.approve", "resolution.create"], roles: ["signer"] } as unknown as AuthUser
     });
   });
 
@@ -58,7 +59,8 @@ describe("канбан резолюций", () => {
 
   it("без права на журнал карточка не притворяется кликабельной", async () => {
     useStore.setState({
-      authUser: { permissions: ["task.view"], roles: ["executor"] } as unknown as AuthUser
+      // Канбан открыт (resolution.create), журнала нет — карточка видна, но не кликабельна.
+      authUser: { permissions: ["resolution.create"], roles: ["clerk"] } as unknown as AuthUser
     });
     render(<ResolutionBoard />);
 

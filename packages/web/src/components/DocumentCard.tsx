@@ -4,6 +4,7 @@ import { SaveOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api, resolutionApi } from "../api";
 import { ResolutionModal } from "./ResolutionModal";
+import { SOON_STYLE } from "./notifications/colors";
 import { ResolutionEmails } from "./ResolutionEmails";
 import {
   PRIORITY_TITLES,
@@ -328,7 +329,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                         {r.deadline ? (
                           <span style={{ fontSize: 12 }}>срок {dayjs(r.deadline).format("DD.MM.YYYY")}</span>
                         ) : (
-                          <Tag color="orange">срок не указан</Tag>
+                          <Tag style={SOON_STYLE}>срок не указан</Tag>
                         )}
                       </Space>
                       <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{r.text}</div>

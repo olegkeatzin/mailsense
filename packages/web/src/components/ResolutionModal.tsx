@@ -5,6 +5,8 @@ import { resolutionApi } from "../api";
 import { PRIORITY_TITLES, type AssigneeKind, type Resolution, type ResolutionPriority } from "../resolutionTypes";
 import type { User } from "../types";
 import { SuggestedAssignees } from "./SuggestedAssignees";
+import { DeadlinePresets } from "./DeadlinePresets";
+import { SOON_STYLE } from "./notifications/colors";
 
 /**
  * Подготовка резолюции аппаратом (этап 3).
@@ -235,8 +237,11 @@ export function ResolutionModal(props: {
               format="DD.MM.YYYY"
               placeholder="не указан"
             />
-            {!deadline ? <Tag color="orange">не указан — подсветится аппарату</Tag> : null}
+            {/* Пресет orange даёт 3.34:1 — норма AA не проходит, поэтому свой стиль. */}
+            {!deadline ? <Tag style={SOON_STYLE}>не указан — подсветится аппарату</Tag> : null}
           </Space>
+          {/* Типовые сроки: даты считает сервер (А9) — своей арифметики рабочих дней нет. */}
+          <DeadlinePresets onPick={(d) => setDeadline(d)} />
         </div>
         <div>
           <div style={{ marginBottom: 4 }}><b>Приоритет</b></div>

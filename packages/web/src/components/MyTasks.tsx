@@ -5,6 +5,8 @@ import dayjs from "dayjs";
 import { resolutionApi } from "../api";
 import { useStore } from "../store";
 import { PRIORITY_TITLES, type TaskItem } from "../resolutionTypes";
+import { DeadlineTag } from "./notifications/deadline";
+import { READY_STYLE } from "./notifications/colors";
 
 /**
  * «Мои задачи» исполнителя (этап 3).
@@ -17,6 +19,7 @@ import { PRIORITY_TITLES, type TaskItem } from "../resolutionTypes";
  */
 export function MyTasks() {
   const setSection = useStore((s) => s.setSection);
+  const can = useStore((s) => s.can);
   const select = useStore((s) => s.select);
   /** Открывает исходное письмо в почтовом разделе — из задачи виден её предмет. */
   async function openLetter(emailId: string) {
@@ -54,6 +57,11 @@ export function MyTasks() {
   }
 
   useEffect(() => {
+    // Права нет — «Мои задачи» не грузятся: иначе 403 в консоли у чужой роли.
+    if (!can("task.view")) {
+      setLoading(false);
+      return;
+    }
     void load();
   }, []);
 
@@ -111,28 +119,18 @@ export function MyTasks() {
     {
       title: "Срок",
       dataIndex: "deadline",
-      width: 170,
-      render: (_v, r) => {
-        if (!r.deadline) return <span style={{ color: "#595959" }}>не указан</span>;
-        const label = dayjs(r.deadline).format("DD.MM.YYYY");
-        if (r.overdue) {
-          return (
-            <Space size={4}>
-              <span style={{ color: "#cf1322", fontWeight: 600 }}>{label}</span>
-              <Tag color="red">просрочено на {-1 * (r.daysLeft ?? 0)} дн.</Tag>
-            </Space>
-          );
-        }
-        if (r.daysLeft !== null && r.daysLeft <= 3) {
-          return (
-            <Space size={4}>
-              <span>{label}</span>
-              <Tag color="orange">осталось {r.daysLeft} дн.</Tag>
-            </Space>
-          );
-        }
-        return <span>{label}</span>;
-      }
+      width: 200,
+      // Порог «скоро» — серверный (dueSoon, тот же, что у уведомления). Свой порог
+      // в интерфейсе разошёлся бы с напоминанием (А5 приложения к контракту).
+      render: (_v, r) => (
+        <DeadlineTag
+          deadline={r.deadline}
+          daysLeft={r.daysLeft}
+          dueSoon={r.dueSoon}
+          overdue={r.overdue}
+          variant="table"
+        />
+      )
     },
     {
       title: "Получено",
@@ -162,7 +160,8 @@ export function MyTasks() {
         v ? (
           // Видно и когда сдан, и что именно написал исполнитель — без открытия карточки.
           <Tooltip title={r.reportText || ""}>
-            <Tag color="green" style={{ cursor: "help" }}>
+            // Пресет color="green" даёт 3.37:1 — норма AA не проходит, поэтому свой стиль.
+            <Tag style={{ ...READY_STYLE, cursor: "help" }}>
               сдан {dayjs(v).format("DD.MM HH:mm")}
             </Tag>
           </Tooltip>

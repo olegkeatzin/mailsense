@@ -27,6 +27,8 @@ import { api } from "../api";
 import { DocflowTab, UsersTab } from "./DocflowAdmin";
 import AuditTab from "./AuditTab";
 import NumberingTab from "./NumberingTab";
+import { SortingRulesTab } from "./sorting/SortingRulesTab";
+import { NotificationsTab } from "./sorting/NotificationsTab";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, Template } from "../types";
 
 const PROTOCOL_OPTIONS = [
@@ -1084,9 +1086,9 @@ export default function SettingsModal() {
       open={open}
       onCancel={() => setOpen(false)}
       footer={null}
-      // Таблица пользователей шире обычной формы: на 760 px колонка «Статус» и кнопка
-      // блокировки обрезались. Для остальных вкладок ширины хватает.
-      width={activeTab === "users" ? "min(1100px, 94vw)" : 760}
+      // Таблица пользователей и таблица правил сортировки шире обычной формы: на 760 px
+      // колонка «Статус» и кнопки действий обрезались.
+      width={activeTab === "users" || activeTab === "sorting" ? "min(1100px, 94vw)" : 760}
       title="Настройки"
     >
       <Tabs
@@ -1104,6 +1106,13 @@ export default function SettingsModal() {
           ...(can("audit.view") ? [{ key: "audit", label: "Аудит", children: <AuditTab /> }] : []),
           // Настройки ИИ и «Общие» закрыты правом settings.manage: у остальных ролей
           // вкладки открывались, а запросы отвечали 403 и сыпались в консоль.
+          ...(canManageSettings
+            ? [
+                // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
+                { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
+                { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> }
+              ]
+            : []),
           ...(canManageSettings ? [{ key: "ai", label: "ИИ", children: <AiTab /> }] : []),
           { key: "templates", label: "Шаблоны", children: <TemplatesTab key={reloadKey} /> },
           { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> },

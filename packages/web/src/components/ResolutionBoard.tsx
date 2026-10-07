@@ -4,6 +4,7 @@ import dayjs from "dayjs";
 import { resolutionApi } from "../api";
 import { useStore } from "../store";
 import { PRIORITY_TITLES, type BoardColumn, type Resolution } from "../resolutionTypes";
+import { DeadlineTag } from "./notifications/deadline";
 
 /**
  * Канбан резолюций (ТЗ п. 5, этап 3).
@@ -39,7 +40,14 @@ function CardBody({ r, onOpen }: { r: Resolution; onOpen?: (documentId: string) 
         <Tag color={r.priority === "urgent" ? "red" : r.priority === "important" ? "orange" : "default"}>
           {PRIORITY_TITLES[r.priority]}
         </Tag>
-        {r.deadline ? <Tag>{dayjs(r.deadline).format("DD.MM.YYYY")}</Tag> : <Tag color="orange">без срока</Tag>}
+        {/* Срок и «скоро» приходят с сервера (А11): своего порога на клиенте нет. */}
+        <DeadlineTag
+          deadline={r.deadline}
+          daysLeft={r.daysLeft ?? null}
+          dueSoon={r.dueSoon}
+          overdue={r.overdue}
+          variant="card"
+        />
       </Space>
       <div style={{ fontSize: 13, whiteSpace: "pre-wrap", marginBottom: 6 }}>
         {r.text.length > 220 ? r.text.slice(0, 220) + "…" : r.text}
@@ -72,6 +80,11 @@ export function ResolutionBoard() {
   };
 
   useEffect(() => {
+    // Канбан — управленческий вид (право resolution.create): без него не запрашиваем.
+    if (!can("resolution.create")) {
+      setLoading(false);
+      return;
+    }
     resolutionApi
       .board()
       .then(setColumns)
@@ -100,7 +113,7 @@ export function ResolutionBoard() {
                     <CardBody key={r.id + c.key} r={r} onOpen={canOpenDocument ? openDocument : undefined} />
                   ))
                 ) : (
-                  <div style={{ color: "#767676", fontSize: 12, textAlign: "center", padding: 12 }}>пусто</div>
+                  <div style={{ color: "#595959", fontSize: 12, textAlign: "center", padding: 12 }}>пусто</div>
                 )}
               </div>
             </div>

@@ -13,12 +13,20 @@ export function formatBytes(n: number): string {
   return (n / 1024 / 1024).toFixed(1) + " МБ";
 }
 
+/**
+ * Цвет приоритета.
+ *
+ * Оттенки — из палитры Ant Design (red-7, volcano-7, gold-9, blue-7, green-7) и все
+ * проходят AA на белом. Прежние #f5222d/#fa8c16/#fadb14/#1890ff/#52c41a давали
+ * 3.9 / 2.4 / 1.4 / 3.2 / 2.3 : 1 — точка приоритета на белом фоне была почти не видна.
+ * Значения проверяются contrast.test.ts.
+ */
 export function priorityColor(p: number): string {
-  if (p >= 5) return "#f5222d";
-  if (p === 4) return "#fa8c16";
-  if (p === 3) return "#fadb14";
-  if (p === 2) return "#1890ff";
-  return "#52c41a";
+  if (p >= 5) return "#cf1322";
+  if (p === 4) return "#d4380d";
+  if (p === 3) return "#874d00";
+  if (p === 2) return "#0958d9";
+  return "#237804";
 }
 
 export function priorityLabel(p: number): string {

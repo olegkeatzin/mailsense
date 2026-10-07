@@ -2,9 +2,12 @@ import { useEffect, useState } from "react";
 import { Alert, Button, Card, DatePicker, Empty, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message } from "antd";
 import dayjs from "dayjs";
 import { resolutionApi } from "../api";
+import { useStore } from "../store";
 import { PRIORITY_TITLES, RESOLUTION_STATUS_TITLES, type AssigneeKind, type Resolution, type ResolutionPriority } from "../resolutionTypes";
-import type { User } from "../types";
+import type { Permission, User } from "../types";
 import { SuggestedAssignees } from "./SuggestedAssignees";
+import { DeadlinePresets } from "./DeadlinePresets";
+import { GOLD_STYLE } from "./notifications/colors";
 
 /**
  * Очередь подписанта: что ждёт его решения (этап 3).
@@ -22,6 +25,12 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
   // письмом. Очередь подписанта требует права подписи, у аппарата его нет — поэтому
   // отдельный маршрут, а не та же выборка.
   const isConfirm = mode === "confirm";
+  const can = useStore((s) => s.can);
+  /** Право на саму очередь: подписант — approve, аппарат (подтверждение разбора) — dispatch. */
+  const requiredPermission: Permission = isConfirm ? "resolution.dispatch" : "resolution.approve";
+  const allowed = can(requiredPermission);
+  /** Справочник людей — управленческий вид: тот, кто поручает, или тот, кто подписывает. */
+  const canLoadCandidates = can("resolution.create") || can("resolution.approve");
   const [items, setItems] = useState<Resolution[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
@@ -42,7 +51,8 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
       // и экран руководителя из-за него оставался пустым.
       const [queue, list] = await Promise.all([
         isConfirm ? resolutionApi.forConfirmation() : resolutionApi.forApproval(),
-        resolutionApi.executorCandidates()
+        // Без права на справочник запрос не отправляем: иначе 403 в консоли у роли без прав.
+        canLoadCandidates ? resolutionApi.executorCandidates() : Promise.resolve([] as User[])
       ]);
       setItems(queue.items);
       setUsers(list as unknown as User[]);
@@ -71,9 +81,14 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
   }
 
   useEffect(() => {
+    // Права нет — данных раздела не запрашиваем вовсе: это не «спрятать кнопку», а не ходить.
+    if (!allowed) {
+      setLoading(false);
+      return;
+    }
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode]);
+  }, [mode, allowed]);
 
   /** Подтверждение разбора: без текста и исполнителя поручение не уйдёт (сервер тоже проверит). */
   function confirm(r: Resolution) {
@@ -195,6 +210,8 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
     });
   }
 
+  if (!allowed) return <Alert type="error" showIcon message="Недостаточно прав для этого раздела" />;
+
   if (loading) return <Spin style={{ margin: 24 }} />;
 
   return (
@@ -232,7 +249,8 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                   <Space wrap>
                     <b>{r.documentNumber}</b>
                     <span style={{ color: "#666", fontWeight: 400 }}>{r.documentSummary}</span>
-                    {byEmail ? <Tag color="gold">{RESOLUTION_STATUS_TITLES.email_approval}</Tag> : null}
+                    {/* Пресет gold даёт 2.76:1 — норма AA не проходит, поэтому свой стиль. */}
+                    {byEmail ? <Tag style={GOLD_STYLE}>{RESOLUTION_STATUS_TITLES.email_approval}</Tag> : null}
                   </Space>
                 }
               >
@@ -317,6 +335,10 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                       placeholder="не указан"
                       onChange={(d) => patchForm(r.id, { deadline: d ? d.format("YYYY-MM-DD") : null })}
                     />
+                    {!readOnly ? (
+                      // Типовые сроки: даты считает сервер (А9) — своей арифметики нет.
+                      <DeadlinePresets onPick={(d) => patchForm(r.id, { deadline: d })} />
+                    ) : null}
                   </div>
                   <div>
                     <div style={{ marginBottom: 4 }}><b>Приоритет</b></div>

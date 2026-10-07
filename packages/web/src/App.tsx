@@ -32,6 +32,7 @@ import { StopAnalysisButton } from "./components/StopAnalysisButton";
 import Composer from "./components/Composer";
 import DraftsModal from "./components/DraftsModal";
 import LoginScreen from "./components/LoginScreen";
+import { NotificationsBell } from "./components/NotificationsBell";
 
 const { Header, Sider } = Layout;
 
@@ -321,7 +322,9 @@ export default function App() {
               ? "Журнал регистрации"
               : section === "approvals"
                 ? "На утверждении"
-                : section === "tasks"
+                : section === "confirmation"
+                  ? "На подтверждении"
+                  : section === "tasks"
                   ? "Мои задачи"
                   : section === "board"
                     ? "Резолюции"
@@ -372,6 +375,8 @@ export default function App() {
             </>
           )}
           <div style={{ flex: 1 }} />
+          {/* Уведомления — левее пользователя: привычный порядок шапки не ломаем. */}
+          <NotificationsBell />
           <CurrentUser />
           <Tooltip title="Настройки">
             <Button
@@ -395,6 +400,9 @@ export default function App() {
           <Journal />
         ) : section === "approvals" ? (
           <ApprovalList />
+        ) : section === "confirmation" ? (
+          // Очередь аппарата «подтвердить разбор ответа, пришедшего письмом» (А1).
+          <ApprovalList mode="confirm" />
         ) : section === "tasks" ? (
           <MyTasks />
         ) : section === "board" ? (

@@ -1,9 +1,10 @@
 import { create } from "zustand";
-import { api } from "./api";
+import { api, notificationApi } from "./api";
 import { debounce } from "./utils/debounce";
 import type {
   Account,
   AiConfig,
+  AppNotification,
   AnalysisStatus,
   AuthStatus,
   AuthUser,
@@ -27,6 +28,38 @@ export type AppSection =
   | "confirmation"
   | "tasks"
   | "board";
+
+/** Право, без которого раздел бессмысленен. Почта доступна всегда — у неё права нет. */
+export const SECTION_PERMISSIONS: Record<AppSection, Permission | null> = {
+  mail: null,
+  journal: "journal.view",
+  incoming: "journal.register",
+  approvals: "resolution.approve",
+  confirmation: "resolution.dispatch",
+  tasks: "task.view",
+  board: "resolution.create"
+};
+
+/** Порядок выбора первого доступного раздела — тот же, что в боковом меню. */
+export const SECTION_ORDER: AppSection[] = ["journal", "incoming", "approvals", "confirmation", "tasks", "board"];
+
+/**
+ * Раздел, доступный по правам.
+ *
+ * Раздел не должен переживать смену пользователя: администратор стоял на «На подтверждении»,
+ * вошёл исполнитель — и приложение в фоне просило чужие маршруты, а в консоль уходил 403
+ * (дефект, найденный QA в браузере). Поэтому при смене пользователя раздел пересматривается,
+ * а не восстанавливается как есть: недоступный заменяется первым доступным, иначе — почтой.
+ */
+export function resolveSection(section: AppSection, can: (permission: Permission) => boolean): AppSection {
+  if (section === "mail") return "mail";
+  const needed = SECTION_PERMISSIONS[section];
+  if (!needed || can(needed)) return section;
+  return SECTION_ORDER.find((s) => {
+    const need = SECTION_PERMISSIONS[s];
+    return need ? can(need) : true;
+  }) ?? "mail";
+}
 
 export interface FilterState {
   categories: string[];
@@ -113,6 +146,32 @@ interface State extends FilterState {
   login: (login: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   can: (permission: Permission) => boolean;
+
+  // -------- этап 5: центр уведомлений --------
+  /** Загруженные уведомления текущего пользователя (последние сверху — как отдаёт сервер). */
+  notifications: AppNotification[];
+  /** Сколько всего уведомлений у пользователя: для подписи «Показаны 20 из 137». */
+  notificationsTotal: number;
+  /** Уведомления включены администратором (А4): иначе честный текст, а не пустой список. */
+  notificationsEnabled: boolean;
+  /** Число непрочитанных: его показывает бейдж в шапке. */
+  unreadCount: number;
+  notificationsLoading: boolean;
+  /** Ошибка загрузки списка: показывается человеку, а не уходит в консоль. */
+  notificationsError: string | null;
+  /** 401/403 на опросе: право отозвали — таймер не поднимаем повторно. */
+  notificationsForbidden: boolean;
+  loadNotifications: (opts?: { unreadOnly?: boolean; limit?: number; append?: boolean }) => Promise<void>;
+  /** Дешёвый запрос счётчика — им живёт бейдж (опрос раз в 60 с). */
+  refreshUnreadCount: () => Promise<void>;
+  markNotificationRead: (id: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
+  /**
+   * Запуск и остановка опроса счётчика. Останавливать обязательно при размонтировании,
+   * иначе таймер живёт после ухода со страницы (утечка и гонка запросов).
+   */
+  startNotificationPolling: () => void;
+  stopNotificationPolling: () => void;
 
   init: () => Promise<void>;
   loadAccounts: () => Promise<void>;
@@ -231,6 +290,30 @@ function selectedVisible(s: State): string[] {
 /** Запрос списка: новый отменяет предыдущий, иначе старый ответ перетрёт свежий. */
 let emailsAbort: AbortController | null = null;
 
+/** Раз в минуту — требование §7 контракта; чаще незачем, счётчик дешёвый, но не бесплатный. */
+export const NOTIFICATIONS_POLL_MS = 60_000;
+/** Единственный таймер опроса: повторный start не должен плодить второй. */
+let notificationsTimer: ReturnType<typeof setInterval> | null = null;
+/** Номер последнего запроса списка: устаревший ответ не перетирает свежий. */
+let notificationsSeq = 0;
+/** Номер последнего запроса счётчика: ответ, начатый до «прочитать все», не должен вернуть старый счётчик. */
+let unreadSeq = 0;
+/** Размер страницы списка уведомлений (stage5-ux.md §2.2). */
+export const NOTIFICATIONS_PAGE = 20;
+
+/** 401/403 — это не «сбой сети»: повторять каждую минуту нельзя (А4-подобное требование §2.6). */
+function isAuthErrorMessage(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("401") ||
+    m.includes("403") ||
+    m.includes("forbidden") ||
+    m.includes("unauthorized") ||
+    m.includes("недостаточно прав") ||
+    m.includes("требуется вход")
+  );
+}
+
 /**
  * Перезапрос списка с паузой: поиск идёт по буквам, поэтому «о», «от», «отч»
  * должны превратиться в один запрос, а не в три (и не обогнать друг друга).
@@ -281,18 +364,27 @@ export const useStore = create<State>()((set, get) => ({
   authUser: null,
   authReady: false,
   docflowUnavailable: false,
+  notifications: [],
+  notificationsTotal: 0,
+  notificationsEnabled: true,
+  unreadCount: 0,
+  notificationsLoading: false,
+  notificationsError: null,
+  notificationsForbidden: false,
 
   loadAuth: async () => {
     try {
       const status = await api.authStatus();
       set({ authStatus: status, docflowUnavailable: false });
       if (!status.docflowEnabled) {
-        // Автономный режим: документооборот выключен, входа нет.
-        set({ authUser: null, authReady: true });
+        // Автономный режим: документооборот выключен, входа нет — и разделов СЭД нет.
+        set({ authUser: null, authReady: true, section: "mail" });
         return;
       }
       const me = await api.authMe();
       set({ authUser: me.user ?? null, authReady: true });
+      // Права могли измениться (другая роль, отозванное право) — раздел пересматриваем.
+      set({ section: resolveSection(get().section, get().can) });
     } catch (err) {
       // 503 от прокси = сервер документооборота недоступен. Локальная почта
       // обязана продолжать работать, поэтому не показываем экран входа.
@@ -304,12 +396,15 @@ export const useStore = create<State>()((set, get) => ({
   login: async (login, password) => {
     const res = await api.login(login, password);
     set({ authUser: res.user, authReady: true });
+    // Смена пользователя: раздел, выбранный прошлым, новому может быть недоступен.
+    set({ section: resolveSection(get().section, get().can) });
     await get().init();
   },
 
   logout: async () => {
     await api.logout();
-    set({ authUser: null, emails: [], emailView: null, selectedId: null, selectedIds: [] });
+    // Следующий пользователь не должен наследовать чужой раздел: обнуляем сразу.
+    set({ authUser: null, section: "mail", emails: [], emailView: null, selectedId: null, selectedIds: [] });
   },
 
   can: (permission) => {
@@ -319,6 +414,112 @@ export const useStore = create<State>()((set, get) => ({
     // Документооборот выключен — ограничений нет (автономный режим).
     if (!s.authStatus?.docflowEnabled) return true;
     return !!s.authUser?.permissions.includes(permission);
+  },
+
+  loadNotifications: async (opts) => {
+    const unreadOnly = !!opts?.unreadOnly;
+    const limit = opts?.append ? get().notifications.length + NOTIFICATIONS_PAGE : opts?.limit ?? NOTIFICATIONS_PAGE;
+    // Перезапрос (открыли панель дважды) не должен оставлять на экране старый список.
+    const seq = ++notificationsSeq;
+    set({ notificationsLoading: true });
+    try {
+      const data = await notificationApi.list({ limit, unreadOnly });
+      if (seq !== notificationsSeq) return;
+      set({
+        notifications: data.items,
+        unreadCount: data.unread,
+        notificationsTotal: data.total,
+        // Если сервер не отдал признак (старая сборка) — считаем, что уведомления включены.
+        notificationsEnabled: data.enabled !== false,
+        notificationsError: null,
+        notificationsForbidden: false
+      });
+    } catch (err) {
+      // Отказ не бросаем наружу (иначе необработанный промис в консоли), а показываем.
+      if (seq !== notificationsSeq) return;
+      const message = (err as Error).message;
+      set({ notificationsError: message, notificationsForbidden: isAuthErrorMessage(message) });
+    } finally {
+      if (seq === notificationsSeq) set({ notificationsLoading: false });
+    }
+  },
+
+  refreshUnreadCount: async () => {
+    // Монотонный номер: ответ, начатый ДО «прочитать все», не должен вернуть старый счётчик.
+    const seq = ++unreadSeq;
+    try {
+      const res = await notificationApi.count();
+      if (seq !== unreadSeq) return;
+      set({ unreadCount: res.unread, notificationsEnabled: res.enabled !== false });
+    } catch (err) {
+      // Фоновый опрос: сбой не шумит в консоли. Но 401/403 — не «сбой сети»:
+      // право отозвали, и ретраить его каждую минуту нельзя.
+      if (seq === unreadSeq && isAuthErrorMessage((err as Error).message)) {
+        set({ notificationsForbidden: true });
+        get().stopNotificationPolling();
+      }
+    }
+  },
+
+  markNotificationRead: async (id) => {
+    // Счётчик, запрошенный до прочтения, описывает старое состояние — обесцениваем его.
+    unreadSeq++;
+    const before = get().notifications;
+    const prevUnread = get().unreadCount;
+    const wasUnread = before.some((n) => n.id === id && !n.readAt);
+    // Оптимистично: бейдж не должен «залипать» до ответа сервера (§2.4).
+    if (wasUnread) {
+      set({
+        unreadCount: Math.max(0, prevUnread - 1),
+        notifications: before.map((n) =>
+          n.id === id && !n.readAt ? { ...n, readAt: new Date().toISOString() } : n
+        )
+      });
+    }
+    try {
+      const res = await notificationApi.markRead(id);
+      // Счётчик берём из ответа сервера: он знает и о строках, которых нет в загруженной странице.
+      if (typeof res?.unread === "number") set({ unreadCount: res.unread });
+    } catch (err) {
+      // Откат: показанное «прочитано» без записи на сервере — враньё.
+      set({ notifications: before, unreadCount: prevUnread });
+      throw err;
+    }
+  },
+
+  markAllNotificationsRead: async () => {
+    unreadSeq++;
+    const res = await notificationApi.readAll();
+    const now = new Date().toISOString();
+    set((s) => ({
+      unreadCount: typeof res?.unread === "number" ? res.unread : 0,
+      notifications: s.notifications.map((n) => (n.readAt ? n : { ...n, readAt: now }))
+    }));
+  },
+
+  startNotificationPolling: () => {
+    const s = get();
+    // Автономный режим (документооборот выключен) — уведомлений нет вовсе.
+    if (!s.authStatus?.docflowEnabled || !s.authUser) return;
+    // Без права колокольчика опрос дал бы 403 в консоли у каждой роли без права.
+    if (!s.can("notifications.view")) return;
+    // Право отозвали в этой сессии — не поднимаем таймер заново.
+    if (s.notificationsForbidden) return;
+    // Повторный start (перерисовка компонента) не должен плодить второй таймер.
+    if (notificationsTimer) return;
+    void get().refreshUnreadCount();
+    notificationsTimer = setInterval(() => {
+      // Свёрнутая вкладка: тик пропускаем, при возврате компонент дёрнет счётчик сам.
+      if (typeof document !== "undefined" && document.hidden) return;
+      void get().refreshUnreadCount();
+    }, NOTIFICATIONS_POLL_MS);
+  },
+
+  stopNotificationPolling: () => {
+    if (notificationsTimer) {
+      clearInterval(notificationsTimer);
+      notificationsTimer = null;
+    }
   },
 
   init: async () => {
@@ -475,7 +676,13 @@ export const useStore = create<State>()((set, get) => ({
   },
 
   setSettingsOpen: (v: boolean) => set({ settingsOpen: v }),
-  setSection: (section: AppSection) => set({ section }),
+  setSection: (section: AppSection) => {
+    // Раздел, на который нет прав, не открываем даже программно (переход из уведомления,
+    // чужой раздел после смены пользователя): иначе раздел запросит чужие маршруты.
+    const needed = SECTION_PERMISSIONS[section];
+    if (needed && !get().can(needed)) return;
+    set({ section });
+  },
   requestRegister: (emailId) => set({ registerIntent: emailId }),
   clearRegisterIntent: () => set({ registerIntent: null }),
   requestDocument: (documentId) => set({ documentIntent: documentId }),

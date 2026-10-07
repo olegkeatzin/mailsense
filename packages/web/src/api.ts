@@ -2,6 +2,7 @@ import type {
   Account,
   AccountInput,
   AiConfig,
+  AppNotification,
   AuditEntry,
   AuthStatus,
   AuthUser,
@@ -20,10 +21,16 @@ import type {
   IncomingItem,
   JournalFilter,
   LdapSettings,
+  MailSortRule,
+  MailSortRuleInput,
+  NotificationSettings,
+  NotificationSettingsPatch,
+  NotificationsPage,
   NumberingRuleRecord,
   NumberingState,
   RegisterSuggest,
   Role,
+  SortPreview,
   Template,
   ThreadGroup,
   User
@@ -298,8 +305,20 @@ export const api = {
   nextRegNumber: () => request<{ regNumber: string; period: string }>("/api/docflow/journal/next-number"),
   journalSuggest: (emailId: string) =>
     request<RegisterSuggest>("/api/docflow/journal/suggest?emailId=" + encodeURIComponent(emailId)),
-  journalIncoming: (limit = 100) =>
-    request<{ items: IncomingItem[]; total: number }>("/api/docflow/journal/incoming?limit=" + limit),
+  /**
+   * Очередь «Входящие на регистрацию».
+   *
+   * `rulesOnly` — только письма, совпавшие с правилами сортировки; `sort` — порядок
+   * («date» по умолчанию: аппарат привык к нему, менять его молча нельзя).
+   */
+  journalIncoming: (opts: number | { limit?: number; rulesOnly?: boolean; sort?: "date" | "rules" } = 100) => {
+    const o = typeof opts === "number" ? { limit: opts } : opts;
+    const p = new URLSearchParams();
+    p.set("limit", String(o.limit ?? 100));
+    if (o.rulesOnly) p.set("rulesOnly", "1");
+    if (o.sort) p.set("sort", o.sort);
+    return request<{ items: IncomingItem[]; total: number }>("/api/docflow/journal/incoming?" + p.toString());
+  },
   journalStatusCounts: () => request<Record<string, number>>("/api/docflow/journal/status-counts"),
   /** Ссылка на выгрузку: скачивание делает браузер, а не fetch. */
   journalExportUrl: (filter: JournalFilter = {}) => {
@@ -590,6 +609,17 @@ export const resolutionApi = {
     return request<{ ok: boolean }>("/api/docflow/resolutions/" + id + "/received", { method: "POST", body: "{}" });
   },
 
+  /**
+   * Типовые сроки для поля «срок» (А9). Рабочие дни и праздники считает СЕРВЕР:
+   * своей арифметики дат на клиенте нет — иначе она разойдётся с ядром.
+   * `from` — сегодняшняя дата YYYY-MM-DD.
+   */
+  deadlinePresets(from: string) {
+    return request<{ items: Array<{ id: string; title: string; days: number; isWorkday: boolean; dueDate: string }> }>(
+      "/api/docflow/deadline-presets?from=" + encodeURIComponent(from)
+    );
+  },
+
   /** Ссылка на .ics задачи: календарь сам напомнит о сроке (Р11). */
   icsUrl(id: string) {
     return "/api/docflow/resolutions/" + id + "/ics";
@@ -622,6 +652,90 @@ export const resolutionApi = {
       reason?: string;
     }>("/api/docflow/resolutions/suggest-assignees?documentId=" + encodeURIComponent(documentId));
   },
+};
+
+/**
+ * Уведомления и правила сортировки (СЭД, этап 5).
+ *
+ * Маршруты из §6 контракта. Права проверяет сервер; интерфейс лишь прячет то,
+ * на что прав нет, — иначе у рядовых ролей в консоли появляются 403.
+ */
+export const notificationApi = {
+  list(opts: { limit?: number; unreadOnly?: boolean } = {}) {
+    const p = new URLSearchParams();
+    if (opts.limit) p.set("limit", String(opts.limit));
+    if (opts.unreadOnly) p.set("unread", "1");
+    const qs = p.toString();
+    return request<NotificationsPage>("/api/docflow/notifications" + (qs ? "?" + qs : ""));
+  },
+
+  /**
+   * Дешёвый вызов для бейджа: число непрочитанных и признак «уведомления включены»
+   * (А4 — иначе «уведомлений нет» и «выключено администратором» не отличить).
+   */
+  count() {
+    return request<{ unread: number; enabled: boolean }>("/api/docflow/notifications/count");
+  },
+
+  markRead(id: string) {
+    return request<{ ok: boolean; unread: number }>(
+      "/api/docflow/notifications/" + encodeURIComponent(id) + "/read",
+      { method: "POST", body: "{}" }
+    );
+  },
+
+  readAll() {
+    return request<{ updated: number; unread: number }>("/api/docflow/notifications/read-all", {
+      method: "POST",
+      body: "{}"
+    });
+  },
+
+  settings() {
+    return request<NotificationSettings>("/api/docflow/notifications/settings");
+  },
+
+  saveSettings(patch: NotificationSettingsPatch) {
+    return request<{ ok: boolean }>("/api/docflow/notifications/settings", {
+      method: "PUT",
+      body: JSON.stringify(patch)
+    });
+  },
+
+  sortRules() {
+    return request<{ items: MailSortRule[] }>("/api/docflow/sorting/rules");
+  },
+
+  createSortRule(rule: MailSortRuleInput) {
+    return request<{ rule: MailSortRule }>("/api/docflow/sorting/rules", {
+      method: "POST",
+      body: JSON.stringify(rule)
+    });
+  },
+
+  updateSortRule(id: string, patch: MailSortRuleInput) {
+    return request<{ rule: MailSortRule }>("/api/docflow/sorting/rules/" + encodeURIComponent(id), {
+      method: "PATCH",
+      body: JSON.stringify(patch)
+    });
+  },
+
+  deleteSortRule(id: string) {
+    return request<{ ok: boolean }>("/api/docflow/sorting/rules/" + encodeURIComponent(id), {
+      method: "DELETE"
+    });
+  },
+
+  /**
+   * Предпросмотр правила: что оно поймает на текущих письмах. Ничего не пишет —
+   * правило не создаёт документ и не тратит номер (правило маршрутизирует, не регистрирует).
+   */
+  previewSortRule(rule: MailSortRuleInput) {
+    return request<SortPreview>("/api/docflow/sorting/rules/preview", {
+      method: "POST",
+      body: JSON.stringify(rule)
+    });
+  }
 };
 
 export function attachmentUrl(emailId: string, attId: string, inline = false): string {
