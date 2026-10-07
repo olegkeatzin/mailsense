@@ -28,4 +28,8 @@ export * from "./services/settingsService.js";
 export * from "./services/scheduler.js";
 export * from "./services/exportService.js";
 export * from "./services/mailSyncHook.js";
+// Этап 5: автосортировка писем — чистая логика (маршрутизация и подсветка, НЕ авторегистрация).
+export * from "./services/mailSortRules.js";
+// Этап 5: рабочие дни и сроки — тоже чистая логика (без часовых поясов и Date-ловушек).
+export * from "./services/workingDays.js";
 export { initApp } from "./init.js";
