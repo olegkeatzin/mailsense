@@ -3,7 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startServer } from "@mailsense/server";
-import { NodeSecretStore, type SecretStore } from "@mailsense/core";
+import {
+  NodeSecretStore,
+  normalizeServerAddress,
+  resolveServerAddress,
+  serverAddressFromEnv,
+  type SecretStore,
+  type ServerAddressResolution
+} from "@mailsense/core";
 
 // Песочница Chromium: .deb использует SUID chrome-sandbox (after-install.sh ставит setuid).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,52 +46,84 @@ process.on("unhandledRejection", (reason) =>
 );
 
 // ---------------------------------------------------------------------------
-// Режим тонкого клиента.
+// Режим тонкого клиента и адрес сервера СЭД (решение Р21, пункт Т6 плана).
 //
-// Если задан адрес сервера — локальный backend НЕ поднимается, окно грузит
-// удалённый сервер (там же живут БД, почта и журнал СЭД). Если адрес не задан,
-// поведение прежнее: своё встроенное ядро и локальная база.
+// Локальный backend поднимается ВСЕГДА: почта живёт на этой машине, в своей базе.
+// Если задан адрес сервера, локальный backend лишь ПРОКСИРУЕТ документооборот
+// (журнал, пользователи, резолюции) — и окно грузит локальный backend, а не сервер.
 //
-// Источники адреса по приоритету: аргумент --server=<url>, переменная окружения
-// MAILSENSE_SERVER_URL, файл <userData>/server.json.
+// Порядок источников адреса (он же в packages/core/src/clientConfig.ts и в его тестах):
+//   1) --server=<url>                        — явный аргумент;
+//   2) server.json РЯДОМ с исполняемым файлом — конфиг предприятия (администратора);
+//   3) server.json в каталоге пользователя     — личная настройка;
+//   4) MAILSENSE_SERVER_URL                    — переменная окружения.
+// Если файл установки есть, но испорчен — это ошибка, и дальше искать адрес нельзя:
+// пользователь не должен молча подключиться не к тому серверу, который ему выдали.
 // ---------------------------------------------------------------------------
 
 const SERVER_CONFIG_FILE = "server.json";
 
-interface ServerConfig {
-  serverUrl: string | null;
+/** Каталог установки: server.json кладётся рядом с исполняемым файлом. */
+function installConfigPath(): string {
+  return path.join(path.dirname(app.getPath("exe")), SERVER_CONFIG_FILE);
 }
 
-function readServerConfig(): ServerConfig {
+function userConfigPath(): string {
+  return path.join(app.getPath("userData"), SERVER_CONFIG_FILE);
+}
+
+/**
+ * Содержимое файла или undefined. Разделяем «файла нет» (это норма: автономный режим)
+ * и «файл не читается» (это ошибка, о ней надо сказать, а не молчать).
+ */
+function readConfigFile(file: string): { content?: string; error?: string } {
   try {
-    const p = path.join(app.getPath("userData"), SERVER_CONFIG_FILE);
-    if (!fs.existsSync(p)) return { serverUrl: null };
-    const parsed = JSON.parse(fs.readFileSync(p, "utf8")) as { serverUrl?: string };
-    const url = (parsed.serverUrl ?? "").trim();
-    return { serverUrl: url || null };
-  } catch {
-    return { serverUrl: null };
+    return { content: fs.readFileSync(file, "utf8") };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    return { error: "не удалось прочитать " + file + ": " + (err as Error).message };
   }
 }
 
+function serverArg(): string | null {
+  const arg = process.argv.find((a) => a.startsWith("--server="));
+  return arg ? arg.slice("--server=".length) : null;
+}
+
+/** Текущее состояние адреса: откуда взят, кто им управляет, что не так. */
+function resolveServer(): ServerAddressResolution {
+  const install = readConfigFile(installConfigPath());
+  if (install.error) {
+    return { url: null, source: "install", managedByAdmin: true, error: install.error };
+  }
+  const user = readConfigFile(userConfigPath());
+  if (user.error) {
+    return { url: null, source: "user", managedByAdmin: false, error: user.error };
+  }
+  return resolveServerAddress({
+    arg: serverArg(),
+    installFile: install.content,
+    userFile: user.content,
+    // Каноническое имя — MAILSENSE_SERVER_URL; прежнее MAILSENSE_DOCFLOW_URL принимаем,
+    // чтобы существующие стенды продолжили работать (см. clientConfig.serverAddressFromEnv).
+    env: serverAddressFromEnv(process.env)
+  });
+}
+
+/** Запись ЛИЧНОГО файла. Админский адрес так не перезаписать — это проверяет вызывающий. */
 function writeServerConfig(serverUrl: string | null): void {
-  const p = path.join(app.getPath("userData"), SERVER_CONFIG_FILE);
+  const p = userConfigPath();
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify({ serverUrl }, null, 2), "utf8");
 }
 
-/** Допускаем только http/https — иначе loadURL упадёт невнятно. */
+/** Проверка адреса для интерфейса: та же логика, что в ядре (единый источник). */
 function normalizeServerUrl(raw: string): string {
-  const url = (raw ?? "").trim().replace(/\/+$/, "");
-  if (!url) throw new Error("Укажите адрес сервера");
-  if (!/^https?:\/\//i.test(url)) throw new Error("Адрес должен начинаться с http:// или https://");
+  const value = (raw ?? "").trim();
+  if (!value) throw new Error("Укажите адрес сервера");
+  const url = normalizeServerAddress(value);
+  if (!url) throw new Error("Адрес должен начинаться с http:// или https:// и содержать хост");
   return url;
-}
-
-function cliServerUrl(): string | null {
-  const arg = process.argv.find((a) => a.startsWith("--server="));
-  if (arg) return arg.slice("--server=".length).trim() || null;
-  return (process.env.MAILSENSE_SERVER_URL ?? "").trim() || null;
 }
 
 /** safeStorage с фолбэком на файловый AES-ключ (headless/тест). */
@@ -121,15 +160,35 @@ async function bootstrap() {
   const webDist = app.isPackaged
     ? path.join(process.resourcesPath, "web")
     : path.join(app.getAppPath(), "../../packages/web/dist");
-  const docflowServerUrl = cliServerUrl() ?? readServerConfig().serverUrl;
+  const address = resolveServer();
+  if (address.error) {
+    // Не падаем: приложение поднимается автономно, причину видно в журнале старта
+    // и в интерфейсе (server-config:get отдаёт error и managedByAdmin).
+    startupLog(
+      "server.json: " +
+        address.error +
+        " (install=" +
+        installConfigPath() +
+        ", user=" +
+        userConfigPath() +
+        ")"
+    );
+  }
   startupLog(
-    "bootstrap dataDir=" + dataDir + " webDist=" + webDist + " docflow=" + (docflowServerUrl ?? "(локально)")
+    "bootstrap dataDir=" +
+      dataDir +
+      " webDist=" +
+      webDist +
+      " docflow=" +
+      (address.url ?? "(локально)") +
+      " source=" +
+      (address.source ?? "нет")
   );
   const started = await startServer({
     dataDir,
     webDist,
     secretStore,
-    overrides: { docflowServerUrl: docflowServerUrl ? normalizeServerUrl(docflowServerUrl) : null }
+    overrides: { docflowServerUrl: address.url }
   });
   startupLog("server started " + started.url);
   return started;
@@ -154,20 +213,37 @@ if (!gotTheLock) {
 
   // IPC для настройки адреса сервера документооборота («Настройки → Документооборот»).
   // Почта при этом остаётся локальной — меняется только источник журнала.
-  ipcMain.handle("server-config:get", () => ({
-    ...readServerConfig(),
-    localServerUrl: server?.url ?? null
-  }));
+  ipcMain.handle("server-config:get", () => {
+    const address = resolveServer();
+    return {
+      serverUrl: address.url,
+      source: address.source,
+      managedByAdmin: address.managedByAdmin,
+      error: address.error,
+      localServerUrl: server?.url ?? null
+    };
+  });
+  // Адрес из файла установки задал администратор: пользователь его не переписывает.
   ipcMain.handle("server-config:set", (_e, url: unknown) => {
+    const address = resolveServer();
+    if (address.managedByAdmin) {
+      startupLog("попытка перезаписать админский адрес отклонена");
+      return { ok: false, managedByAdmin: true, error: "Адрес задан администратором — менять его нельзя" };
+    }
     const normalized = normalizeServerUrl(String(url ?? ""));
     writeServerConfig(normalized);
     startupLog("адрес сервера документооборота сохранён: " + normalized);
-    return { serverUrl: normalized };
+    return { ok: true, serverUrl: normalized };
   });
   ipcMain.handle("server-config:clear", () => {
+    const address = resolveServer();
+    if (address.managedByAdmin) {
+      startupLog("попытка сбросить админский адрес отклонена");
+      return { ok: false, managedByAdmin: true, error: "Адрес задан администратором — менять его нельзя" };
+    }
     writeServerConfig(null);
     startupLog("адрес сервера документооборота сброшен — журнал локальный");
-    return { serverUrl: null };
+    return { ok: true, serverUrl: null };
   });
   ipcMain.handle("app:relaunch", () => {
     app.relaunch();

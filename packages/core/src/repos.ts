@@ -17,6 +17,7 @@ import type {
   DirectoryContact,
   Draft,
   DraftAttachment,
+  MailProfile,
   Template,
   Email,
   EmailAddress,
@@ -31,6 +32,7 @@ const {
   analysisResults,
   deletedEmails,
   outOfRangeEmails,
+  mailProfile,
   threads,
   drafts,
   templates,
@@ -1194,6 +1196,53 @@ export function updateDraft(
 
 export function deleteDraft(id: string): void {
   getDb().delete(drafts).where(eq(drafts.id, id)).run();
+}
+
+// ---------------- Личный профиль почты (Р18) ----------------
+
+/** Строка профиля или null, если работник ещё ничего не сохранял. Локальные данные. */
+export function getMailProfileRow(userId: string): MailProfile | null {
+  const row = getDb().select().from(mailProfile).where(eq(mailProfile.userId, userId)).get();
+  if (!row) return null;
+  return {
+    userId: row.userId,
+    displayName: row.displayName,
+    signatureText: row.signatureText,
+    signatureEnabled: row.signatureEnabled,
+    signaturePosition: row.signaturePosition === "above" ? "above" : "below",
+    replyQuote: row.replyQuote,
+    replyAttribution: row.replyAttribution === "en" ? "en" : "ru",
+    updatedAt: row.updatedAt
+  };
+}
+
+/** Идемпотентная запись профиля целиком (частичность собирает сервис). */
+export function upsertMailProfileRow(profile: MailProfile): void {
+  getDb()
+    .insert(mailProfile)
+    .values({
+      userId: profile.userId,
+      displayName: profile.displayName,
+      signatureText: profile.signatureText,
+      signatureEnabled: profile.signatureEnabled,
+      signaturePosition: profile.signaturePosition,
+      replyQuote: profile.replyQuote,
+      replyAttribution: profile.replyAttribution,
+      updatedAt: profile.updatedAt ?? now()
+    })
+    .onConflictDoUpdate({
+      target: mailProfile.userId,
+      set: {
+        displayName: profile.displayName,
+        signatureText: profile.signatureText,
+        signatureEnabled: profile.signatureEnabled,
+        signaturePosition: profile.signaturePosition,
+        replyQuote: profile.replyQuote,
+        replyAttribution: profile.replyAttribution,
+        updatedAt: profile.updatedAt ?? now()
+      }
+    })
+    .run();
 }
 
 // ---------------- Templates ----------------

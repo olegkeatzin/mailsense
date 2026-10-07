@@ -134,6 +134,21 @@ export const deletedEmails = sqliteTable(
 );
 
 /**
+ * Личный профиль почты работника (Р18). Ключ — учётная запись (LDAP-логин), БЕЗ внешнего
+ * ключа: пользователи живут на сервере, локальной таблицы users в тонком клиенте нет.
+ */
+export const mailProfile = sqliteTable("mail_profile", {
+  userId: text("user_id").primaryKey(),
+  displayName: text("display_name").notNull().default(""),
+  signatureText: text("signature_text").notNull().default(""),
+  signatureEnabled: integer("signature_enabled", { mode: "boolean" }).notNull().default(true),
+  signaturePosition: text("signature_position").notNull().default("below"),
+  replyQuote: integer("reply_quote", { mode: "boolean" }).notNull().default(true),
+  replyAttribution: text("reply_attribution").notNull().default("ru"),
+  updatedAt: text("updated_at").notNull()
+});
+
+/**
  * Письма, отсечённые диапазоном дат при скане (POP3 не умеет искать по датам на сервере).
  * Храним UID и дату с сервера: следующий скан не тянет тело повторно, но при более
  * широком диапазоне письмо скачивается и сохраняется — «виденное» ≠ «выброшенное».
@@ -244,6 +259,7 @@ export const schema = {
   analysisResults,
   deletedEmails,
   outOfRangeEmails,
+  mailProfile,
   threads,
   drafts,
   templates,

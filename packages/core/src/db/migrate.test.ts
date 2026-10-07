@@ -100,6 +100,34 @@ describe("миграция черновиков без внешнего ключ
     }
   });
 
+  test("таблица личного профиля: ключ — пользователь, без внешнего ключа", () => {
+    const { db, dir } = tmpDb();
+    try {
+      runMigrations(db);
+      const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>).map(
+        (r) => r.name
+      );
+      expect(tables).toContain("mail_profile");
+      // Пользователи живут на сервере: FK на локальную таблицу здесь был бы ошибкой.
+      expect((db.prepare("PRAGMA foreign_key_list(mail_profile)").all() as unknown[])).toEqual([]);
+      const cols = (db.prepare("PRAGMA table_info(mail_profile)").all() as Array<{ name: string; pk: number }>);
+      expect(cols.find((c) => c.name === "user_id")?.pk).toBe(1);
+      expect(cols.map((c) => c.name).sort()).toEqual([
+        "display_name",
+        "reply_attribution",
+        "reply_quote",
+        "signature_enabled",
+        "signature_position",
+        "signature_text",
+        "updated_at",
+        "user_id"
+      ]);
+    } finally {
+      db.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("повторный прогон миграций идемпотентен", () => {
     const { db, dir } = tmpDb();
     try {

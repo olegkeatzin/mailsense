@@ -1,5 +1,7 @@
 export * from "./types.js";
 export * from "./config.js";
+// Адрес сервера СЭД: чистый разбор источников (аргумент → админский server.json → личный → env).
+export * from "./clientConfig.js";
 export * from "./logger.js";
 export * from "./secrets.js";
 export * from "./context.js";
@@ -28,6 +30,8 @@ export * from "./services/settingsService.js";
 export * from "./services/scheduler.js";
 export * from "./services/exportService.js";
 export * from "./services/mailSyncHook.js";
+// Личный профиль почты работника (Р18) — локальные данные, интерфейс для /api/mail-profile.
+export * from "./services/mailProfileService.js";
 // Этап 5: автосортировка писем — чистая логика (маршрутизация и подсветка, НЕ авторегистрация).
 export * from "./services/mailSortRules.js";
 // Этап 5: рабочие дни и сроки — тоже чистая логика (без часовых поясов и Date-ловушек).

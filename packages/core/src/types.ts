@@ -278,6 +278,32 @@ export interface ComposeAttachment {
   draftId?: string;
 }
 
+/**
+ * Локальный профиль почты работника (решение Р18): имя подписи, подпись и предпочтения
+ * ответа. Хранится ТОЛЬКО в клиенте, на сервер не уезжает; ключ — учётная запись работника
+ * (LDAP-логин), а не ящик: за общим служебным ящиком сидят разные люди.
+ */
+export interface MailProfile {
+  /** Учётная запись работника (LDAP-логин). */
+  userId: string;
+  /** Имя отправителя для заголовка From. */
+  displayName: string;
+  /** Текст личной подписи. */
+  signatureText: string;
+  signatureEnabled: boolean;
+  /** Положение подписи относительно цитаты. */
+  signaturePosition: "above" | "below";
+  /** Цитировать оригинал в ответе. */
+  replyQuote: boolean;
+  /** Язык строки атрибуции («… пишет:» / «On … wrote:»). */
+  replyAttribution: "ru" | "en";
+  /** Когда профиль последний раз меняли; null — строки в базе ещё нет. */
+  updatedAt: string | null;
+}
+
+/** Частичное обновление профиля: переданные поля меняются, остальные остаются как были. */
+export type MailProfilePatch = Partial<Omit<MailProfile, "userId" | "updatedAt">>;
+
 export interface ComposeInput {
   accountId: string;
   /**

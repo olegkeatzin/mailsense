@@ -305,6 +305,27 @@ CREATE TABLE IF NOT EXISTS out_of_range_emails (
 CREATE UNIQUE INDEX IF NOT EXISTS out_of_range_emails_account_folder_uid_idx
   ON out_of_range_emails(account_id, folder, uid);
 `
+  },
+  {
+    // ⚠️ Номер 15 сверен с живой базой (2026-10-08: max = 14; 11 и 13 заняты историческими
+    // миграциями). Сквозная нумерация: занять чужой номер нельзя — миграция молча пропустится.
+    version: 15,
+    name: "mail_profile",
+    sql: `
+-- Личный профиль почты работника (Р18): хранится ЛОКАЛЬНО, на сервер не уезжает.
+-- Ключ — учётная запись работника (LDAP-логин), а не ящик: за общим служебным ящиком
+-- сидят разные люди, и подпись у каждого своя. Внешнего ключа нет: пользователи на сервере.
+CREATE TABLE IF NOT EXISTS mail_profile (
+  user_id TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL DEFAULT '',
+  signature_text TEXT NOT NULL DEFAULT '',
+  signature_enabled INTEGER NOT NULL DEFAULT 1,
+  signature_position TEXT NOT NULL DEFAULT 'below',
+  reply_quote INTEGER NOT NULL DEFAULT 1,
+  reply_attribution TEXT NOT NULL DEFAULT 'ru',
+  updated_at TEXT NOT NULL
+);
+`
   }
 ];
 
