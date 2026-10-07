@@ -290,7 +290,9 @@ describe("ошибка загрузки списка не теряется", () 
 
     await expect(useStore.getState().loadEmails()).resolves.toBeUndefined();
 
-    expect((useStore.getState() as unknown as WithError).loadError).toBe("502 Bad Gateway");
+    const loadError = (useStore.getState() as unknown as WithError).loadError ?? "";
+    expect(loadError).toContain("Сервер вернул ошибку");
+    expect(loadError).toContain("502 Bad Gateway");
   });
 
   it("успешная загрузка очищает прежнюю ошибку", async () => {

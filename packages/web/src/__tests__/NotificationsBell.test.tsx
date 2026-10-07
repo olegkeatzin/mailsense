@@ -273,7 +273,8 @@ describe("колокольчик уведомлений", () => {
     openPanel();
 
     expect(await screen.findByText("Не удалось загрузить уведомления")).not.toBeNull();
-    expect(screen.getByText("502 Bad Gateway")).not.toBeNull();
+    // Сбой объясняется по-русски, сырой ответ сервера — рядом в скобках (F9).
+    expect(screen.getByText(/Сервер вернул ошибку \(502 Bad Gateway\)/)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Повторить" })).not.toBeNull();
   });
 

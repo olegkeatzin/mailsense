@@ -276,7 +276,9 @@ describe("действия с уведомлениями", () => {
 
     await expect(useStore.getState().loadNotifications()).resolves.toBeUndefined();
 
-    expect(useStore.getState().notificationsError).toBe("403 Forbidden");
+    const err = useStore.getState().notificationsError ?? "";
+    expect(err).toContain("Недостаточно прав");
+    expect(err).toContain("403 Forbidden");
     expect(useStore.getState().notificationsForbidden).toBe(true);
   });
 });

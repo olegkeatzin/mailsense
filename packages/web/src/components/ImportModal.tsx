@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Button, Modal, Select, Space, Typography, message } from "antd";
 import { InboxOutlined } from "@ant-design/icons";
 import { useStore } from "../store";
+import { humanError } from "../utils/humanError";
 
 const FOLDER_OPTIONS = [
   { value: "INBOX", label: "Входящие" },
@@ -54,7 +55,7 @@ export default function ImportModal({ open, onClose }: { open: boolean; onClose:
       setFiles([]);
       onClose();
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setBusy(false);
     }

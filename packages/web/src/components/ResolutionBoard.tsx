@@ -5,6 +5,7 @@ import { resolutionApi } from "../api";
 import { useStore } from "../store";
 import { PRIORITY_TITLES, type BoardColumn, type Resolution } from "../resolutionTypes";
 import { DeadlineTag } from "./notifications/deadline";
+import { humanError } from "../utils/humanError";
 
 /**
  * Канбан резолюций (ТЗ п. 5, этап 3).
@@ -88,7 +89,7 @@ export function ResolutionBoard() {
     resolutionApi
       .board()
       .then(setColumns)
-      .catch((e) => setError((e as Error).message))
+      .catch((e) => setError(humanError(e)))
       .finally(() => setLoading(false));
   }, []);
 

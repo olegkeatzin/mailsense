@@ -22,12 +22,10 @@ import { api } from "../api";
 import { useStore } from "../store";
 import { READY_STYLE, SOON_STYLE } from "./notifications/colors";
 import type { AuthStatus, Role, User } from "../types";
+import { humanError } from "../utils/humanError";
+import { sourceTitle } from "./docflow/labels";
 
-const SOURCE_LABEL: Record<string, string> = {
-  ldap: "Каталог",
-  local: "Локальная",
-  manual: "Вручную"
-};
+
 
 const SOURCE_COLOR: Record<string, string> = {
   ldap: "blue",
@@ -52,7 +50,7 @@ export function UsersTab() {
       setUsers(u);
       setRoles(r);
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setLoading(false);
     }
@@ -68,7 +66,7 @@ export function UsersTab() {
       message.success("Роли обновлены");
       await load();
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     }
   };
 
@@ -78,7 +76,7 @@ export function UsersTab() {
       message.success(user.blocked ? "Доступ восстановлен" : "Пользователь заблокирован");
       await load();
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     }
   };
 
@@ -91,7 +89,7 @@ export function UsersTab() {
       );
       await load();
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setLoading(false);
     }
@@ -114,7 +112,7 @@ export function UsersTab() {
       await load();
     } catch (err) {
       if ((err as { errorFields?: unknown }).errorFields) return;
-      message.error((err as Error).message);
+      message.error(humanError(err));
     }
   };
 
@@ -193,7 +191,7 @@ export function UsersTab() {
             title: "Источник",
             dataIndex: "source",
             width: 110,
-            render: (v: string) => <Tag color={SOURCE_COLOR[v] ?? "default"}>{SOURCE_LABEL[v] ?? v}</Tag>
+            render: (v: string) => <Tag color={SOURCE_COLOR[v] ?? "default"}>{sourceTitle(v)}</Tag>
           },
           {
             title: "Вход",
@@ -290,7 +288,7 @@ export function DocflowTab() {
       setStatus(s);
       setDirStatus(d);
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     }
   }, []);
 
@@ -306,7 +304,7 @@ export function DocflowTab() {
       // Включение/выключение документооборот меняет требования к входу — перечитываем сессию.
       await useStore.getState().loadAuth();
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setBusy(false);
     }

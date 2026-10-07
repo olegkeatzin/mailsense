@@ -14,6 +14,7 @@ import type {
   Permission,
   ThreadGroup
 } from "./types";
+import { humanError } from "./utils/humanError";
 
 export type SortBy = "date" | "priority";
 export type SortDir = "asc" | "desc";
@@ -389,7 +390,7 @@ export const useStore = create<State>()((set, get) => ({
       // 503 от прокси = сервер документооборота недоступен. Локальная почта
       // обязана продолжать работать, поэтому не показываем экран входа.
       set({ authUser: null, authStatus: null, authReady: true, docflowUnavailable: true });
-      console.warn("Документооборот недоступен:", (err as Error).message);
+      console.warn("Документооборот недоступен:", humanError(err));
     }
   },
 
@@ -437,7 +438,7 @@ export const useStore = create<State>()((set, get) => ({
     } catch (err) {
       // Отказ не бросаем наружу (иначе необработанный промис в консоли), а показываем.
       if (seq !== notificationsSeq) return;
-      const message = (err as Error).message;
+      const message = humanError(err);
       set({ notificationsError: message, notificationsForbidden: isAuthErrorMessage(message) });
     } finally {
       if (seq === notificationsSeq) set({ notificationsLoading: false });
@@ -454,7 +455,7 @@ export const useStore = create<State>()((set, get) => ({
     } catch (err) {
       // Фоновый опрос: сбой не шумит в консоли. Но 401/403 — не «сбой сети»:
       // право отозвали, и ретраить его каждую минуту нельзя.
-      if (seq === unreadSeq && isAuthErrorMessage((err as Error).message)) {
+      if (seq === unreadSeq && isAuthErrorMessage(humanError(err))) {
         set({ notificationsForbidden: true });
         get().stopNotificationPolling();
       }
@@ -565,7 +566,7 @@ export const useStore = create<State>()((set, get) => ({
       // Отмена — не ошибка: её запросили мы сами, ответ просто устарел.
       // Настоящий сбой не бросаем наружу (иначе необработанный промис в консоли),
       // а показываем человеку: список мог остаться от прежней папки.
-      if (!ctrl.signal.aborted) set({ loadError: (err as Error).message });
+      if (!ctrl.signal.aborted) set({ loadError: humanError(err) });
     } finally {
       if (emailsAbort === ctrl) {
         emailsAbort = null;
@@ -587,7 +588,7 @@ export const useStore = create<State>()((set, get) => ({
     } catch (e) {
       if (!ctrl.signal.aborted) {
         console.error(e);
-        set({ loadError: "Не удалось открыть письмо: " + (e as Error).message });
+        set({ loadError: "Не удалось открыть письмо: " + humanError(e) });
       }
     }
   },

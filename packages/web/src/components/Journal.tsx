@@ -8,6 +8,7 @@ import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useStore } from "../store";
 import { DOCUMENT_STATUS_TITLES, type DocumentListItem, type DocumentStatus } from "../types";
 import DocumentCard from "./DocumentCard";
+import { humanError } from "../utils/humanError";
 
 /**
  * Журнал регистрации входящих документов.
@@ -82,7 +83,7 @@ export default function Journal() {
       setRows(res.items);
       setTotal(res.total);
     } catch (err) {
-      message.error("Не удалось загрузить журнал: " + (err as Error).message);
+      message.error("Не удалось загрузить журнал: " + humanError(err));
     } finally {
       setLoading(false);
     }

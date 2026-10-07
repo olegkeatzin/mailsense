@@ -4,12 +4,23 @@ import { ExportOutlined, SaveOutlined } from "@ant-design/icons";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { NumberingState } from "../types";
+import { humanError } from "../utils/humanError";
 
 /**
  * Настройки нумерации: префикс, шаблон и периодичность сброса счётчика.
  *
  * Здесь же — закрытие года выгрузкой: пока год не выгружен, следующий не открыть.
  */
+/**
+ * Единственный поток, которым управляет экран (Р22).
+ *
+ * Журнал — только входящие: ТЗ просит цифровизацию бумажной книги входящих, а поток
+ * «исходящие» процессом 0.1.4 не используется. Настраивать поток, которого нет, нельзя,
+ * поэтому правило берём и сохраняем ТОЛЬКО по этому имени, а чужие потоки из ответа
+ * сервера экран не показывает. Данные и правило «исх» в базе при этом не трогаем.
+ */
+const MANAGED_STREAM = "incoming";
+
 export default function NumberingTab() {
   const can = useStore((s) => s.can);
   const [state, setState] = useState<NumberingState | null>(null);
@@ -40,14 +51,14 @@ export default function NumberingTab() {
     try {
       const s = await api.numbering();
       setState(s);
-      const incoming = s.rules.find((r) => r.stream === "incoming");
+      const incoming = s.rules.find((r) => r.stream === MANAGED_STREAM);
       if (incoming) {
         setPrefix(incoming.prefix);
         setTemplate(incoming.template ?? "");
         setReset(incoming.reset);
       }
     } catch (err) {
-      message.error("Не удалось загрузить настройки нумерации: " + (err as Error).message);
+      message.error("Не удалось загрузить настройки нумерации: " + humanError(err));
     }
   }, []);
 
@@ -58,12 +69,12 @@ export default function NumberingTab() {
   const save = async () => {
     setSaving(true);
     try {
-      await api.saveNumbering({ stream: "incoming", prefix, reset, template: template || null });
+      await api.saveNumbering({ stream: MANAGED_STREAM, prefix, reset, template: template || null });
       message.success("Правило нумерации сохранено");
       await load();
     } catch (err) {
       // Смена префикса посреди года запрещена: в журнале оказались бы «вх1» и «ВХ-2».
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setSaving(false);
     }
@@ -92,7 +103,7 @@ export default function NumberingTab() {
     } catch (err) {
       // Показываем ОТВЕТ СЕРВЕРА как есть: он говорит «год НЕ закрыт» и называет причину.
       // Собирать формулировку в клиенте нельзя — разойдётся с сервером.
-      setCloseError((err as Error).message);
+      setCloseError(humanError(err));
     } finally {
       setClosing(false);
     }
@@ -116,7 +127,7 @@ export default function NumberingTab() {
       setReopenOpen(false);
       await load();
     } catch (err) {
-      setReopenError((err as Error).message);
+      setReopenError(humanError(err));
     } finally {
       setReopening(false);
     }
@@ -149,7 +160,7 @@ export default function NumberingTab() {
           );
           await load();
         } catch (err) {
-          message.error("Импорт отклонён: " + (err as Error).message);
+          message.error("Импорт отклонён: " + humanError(err));
         } finally {
           setImporting(false);
           if (fileRef.current) fileRef.current.value = "";
@@ -194,7 +205,10 @@ export default function NumberingTab() {
         </Form>
 
         <div style={{ marginBottom: 8 }}>
-          Следующий документ получит номер: <Tag color="blue">{example}</Tag>
+          {/* Это ПРИМЕР по настройкам формы, а не номер из базы: обещать факт нельзя — база
+              выдаёт свой счётчик, и он не зависит от того, что набрано здесь. */}
+          Пример номера по этим настройкам: <Tag color="blue">{example}</Tag>. Настоящий номер присваивается
+          при регистрации документа.
         </div>
 
         {editable && (

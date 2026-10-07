@@ -8,6 +8,7 @@ import type { Permission, User } from "../types";
 import { SuggestedAssignees } from "./SuggestedAssignees";
 import { DeadlinePresets } from "./DeadlinePresets";
 import { GOLD_STYLE } from "./notifications/colors";
+import { humanError } from "../utils/humanError";
 
 /**
  * Очередь подписанта: что ждёт его решения (этап 3).
@@ -76,7 +77,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
       }
       setForms(init);
     } catch (e) {
-      setError((e as Error).message);
+      setError(humanError(e));
     } finally {
       setLoading(false);
     }
@@ -127,7 +128,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
       message.success(ok);
       await load();
     } catch (e) {
-      setError((e as Error).message);
+      setError(humanError(e));
     } finally {
       setBusyId(null);
     }

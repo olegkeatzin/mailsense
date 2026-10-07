@@ -4,6 +4,7 @@ import { DeleteOutlined, EditOutlined } from "@ant-design/icons";
 import { api } from "../api";
 import { useStore } from "../store";
 import type { Draft } from "../types";
+import { humanError } from "../utils/humanError";
 
 /** Список сохранённых черновиков: открыть в композере или удалить. */
 export default function DraftsModal() {
@@ -19,7 +20,7 @@ export default function DraftsModal() {
     try {
       setDrafts(await api.drafts());
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setLoading(false);
     }
@@ -34,7 +35,7 @@ export default function DraftsModal() {
       await api.deleteDraft(id);
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 

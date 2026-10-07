@@ -2,12 +2,20 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Empty, Radio, Space, Typography, message } from "antd";
 import { useStore } from "../store";
 import { api } from "../api";
-import type { ServiceAccountState } from "../types";
+import type { ServiceAccountBlock, ServiceAccountState } from "../types";
+import { humanError } from "../utils/humanError";
 
 /**
- * Выбор служебного ящика отправки (Р12) — только администратор (settings.manage).
+ * Служебные ящики (Р12 + T25) — только администратор (settings.manage).
  *
- * Здесь выбирается СУЩЕСТВУЮЩИЙ ящик клиента: пароли docflow не хранит и не принимает.
+ * Две роли, и путать их нельзя:
+ *  • ВНУТРЕННЯЯ (делопроизводство) — с неё уходит письмо руководителю и исполнителям;
+ *  • ВНЕШНЯЯ (приёмная) — куда приходит внешняя почта от контрагентов.
+ *
+ * Правило Р19: ответ внешнему контрагенту уходит с того ящика, куда пришло письмо
+ * (композер берёт ящик письма), а пересылка руководителю — всегда с внутренней.
+ *
+ * Выбирается СУЩЕСТВУЮЩИЙ ящик клиента: пароли docflow не хранит и не принимает.
  * Если ящика в клиенте нет — его подключают в разделе «Почта» (пароль шифруется в core).
  */
 export function ServiceAccountAdmin() {
@@ -17,22 +25,28 @@ export function ServiceAccountAdmin() {
   const accounts = useStore((s) => s.accounts);
   const [state, setState] = useState<ServiceAccountState | null>(null);
   /** accountId или "none" — «не выбран». */
-  const [selected, setSelected] = useState<string>("none");
+  const [inner, setInner] = useState<string>("none");
+  const [incoming, setIncoming] = useState<string>("none");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
   const allowed = !!authStatus?.docflowEnabled && !!authUser && can("settings.manage");
 
+  const applyState = useCallback((s: ServiceAccountState) => {
+    setState(s);
+    setInner(s.account?.accountId ?? "none");
+    // Старая сборка сервера не отдаёт приёмную роль — тогда селектор честно остаётся «не выбран».
+    setIncoming(s.incoming?.account?.accountId ?? "none");
+  }, []);
+
   const load = useCallback(async () => {
     setError("");
     try {
-      const s = await api.serviceAccount();
-      setState(s);
-      setSelected(s.account?.accountId ?? "none");
+      applyState(await api.serviceAccount());
     } catch (e) {
-      setError((e as Error).message);
+      setError(humanError(e));
     }
-  }, []);
+  }, [applyState]);
 
   useEffect(() => {
     if (!allowed) return;
@@ -46,8 +60,8 @@ export function ServiceAccountAdmin() {
       <Alert
         type="error"
         showIcon
-        message={error.includes("403") ? "Недостаточно прав для этого раздела" : "Не удалось загрузить служебный ящик"}
-        description={error.includes("403") ? undefined : error}
+        message={error.includes("Недостаточно прав") ? "Недостаточно прав для этого раздела" : "Не удалось загрузить служебные ящики"}
+        description={error.includes("Недостаточно прав") ? undefined : error}
       />
     );
   }
@@ -55,35 +69,51 @@ export function ServiceAccountAdmin() {
   const save = async () => {
     setSaving(true);
     try {
-      const res = await api.setServiceAccount(selected === "none" ? null : selected);
+      // Отправляем ОБЕ роли одним вызовом: так нельзя случайно снять чужой выбор.
+      const res = await api.setServiceAccount({
+        accountId: inner === "none" ? null : inner,
+        incomingAccountId: incoming === "none" ? null : incoming
+      });
       // PUT возвращает тот же shape, что GET — перечитывать не нужно.
-      setState(res);
-      setSelected(res.account?.accountId ?? "none");
-      message.success("Служебный ящик сохранён");
+      applyState(res);
+      message.success("Служебные ящики сохранены");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setSaving(false);
     }
   };
 
-  const current = state?.account ?? null;
+  /** Человеческий текст состояния одной роли: что с выбором и что мешает. */
+  const roleProblem = (block: ServiceAccountBlock | undefined, what: string): string | null => {
+    if (!block) return null;
+    if (block.problemCode === "account_missing") return "Выбранный ящик " + what + " больше не существует — выберите другой или снимите выбор.";
+    if (block.problemCode === "not_configured") return "Ящик " + what + " не выбран: " + what + " работать не будет.";
+    return null;
+  };
 
-  return (
-    <div>
-      <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
-        Служебный ящик отправки
-      </Typography.Text>
-      <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
-        От выбора зависит, с какого ящика уходят поручения руководителю и исполнителям. Ящик должен быть подключён в
-        клиенте (раздел «Почта»), а параметры отправки — в настройках самого ящика. Аппарат видит эти параметры в
-        подсказке, пароли ему не показываются.
-      </Typography.Text>
+  const innerBlock = state ?? undefined;
+  const incomingBlock = state?.incoming;
 
+  const rolePicker = (
+    /** Имя радиогруппы обязательно своё: без него браузер считает обе группы одной. */
+    name: string,
+    title: string,
+    hint: string,
+    value: string,
+    onChange: (v: string) => void
+  ) => (
+    <div role="group" aria-label={title} style={{ marginTop: 12 }}>
+      <Typography.Text strong style={{ display: "block" }}>
+        {title}
+      </Typography.Text>
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 6 }}>
+        {hint}
+      </Typography.Text>
       {accounts.length ? (
-        <Radio.Group value={selected} onChange={(e) => setSelected(String(e.target.value))}>
+        <Radio.Group name={name} value={value} onChange={(e) => onChange(String(e.target.value))}>
           <Space direction="vertical">
-            <Radio value="none">Не выбран — отправка возьмёт первый ящик с настроенной отправкой</Radio>
+            <Radio value="none">Не выбран</Radio>
             {accounts.map((a) => (
               <Radio key={a.id} value={a.id}>
                 {a.username}
@@ -94,33 +124,57 @@ export function ServiceAccountAdmin() {
       ) : (
         <Empty description="Ящиков нет — подключите ящик в разделе «Почта»" />
       )}
+    </div>
+  );
 
-      {current ? (
-        <div style={{ marginTop: 8 }}>
-          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            {current.host + ":" + current.port + " · " + current.tls + " · " + current.username}
-          </Typography.Text>
-          <div>
-            {current.smtpConfigured ? (
-              <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                Отправка настроена
-              </Typography.Text>
-            ) : (
-              <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                Отправка не настроена — поручения уйти не смогут. Настройте SMTP у ящика.
-              </Typography.Text>
-            )}
-          </div>
-        </div>
-      ) : (
-        <Typography.Text type="warning" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
-          {state?.problemCode === "account_missing"
-            ? "Выбранный ящик больше не существует — выберите другой или снимите выбор."
-            : "Служебный ящик не выбран: отправка возьмёт первый ящик с настроенной отправкой."}
-        </Typography.Text>
+  return (
+    <div>
+      <Typography.Text strong style={{ display: "block", marginBottom: 4 }}>
+        Служебные ящики
+      </Typography.Text>
+      <Typography.Text type="secondary" style={{ fontSize: 12, display: "block" }}>
+        Внутренняя — от неё уходит письмо руководителю и исполнителям. Внешняя (приёмная) — куда приходит
+        внешняя почта от контрагентов. Ответ внешнему контрагенту уходит с того ящика, куда пришло письмо;
+        пересылка руководителю — всегда с внутренней.
+      </Typography.Text>
+
+      {roleProblem(innerBlock, "внутренней роли") ? (
+        <Alert type="warning" showIcon style={{ marginTop: 8 }} message={roleProblem(innerBlock, "внутренней роли")} />
+      ) : null}
+
+      {rolePicker(
+        "service-account-inner",
+        "Внутренняя (делопроизводство)",
+        "С неё уходит письмо руководителю на резолюцию и поручения исполнителям.",
+        inner,
+        setInner
       )}
 
-      {state?.problem ? <Alert type="warning" showIcon message={state.problem} style={{ marginTop: 8 }} /> : null}
+      {rolePicker(
+        "service-account-incoming",
+        "Внешняя (приёмная)",
+        "Куда приходит внешняя почта — с неё же уходит ответ контрагенту по этому письму.",
+        incoming,
+        setIncoming
+      )}
+
+      {roleProblem(incomingBlock, "внешней приёмной") ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginTop: 8 }}
+          message={roleProblem(incomingBlock, "внешней приёмной")}
+        />
+      ) : null}
+
+      {/* Предупреждение сервера показываем как есть: свой текст здесь был бы домыслом. */}
+      {state?.sameAccount && state.notice ? (
+        <Alert type="warning" showIcon style={{ marginTop: 12 }} message={state.notice} />
+      ) : null}
+
+      {state?.problem ? (
+        <Alert type="warning" showIcon style={{ marginTop: 8 }} message={state.problem} />
+      ) : null}
 
       <div style={{ marginTop: 12 }}>
         <Button type="primary" loading={saving} disabled={!accounts.length} onClick={() => void save()}>

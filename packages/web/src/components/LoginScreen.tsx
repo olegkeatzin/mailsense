@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, Button, Card, Form, Input, Typography, message } from "antd";
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { useStore } from "../store";
+import { humanError } from "../utils/humanError";
 
 /**
  * Экран входа. Аутентификация — доменной учёткой (LDAP bind), пароль
@@ -18,7 +19,7 @@ export default function LoginScreen() {
       await login(values.login.trim(), values.password);
       message.success("Вход выполнен");
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setBusy(false);
     }

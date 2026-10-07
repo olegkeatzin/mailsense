@@ -623,11 +623,30 @@ export type ServiceAccountProblemCode =
   | "unknown_account"
   | "no_account";
 
-export interface ServiceAccountState {
+/** Одна служебная роль: выбранный ящик и проблема, если она есть. */
+export interface ServiceAccountBlock {
   configured: boolean;
   account: ServiceAccount | null;
   /** Готовый текст для человека; разметки не содержит. */
   problem: string | null;
   /** Машинный код: "ok" — проблем нет. */
   problemCode: ServiceAccountProblemCode;
+}
+
+export interface ServiceAccountState extends ServiceAccountBlock {
+  /**
+   * Внешняя приёмная: куда приходит внешняя почта. Необязательно — старая сборка сервера
+   * это поле не отдаёт, и тогда интерфейс честно показывает только внутреннюю роль.
+   */
+  incoming?: ServiceAccountBlock;
+  /** Обе роли на одном ящике (пилот): не запрет, но предупредить надо. */
+  sameAccount?: boolean;
+  /** Готовый русский текст предупреждения от сервера; null — предупреждать не о чем. */
+  notice?: string | null;
+}
+
+/** Тело PUT: обе роли можно изменить одним вызовом; null — снять выбор. */
+export interface ServiceAccountPatch {
+  accountId?: string | null;
+  incomingAccountId?: string | null;
 }

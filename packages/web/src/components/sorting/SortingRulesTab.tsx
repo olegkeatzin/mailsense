@@ -23,6 +23,7 @@ import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
 import { notificationApi } from "../../api";
 import { priorityLabel } from "../../utils";
 import type { MailSortRule, MailSortRuleInput, SortPreview, SortPreviewSample } from "../../types";
+import { humanError } from "../../utils/humanError";
 
 /**
  * Вкладка «Правила сортировки» (stage5-ux.md §5.1).
@@ -100,7 +101,7 @@ export function SortingRulesTab() {
       setRules(res.items);
       setForbidden(false);
     } catch (e) {
-      const text = (e as Error).message;
+      const text = humanError(e);
       if (text.includes("403")) setForbidden(true);
       setError(text);
     } finally {
@@ -164,7 +165,7 @@ export function SortingRulesTab() {
       // Своё поле не выдумываем — показываем тему, отправителя, метки и приоритет.
       setPreview({ text: previewText(res), samples: res.samples.slice(0, 3) });
     } catch (e) {
-      setPreviewError("Не удалось проверить правило: " + (e as Error).message);
+      setPreviewError("Не удалось проверить правило: " + humanError(e));
     } finally {
       setPreviewing(false);
     }
@@ -187,7 +188,7 @@ export function SortingRulesTab() {
       setPreview({ text: previewText(res), samples: res.samples.slice(0, 3) });
     } catch (e) {
       setPreview(null);
-      setPreviewError("Не удалось проверить правило: " + (e as Error).message);
+      setPreviewError("Не удалось проверить правило: " + humanError(e));
     }
   };
 
@@ -221,7 +222,7 @@ export function SortingRulesTab() {
       setOpen(false);
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setSaving(false);
     }
@@ -232,7 +233,7 @@ export function SortingRulesTab() {
       await notificationApi.updateSortRule(r.id, { isActive });
       setRules((list) => list.map((x) => (x.id === r.id ? { ...x, isActive } : x)));
     } catch (e) {
-      const text = (e as Error).message;
+      const text = humanError(e);
       message.error(text.includes("404") ? "Правило уже удалено. Обновите список." : text);
       await load();
     }
@@ -244,7 +245,7 @@ export function SortingRulesTab() {
       message.success("Правило удалено");
       await load();
     } catch (e) {
-      const text = (e as Error).message;
+      const text = humanError(e);
       message.error(
         text.includes("404") ? "Правило уже удалено. Обновите список." : "Не удалось удалить правило: " + text
       );

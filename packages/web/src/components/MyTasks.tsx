@@ -7,6 +7,7 @@ import { useStore } from "../store";
 import { PRIORITY_TITLES, type TaskItem } from "../resolutionTypes";
 import { DeadlineTag } from "./notifications/deadline";
 import { READY_STYLE } from "./notifications/colors";
+import { humanError } from "../utils/humanError";
 
 /**
  * «Мои задачи» исполнителя (этап 3).
@@ -50,7 +51,7 @@ export function MyTasks() {
         setItems(again);
       }
     } catch (e) {
-      setError((e as Error).message);
+      setError(humanError(e));
     } finally {
       setLoading(false);
     }
@@ -190,7 +191,7 @@ export function MyTasks() {
       setReportText("");
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setReportBusy(false);
     }

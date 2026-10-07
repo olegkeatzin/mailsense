@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Alert, Button, Card, Form, Input, InputNumber, Select, Space, Spin, message } from "antd";
 import { api } from "../api";
 import type { CaseRecord, DuplicateMatch, RegisterSuggest } from "../types";
+import { humanError } from "../utils/humanError";
 
 /**
  * Форма регистрации входящего документа.
@@ -104,7 +105,7 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
         });
         void checkDuplicates({ docNumber: s.docNumber, summary: s.summary });
       })
-      .catch((err) => message.error("Не удалось получить данные письма: " + (err as Error).message))
+      .catch((err) => message.error("Не удалось получить данные письма: " + humanError(err)))
       .finally(() => setLoading(false));
   }, [emailId, form, checkDuplicates]);
 
@@ -125,7 +126,7 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
       message.success("Документ зарегистрирован: " + doc.regNumber);
       onRegistered(doc.regNumber);
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setSaving(false);
     }

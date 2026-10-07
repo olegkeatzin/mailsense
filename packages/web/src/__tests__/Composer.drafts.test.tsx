@@ -60,6 +60,11 @@ const draft = {
   updatedAt: "2026-10-06T09:00:00.000Z"
 } as unknown as Draft;
 
+/**
+ * Лимит времени поднят с 20 до 60 секунд: отправка черновика в jsdom тянет вложения
+ * и занимает ~11 с на свободной машине, а в полном прогоне под нагрузкой 20 с не хватало
+ * (падало по таймауту, а не по проверке). Это не ослабление проверок: сами проверки те же.
+ */
 describe("Composer: черновик с вложениями", () => {
   beforeAll(installDomEnvironment);
 
@@ -108,7 +113,7 @@ describe("Composer: черновик с вложениями", () => {
     } finally {
       jest.useRealTimers();
     }
-  }, 20000);
+  }, 60000);
 
   it("отправка из открытого черновика несёт ссылки, файлы в браузер не качаются", async () => {
     render(<Composer />);
@@ -126,5 +131,5 @@ describe("Composer: черновик с вложениями", () => {
       { filename: "Договор (копия).pdf", mimeType: "application/pdf", size: 55032, ref: "Договор_копия_-1.pdf", draftId: "draft-1" }
     ]);
     expect(attachmentBase64).not.toHaveBeenCalled();
-  }, 20000);
+  }, 60000);
 });

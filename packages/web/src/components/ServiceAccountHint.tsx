@@ -3,6 +3,7 @@ import { Alert, Button, Card, Space, Tag, Typography, message } from "antd";
 import { useStore } from "../store";
 import { api } from "../api";
 import type { ServiceAccountState } from "../types";
+import { humanError } from "../utils/humanError";
 
 /**
  * Подсказка аппарату: в какой служебный ящик входить (Р12).
@@ -29,7 +30,7 @@ export function ServiceAccountHint() {
       setState(await api.serviceAccount());
     } catch (e) {
       // Ошибку показываем один раз и не долбим маршрут: повтор — только кнопкой.
-      setError((e as Error).message);
+      setError(humanError(e));
     }
   }, []);
 

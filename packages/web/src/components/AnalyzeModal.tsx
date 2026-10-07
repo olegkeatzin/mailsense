@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button, DatePicker, Modal, Select, Space, Typography, message } from "antd";
 import { useStore } from "../store";
+import { humanError } from "../utils/humanError";
 
 export default function AnalyzeModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const accounts = useStore((s) => s.accounts);
@@ -18,7 +19,7 @@ export default function AnalyzeModal({ open, onClose }: { open: boolean; onClose
       message.success("Запущен анализ " + n + " писем");
       onClose();
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setBusy(false);
     }

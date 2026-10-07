@@ -6,6 +6,7 @@ import { RobotOutlined } from "@ant-design/icons";
 import { resolutionApi } from "../api";
 import { useStore } from "../store";
 import type { AssigneeKind, ReplyContextItem } from "../resolutionTypes";
+import { humanError } from "../utils/humanError";
 
 /**
  * Разметка письма в почте: аппарат говорит, что это за письмо (Р9, этап 4).
@@ -89,7 +90,7 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
         message.info("Не удалось предложить текст — заполните вручную");
       }
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setAiBusy(false);
     }
@@ -135,7 +136,7 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
       await load();
       onMarked();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setSaving(false);
     }

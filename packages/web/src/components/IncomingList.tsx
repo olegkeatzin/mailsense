@@ -8,6 +8,7 @@ import { priorityLabel } from "../utils";
 import type { IncomingItem } from "../types";
 import { READY_STYLE, SOON_STYLE } from "./notifications/colors";
 import { ServiceAccountHint } from "./ServiceAccountHint";
+import { humanError } from "../utils/humanError";
 
 /**
  * «Входящие на регистрацию» — рабочее место аппарата.
@@ -41,7 +42,7 @@ export default function IncomingList() {
       setTotal(res.total ?? res.items.length);
     } catch (err) {
       // Ошибку показываем в разделе, а не только всплывашкой: иначе список молча пустеет.
-      setError((err as Error).message);
+      setError(humanError(err));
     } finally {
       setLoading(false);
     }

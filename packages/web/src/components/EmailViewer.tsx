@@ -15,6 +15,7 @@ import AnalysisPanel from "./AnalysisPanel";
 import EmailDocflowTab from "./EmailDocflowTab";
 import { RegisterPanel } from "./RegisterPanel";
 import { SafeLetterHtml } from "./SafeLetterHtml";
+import { humanError } from "../utils/humanError";
 
 const FOLDER_OPTIONS = [
   { value: "INBOX", label: "Входящие" },
@@ -121,7 +122,7 @@ function MailTab({ view }: { view: EmailView }) {
       await refreshSelected();
       message.success("Номер сохранён");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setSaving(false);
     }
@@ -134,7 +135,7 @@ function MailTab({ view }: { view: EmailView }) {
       await refreshSelected();
       message.success("Дата отправки сохранена");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setSavingDate(false);
     }

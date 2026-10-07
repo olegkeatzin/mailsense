@@ -30,6 +30,7 @@ import type {
   NumberingState,
   RegisterSuggest,
   Role,
+  ServiceAccountPatch,
   ServiceAccountState,
   SortPreview,
   Template,
@@ -44,6 +45,7 @@ import type {
   ResolutionPriority,
   TaskItem
 } from "./resolutionTypes";
+import { humanError } from "./utils/humanError";
 
 const BASE = "";
 
@@ -399,11 +401,14 @@ export const api = {
 
   /** Служебный ящик отправки (Р12): подсказка аппарату и выбор администратора. */
   serviceAccount: () => request<ServiceAccountState>("/api/docflow/service-account"),
-  /** PUT возвращает тот же shape, что GET, плюс { ok, accountId } — перечитывать GET не нужно. */
-  setServiceAccount: (accountId: string | null) =>
-    request<{ ok: boolean; accountId: string | null } & ServiceAccountState>("/api/docflow/service-account", {
+  /**
+   * PUT принимает обе роли (внутренняя — accountId, внешняя приёмная — incomingAccountId)
+   * и возвращает тот же shape, что GET: перечитывать GET вторым запросом не нужно.
+   */
+  setServiceAccount: (patch: ServiceAccountPatch) =>
+    request<{ ok: boolean } & ServiceAccountState>("/api/docflow/service-account", {
       method: "PUT",
-      body: JSON.stringify({ accountId })
+      body: JSON.stringify(patch)
     }),
 
   settings: () => request<Record<string, string>>("/api/settings"),
@@ -853,7 +858,7 @@ export async function materializeAttachments(
       try {
         data = await load(item.ref.emailId, item.ref.attachmentId);
       } catch (err) {
-        throw new Error("Не удалось приложить «" + item.filename + "»: " + (err as Error).message);
+        throw new Error("Не удалось приложить «" + item.filename + "»: " + humanError(err));
       }
     }
     if (typeof data !== "string") {

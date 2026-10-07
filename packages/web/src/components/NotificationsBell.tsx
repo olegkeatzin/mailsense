@@ -25,6 +25,7 @@ import { useStore } from "../store";
 import type { AppNotification, NotificationSeverity } from "../types";
 import { NOTIFY_TEXTS, notificationTime } from "./notifications/texts";
 import { BADGE_STYLE } from "./notifications/colors";
+import { humanError } from "../utils/humanError";
 
 /**
  * Центр уведомлений (этап 5, §2 stage5-ux.md).
@@ -188,7 +189,7 @@ function NotificationsPanel({ open, onClose }: { open: boolean; onClose: () => v
     try {
       await markNotificationRead(n.id);
     } catch (e) {
-      message.error(NOTIFY_TEXTS.readFailed + (e as Error).message);
+      message.error(NOTIFY_TEXTS.readFailed + humanError(e));
     }
   };
 
@@ -205,7 +206,7 @@ function NotificationsPanel({ open, onClose }: { open: boolean; onClose: () => v
       await markAllNotificationsRead();
       message.success(NOTIFY_TEXTS.readAllDone);
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 

@@ -18,6 +18,7 @@ import { icsUrl } from "../api";
 import { useStore } from "../store";
 import type { Category, EmailView } from "../types";
 import { categoryLabel, formatDate, priorityColor, priorityLabel } from "../utils";
+import { humanError } from "../utils/humanError";
 
 const CATEGORY_OPTIONS = [
   { value: "work", label: "Рабочее" },
@@ -82,7 +83,7 @@ export default function AnalysisPanel({ view }: { view: EmailView }) {
       });
       message.success("Сохранено");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 

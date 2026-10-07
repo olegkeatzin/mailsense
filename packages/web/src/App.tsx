@@ -33,6 +33,7 @@ import Composer from "./components/Composer";
 import DraftsModal from "./components/DraftsModal";
 import LoginScreen from "./components/LoginScreen";
 import { NotificationsBell } from "./components/NotificationsBell";
+import { humanError } from "./utils/humanError";
 
 const { Header, Sider } = Layout;
 
@@ -58,7 +59,7 @@ function CurrentUser() {
           try {
             await logout();
           } catch (e) {
-            message.error((e as Error).message);
+            message.error(humanError(e));
           }
         }
       }}

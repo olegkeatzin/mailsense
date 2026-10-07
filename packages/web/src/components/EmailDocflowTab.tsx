@@ -6,6 +6,7 @@ import { useStore } from "../store";
 import { DOCUMENT_STATUS_TITLES, type DocumentRecord, type EmailView } from "../types";
 import DocumentCard from "./DocumentCard";
 import { ReplyMarker } from "./ReplyMarker";
+import { humanError } from "../utils/humanError";
 
 /**
  * Вкладка «СЭД» в открытом письме (ТЗ п. 5: боковая панель с кнопкой «Зарегистрировать»).
@@ -24,7 +25,7 @@ export default function EmailDocflowTab({ emailId, letter }: { emailId: string; 
     try {
       setDoc(await api.documentByEmail(emailId));
     } catch (err) {
-      message.error("Не удалось получить данные документооборота: " + (err as Error).message);
+      message.error("Не удалось получить данные документооборота: " + humanError(err));
     } finally {
       setLoading(false);
     }

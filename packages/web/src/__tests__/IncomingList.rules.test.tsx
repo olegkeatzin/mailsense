@@ -126,7 +126,8 @@ describe("«Входящие на регистрацию»: правила то�
     render(<IncomingList />);
 
     expect(await screen.findByText("Не удалось загрузить список")).not.toBeNull();
-    expect(screen.getByText("502 Bad Gateway")).not.toBeNull();
+    // Сбой объясняется по-русски, а сырой ответ сервера остаётся рядом в скобках (F9).
+    expect(screen.getByText(/Сервер вернул ошибку \(502 Bad Gateway\)/)).not.toBeNull();
     expect(screen.getByRole("button", { name: "Повторить" })).not.toBeNull();
   });
 });

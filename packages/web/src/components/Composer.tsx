@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { escapeHtml, htmlToPlainText } from "../utils/text";
 import RichTextEditor from "./RichTextEditor";
+import { humanError } from "../utils/humanError";
 
 type ComposeMode = "new" | "reply" | "replyAll" | "forward";
 
@@ -497,7 +498,7 @@ function ComposerForm({
       setSaveTplOpen(false);
       message.success("Шаблон сохранён");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -519,7 +520,7 @@ function ComposerForm({
       closeCompose();
       await loadEmails();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setSending(false);
     }
@@ -538,7 +539,7 @@ function ComposerForm({
       message.success("Черновик сохранён");
       closeCompose();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setSaving(false);
     }

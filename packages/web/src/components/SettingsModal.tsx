@@ -31,6 +31,7 @@ import { SortingRulesTab } from "./sorting/SortingRulesTab";
 import { ServiceAccountAdmin } from "./ServiceAccountAdmin";
 import { NotificationsTab } from "./sorting/NotificationsTab";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, Template } from "../types";
+import { humanError } from "../utils/humanError";
 
 const PROTOCOL_OPTIONS = [
   { value: "imap", label: "IMAP" },
@@ -130,7 +131,7 @@ function AccountTab() {
       closeEdit();
       await loadAccounts();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -177,7 +178,7 @@ function AccountTab() {
       if (r.ok) message.success("Подключение успешно");
       else message.error(r.error || "Ошибка подключения");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setTesting(false);
     }
@@ -191,7 +192,7 @@ function AccountTab() {
       if (r.ok) message.success("SMTP: подключение успешно");
       else message.error(r.error || "Ошибка SMTP");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setTestingSmtp(false);
     }
@@ -234,7 +235,7 @@ function AccountTab() {
                       message.success("Проверено");
                     })
                     // Без catch отказ уходил в консоль браузера необработанным промисом.
-                    .catch((e) => message.error("Проверка не удалась: " + (e as Error).message))
+                    .catch((e) => message.error("Проверка не удалась: " + humanError(e)))
                 }
               >
                 Проверить
@@ -437,7 +438,7 @@ function AiTab() {
       message.success("Настройки ИИ сохранены");
       await loadAiConfig();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -447,7 +448,7 @@ function AiTab() {
       await api.savePromptConfig(prompts);
       message.success("Промпты сохранены");
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -475,7 +476,7 @@ function AiTab() {
         message.error(r.error || "Ошибка подключения");
       }
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setChecking(false);
     }
@@ -500,7 +501,7 @@ function AiTab() {
         message.error(r.error || "Ошибка подключения к OCR-эндпоинту");
       }
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setCheckingOcr(false);
     }
@@ -513,7 +514,7 @@ function AiTab() {
         <Input placeholder="http://localhost:8080/v1" />
       </Form.Item>
       <Form.Item name="apiKey" label="API-ключ">
-        <Input placeholder="not-needed" />
+        <Input placeholder="не требуется" />
       </Form.Item>
       <Form.Item name="model" label="Модель">
         <AutoComplete
@@ -588,7 +589,7 @@ function AiTab() {
       style={{ marginTop: 4, fontFamily: "monospace" }}
     />
     <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 12 }}>
-      Шаблон сообщения пользователя (плейсхолдеры: {"{{from}} {{subject}} {{date}} {{body}} {{attachments}} {{notes}}"}):
+      Шаблон сообщения пользователя. Подстановки: {"{{from}} {{subject}} {{date}} {{body}} {{attachments}} {{notes}}"}
     </Typography.Text>
     <Input.TextArea
       rows={8}
@@ -691,7 +692,7 @@ function LdapTab() {
         rejectUnauthorized: st.settings.rejectUnauthorized === true
       });
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -721,7 +722,7 @@ function LdapTab() {
       message.success("Настройки каталога сохранены");
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setBusy(false);
     }
@@ -735,7 +736,7 @@ function LdapTab() {
       setPassword("");
       await load();
     } catch (e) {
-      message.error("Не удалось войти: " + (e as Error).message);
+      message.error("Не удалось войти: " + humanError(e));
     } finally {
       setBusy(false);
     }
@@ -747,7 +748,7 @@ function LdapTab() {
       setPassword("");
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -758,7 +759,7 @@ function LdapTab() {
       message.success("Загружено контактов: " + r.synced);
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     } finally {
       setBusy(false);
     }
@@ -819,7 +820,7 @@ function LdapTab() {
           <Input placeholder="ldaps://srv-dc40.asup.local:636" />
         </Form.Item>
         <Space wrap>
-          <Form.Item name="baseDn" label="Base DN" style={{ minWidth: 320 }}>
+          <Form.Item name="baseDn" label="Базовый DN (Base DN)" style={{ minWidth: 320 }}>
             <Input placeholder="DC=asup,DC=local" />
           </Form.Item>
           <Form.Item name="upnSuffix" label="UPN-суффикс">
@@ -840,7 +841,11 @@ function LdapTab() {
         <Form.Item name="userFilter" label="Фильтр пользователей (пусто = стандартный)">
           <Input placeholder="(&(objectCategory=person)(objectClass=user)(mail=*))" />
         </Form.Item>
-        <Form.Item name="attributes" label="Атрибуты через запятую">
+        <Form.Item
+          name="attributes"
+          label="Атрибуты каталога через запятую"
+          extra="Это поля учётной записи в каталоге: из них берётся карточка сотрудника."
+        >
           <Input placeholder="displayName, mail, sAMAccountName, title, department, telephoneNumber" />
         </Form.Item>
                 </>
@@ -955,7 +960,7 @@ function TemplatesTab() {
       setOpen(false);
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -964,7 +969,7 @@ function TemplatesTab() {
       await api.deleteTemplate(id);
       await load();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   };
 
@@ -1096,7 +1101,7 @@ export default function SettingsModal() {
             ? [
                 // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
                 // Служебный ящик: аппарат видит подсказку, выбирает администратор (settings.manage).
-                { key: "service", label: "Служебный ящик", children: <ServiceAccountAdmin key={reloadKey} /> },
+                { key: "service", label: "Служебные ящики", children: <ServiceAccountAdmin key={reloadKey} /> },
                 { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
                 { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> }
               ]

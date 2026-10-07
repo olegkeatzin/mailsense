@@ -13,6 +13,7 @@ import {
 } from "../resolutionTypes";
 import { useStore } from "../store";
 import { formatAssignees } from "../utils";
+import { actionTitle, fieldTitle, formatValue } from "./docflow/labels";
 import {
   DOCUMENT_STATUS_TITLES,
   type AuditEntry,
@@ -20,6 +21,7 @@ import {
   type DocumentStatus,
   type User
 } from "../types";
+import { humanError } from "../utils/humanError";
 
 /**
  * Карточка документа: графы журнала, связанные письма и история изменений.
@@ -36,15 +38,6 @@ const STATUS_OPTIONS = (Object.keys(DOCUMENT_STATUS_TITLES) as DocumentStatus[])
   value: s,
   label: DOCUMENT_STATUS_TITLES[s]
 }));
-
-const ACTION_TITLES: Record<string, string> = {
-  "journal.register": "Регистрация",
-  "journal.edit": "Изменение",
-  "journal.link_email": "Привязка письма",
-  "journal.register_denied": "Отклонённая регистрация",
-  "journal.archive_period": "Выгрузка года в архив",
-  "journal.reopen_period": "Отмена закрытия года"
-};
 
 export default function DocumentCard({ documentId, onClose, onChanged }: Props) {
   const can = useStore((s) => s.can);
@@ -93,7 +86,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       await loadResolutions();
       onChanged?.();
     } catch (e) {
-      message.error((e as Error).message);
+      message.error(humanError(e));
     }
   }
 
@@ -133,7 +126,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       }
       await loadResolutions();
     } catch (err) {
-      message.error("Не удалось открыть карточку: " + (err as Error).message);
+      message.error("Не удалось открыть карточку: " + humanError(err));
     } finally {
       setLoading(false);
     }
@@ -158,7 +151,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       await load();
       onChanged?.();
     } catch (err) {
-      message.error((err as Error).message);
+      message.error(humanError(err));
     } finally {
       setSaving(false);
     }
@@ -182,7 +175,8 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       const parts: string[] = [];
       for (const k of keys) {
         if (String(before[k] ?? "") !== String(after[k] ?? "")) {
-          parts.push(k + ": «" + String(before[k] ?? "—") + "» → «" + String(after[k] ?? "—") + "»");
+          // Имена полей и значения — человеческие: status переводится, JSON не показываем.
+          parts.push(fieldTitle(k) + ": «" + formatValue(before[k], k) + "» → «" + formatValue(after[k], k) + "»");
         }
       }
       return parts.join("; ");
@@ -405,7 +399,10 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                 renderItem={(e) => (
                   <List.Item>
                     <span style={{ color: "#595959", marginRight: 8 }}>{e.role === "source" ? "входящее" : e.role}</span>
-                    <span style={{ fontFamily: "monospace", fontSize: 12 }}>{e.emailId}</span>
+                    {/* Внутренний идентификатор письма человеку бесполезен: показываем, когда привязано. */}
+                    <span style={{ color: "#595959", fontSize: 12 }}>
+                      {e.linkedAt ? "привязано " + dayjs(e.linkedAt).format("DD.MM.YYYY HH:mm") : "привязано"}
+                    </span>
                   </List.Item>
                 )}
               />
@@ -429,7 +426,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                     children: (
                       <div>
                         <div>
-                          <b>{h.userName || "система"}</b> · {ACTION_TITLES[h.action] ?? h.action} · 
+                          <b>{h.userName || "система"}</b> · {actionTitle(h.action)} · 
                           {dayjs(h.createdAt).format("DD.MM.YYYY HH:mm:ss")}
                         </div>
                         {diff && <div style={{ color: "#555", fontSize: 12 }}>{diff}</div>}
@@ -463,7 +460,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
             await loadResolutions();
             onChanged?.();
           } catch (e) {
-            message.error((e as Error).message);
+            message.error(humanError(e));
           } finally {
             setForwardBusy(false);
           }

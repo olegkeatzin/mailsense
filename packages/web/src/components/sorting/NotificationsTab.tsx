@@ -19,6 +19,7 @@ import type { ColumnsType } from "antd/es/table";
 import { notificationApi } from "../../api";
 import { NOTIFICATION_KIND_TITLES } from "../notifications/texts";
 import type { NotificationSettings, NotificationTemplate } from "../../types";
+import { humanError } from "../../utils/humanError";
 
 /**
  * Вкладка «Уведомления» (stage5-ux.md §5.2 + А2/А3 приложения к контракту).
@@ -58,7 +59,7 @@ export function NotificationsTab() {
       setHolidaysText((s.holidays ?? []).join("\n"));
       setForbidden(false);
     } catch (e) {
-      const text = (e as Error).message;
+      const text = humanError(e);
       if (text.includes("403")) setForbidden(true);
       setError(text);
     } finally {
@@ -98,7 +99,7 @@ export function NotificationsTab() {
       message.success("Настройки уведомлений сохранены");
       await load();
     } catch (e) {
-      setSaveError((e as Error).message);
+      setSaveError(humanError(e));
     } finally {
       setSaving(false);
     }
@@ -125,7 +126,7 @@ export function NotificationsTab() {
       setEditing(null);
       await load();
     } catch (e) {
-      message.error("Не удалось сохранить шаблон: " + (e as Error).message);
+      message.error("Не удалось сохранить шаблон: " + humanError(e));
     } finally {
       setSavingTemplate(false);
     }
@@ -136,7 +137,7 @@ export function NotificationsTab() {
       title: "Вид",
       dataIndex: "key",
       width: 220,
-      render: (k: string) => NOTIFICATION_KIND_TITLES[k] ?? k
+      render: (k: string) => NOTIFICATION_KIND_TITLES[k] ?? "Другое уведомление"
     },
     {
       title: "Заголовок",
@@ -271,7 +272,7 @@ export function NotificationsTab() {
 
       <Modal
         open={!!editing}
-        title={editing ? NOTIFICATION_KIND_TITLES[editing.key] ?? editing.key : ""}
+        title={editing ? NOTIFICATION_KIND_TITLES[editing.key] ?? "Другое уведомление" : ""}
         onCancel={() => setEditing(null)}
         onOk={() => void saveTemplate()}
         okText="Сохранить"

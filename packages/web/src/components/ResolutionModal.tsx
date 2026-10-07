@@ -7,6 +7,7 @@ import type { User } from "../types";
 import { SuggestedAssignees } from "./SuggestedAssignees";
 import { DeadlinePresets } from "./DeadlinePresets";
 import { SOON_STYLE } from "./notifications/colors";
+import { humanError } from "../utils/humanError";
 
 /**
  * Подготовка резолюции аппаратом (этап 3).
@@ -87,7 +88,7 @@ export function ResolutionModal(props: {
       setSourceKind("ai");
       message.success("Предложение готово — проверьте и поправьте");
     } catch (e) {
-      setError("Не удалось получить предложение: " + (e as Error).message);
+      setError("Не удалось получить предложение: " + humanError(e));
     } finally {
       setAiBusy(false);
     }
@@ -120,7 +121,7 @@ export function ResolutionModal(props: {
       onSaved();
       onClose();
     } catch (e) {
-      setError((e as Error).message);
+      setError(humanError(e));
     } finally {
       setBusy(false);
     }
@@ -137,7 +138,7 @@ export function ResolutionModal(props: {
       onSaved();
       onClose();
     } catch (e) {
-      setError((e as Error).message);
+      setError(humanError(e));
     } finally {
       setBusy(false);
     }
