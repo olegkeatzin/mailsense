@@ -82,6 +82,36 @@ describe("новое письмо", () => {
   });
 });
 
+describe("шаблон без подписи ящика (личная подпись клиента)", () => {
+  test("новое письмо: тело пустое, подписи ящика нет", () => {
+    const t = buildComposeTemplate({ accountId, mode: "new", useAccountSignature: false });
+    expect(t.bodyText).toBe("");
+    expect(t.bodyHtml).toBe("");
+  });
+
+  test("ответ: цитата на месте, подписи ящика нет", () => {
+    const email = makeEmail();
+    const t = buildComposeTemplate({ accountId, mode: "reply", emailId: email.id, useAccountSignature: false });
+
+    expect(t.bodyText).toContain("> Текст оригинала");
+    expect(t.bodyText).not.toContain("С уважением, Я");
+    expect(t.bodyHtml).toContain("<blockquote");
+    expect(t.bodyHtml).not.toContain("mailsense-signature");
+  });
+
+  test("пересылка: шапка на месте, подписи ящика нет", () => {
+    const email = makeEmail();
+    const t = buildComposeTemplate({ accountId, mode: "forward", emailId: email.id, useAccountSignature: false });
+
+    expect(t.bodyText).toContain("Перенаправленное сообщение");
+    expect(t.bodyText).not.toContain("С уважением, Я");
+  });
+
+  test("по умолчанию поведение прежнее — подпись ящика на месте", () => {
+    expect(buildComposeTemplate({ accountId, mode: "new" }).bodyText).toContain("С уважением, Я");
+  });
+});
+
 describe("ответ", () => {
   test("получатель — отправитель оригинала, тема с Re:", () => {
     const email = makeEmail();

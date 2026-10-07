@@ -9,12 +9,14 @@ import path from "node:path";
  */
 const mockPdfToImages = jest.fn();
 const mockPdfToText = jest.fn();
+const mockPdfToTextResult = jest.fn();
 const mockPdfPageToImage = jest.fn();
 
 jest.mock("./pdf.js", () => ({
   __esModule: true,
   pdfToImages: (...a: unknown[]) => mockPdfToImages(...a),
   pdfToText: (...a: unknown[]) => mockPdfToText(...a),
+  pdfToTextResult: (...a: unknown[]) => mockPdfToTextResult(...a),
   pdfPageToImage: (...a: unknown[]) => mockPdfPageToImage(...a)
 }));
 
@@ -26,9 +28,11 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "mailsense-att-"));
   mockPdfToImages.mockReset();
   mockPdfToText.mockReset();
+  mockPdfToTextResult.mockReset();
   mockPdfPageToImage.mockReset();
   mockPdfToImages.mockResolvedValue({ pages: [], totalPages: 0, truncated: false });
   mockPdfToText.mockResolvedValue("");
+  mockPdfToTextResult.mockResolvedValue({ text: "", totalPages: 0, pagesRead: 0, truncated: false });
 });
 
 afterEach(() => {
@@ -78,7 +82,7 @@ describe("изображения", () => {
 describe("PDF", () => {
   test("страницы становятся картинками, текст извлекается отдельно", async () => {
     mockPdfToImages.mockResolvedValue({ pages: [Buffer.from([1, 2, 3])], totalPages: 1, truncated: false });
-    mockPdfToText.mockResolvedValue("текст документа");
+    mockPdfToTextResult.mockResolvedValue({ text: "текст документа", totalPages: 1, pagesRead: 1, truncated: false });
 
     const res = await prepareAttachment(dir, "e1", "акт.pdf", "application/pdf", Buffer.from("%PDF-1.4"));
 
@@ -88,10 +92,10 @@ describe("PDF", () => {
     expect(res.handled).toBe(true);
   });
 
-  test("усечение по страницам попадает в примечание", async () => {
+  test("усечение по страницам попадает в примечание честным текстом", async () => {
     mockPdfToImages.mockResolvedValue({ pages: [Buffer.from([1])], totalPages: 30, truncated: true });
     const res = await prepareAttachment(dir, "e1", "том.pdf", "application/pdf", Buffer.from("%PDF-1.4"));
-    expect(res.note).toContain("1 из 30");
+    expect(res.note).toContain("первые 1 страниц из 30");
   });
 
   test("PDF без отрендеренных страниц считается необработанным", async () => {
@@ -170,5 +174,102 @@ describe("превью вложения", () => {
 
   test("для остальных типов превью недоступно", async () => {
     expect(await renderPreviewImage("docx", Buffer.from("x"))).toBeNull();
+  });
+});
+
+describe("лимит страниц OCR", () => {
+  test("по умолчанию рендерятся первые 10 страниц, обрезка — в примечании", async () => {
+    mockPdfToImages.mockResolvedValue({
+      pages: Array.from({ length: 10 }, (_, i) => Buffer.from([i])),
+      totalPages: 12,
+      truncated: true
+    });
+    const res = await prepareAttachment(dir, "e1", "протокол.pdf", "application/pdf", Buffer.from("%PDF-1.4"));
+
+    expect(mockPdfToImages).toHaveBeenCalledWith(expect.anything(), 10);
+    expect(res.images).toHaveLength(10);
+    expect(res.note).toBe("распознаны первые 10 страниц из 12");
+    expect(res.handled).toBe(true);
+  });
+
+  test("лимит можно задать явно (ai.ocrMaxPages)", async () => {
+    mockPdfToImages.mockResolvedValue({
+      pages: [Buffer.from([1]), Buffer.from([2]), Buffer.from([3])],
+      totalPages: 12,
+      truncated: true
+    });
+    const res = await prepareAttachment(dir, "e1", "протокол.pdf", "application/pdf", Buffer.from("%PDF-1.4"), {
+      ocrMaxPages: 3
+    });
+
+    expect(mockPdfToImages).toHaveBeenCalledWith(expect.anything(), 3);
+    expect(res.note).toBe("распознаны первые 3 страниц из 12");
+  });
+
+  test("короткий PDF (≤ лимита) примечания об обрезке не получает", async () => {
+    mockPdfToImages.mockResolvedValue({ pages: [Buffer.from([1]), Buffer.from([2])], totalPages: 2, truncated: false });
+    const res = await prepareAttachment(dir, "e1", "короткий.pdf", "application/pdf", Buffer.from("%PDF-1.4"));
+
+    expect(res.note).toBeUndefined();
+    expect(res.images).toHaveLength(2);
+    expect(res.handled).toBe(true);
+  });
+});
+
+describe("текстовый слой PDF: явный лимит и режим «только текст»", () => {
+  test("обрезка текстового слоя попадает в пометку вместе с обрезкой рендера", async () => {
+    mockPdfToTextResult.mockResolvedValue({ text: "первые страницы", totalPages: 35, pagesRead: 20, truncated: true });
+    mockPdfToImages.mockResolvedValue({ pages: [Buffer.from([1])], totalPages: 35, truncated: true });
+
+    const res = await prepareAttachment(dir, "e1", "отчёт.pdf", "application/pdf", Buffer.from("%PDF-1.4"));
+
+    expect(res.note).toContain("текстовый слой: прочитаны первые 20 страниц из 35");
+    expect(res.note).toContain("распознаны первые 1 страниц из 35");
+    expect(res.handled).toBe(true);
+  });
+
+  test("лимит текстового слоя по умолчанию 20 и настраивается", async () => {
+    await prepareAttachment(dir, "e1", "а.pdf", "application/pdf", Buffer.from("%PDF-1.4"));
+    expect(mockPdfToTextResult).toHaveBeenCalledWith(expect.anything(), 20);
+
+    mockPdfToTextResult.mockClear();
+    await prepareAttachment(dir, "e1", "б.pdf", "application/pdf", Buffer.from("%PDF-1.4"), { textMaxPages: 5 });
+    expect(mockPdfToTextResult).toHaveBeenCalledWith(expect.anything(), 5);
+  });
+
+  test("режим «только текст» не рендерит страницы (синхронизация ящика)", async () => {
+    mockPdfToTextResult.mockResolvedValue({ text: "текст слоя", totalPages: 4, pagesRead: 4, truncated: false });
+
+    const res = await prepareAttachment(dir, "e1", "договор.pdf", "application/pdf", Buffer.from("%PDF-1.4"), {
+      textOnly: true
+    });
+
+    expect(mockPdfToImages).not.toHaveBeenCalled();
+    expect(res.images).toEqual([]);
+    expect(res.extractedText).toBe("текст слоя");
+    expect(res.handled).toBe(true);
+  });
+
+  test("скан без текстового слоя при синхронизации не помечается необработанным", async () => {
+    mockPdfToTextResult.mockResolvedValue({ text: "", totalPages: 12, pagesRead: 12, truncated: false });
+
+    const res = await prepareAttachment(dir, "e1", "скан.pdf", "application/pdf", Buffer.from("%PDF-1.4"), {
+      textOnly: true
+    });
+
+    // Скан прочитает OCR на этапе анализа — «не обработано» здесь было бы ложью.
+    expect(res.handled).toBe(true);
+    expect(res.extractedText).toBe("");
+    expect(res.images).toEqual([]);
+    expect(res.note).toBeUndefined();
+    expect(mockPdfToImages).not.toHaveBeenCalled();
+  });
+
+  test("при синхронизации картинка-вложение не кодируется в base64", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const res = await prepareAttachment(dir, "e1", "фото.png", "image/png", png, { textOnly: true });
+
+    expect(res.images).toEqual([]);
+    expect(res.handled).toBe(true);
   });
 });

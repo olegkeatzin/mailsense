@@ -20,7 +20,14 @@ import { analyzeEmailRaw } from "../ai/analyze.js";
 import { ocrImage } from "../ai/ocr.js";
 import { parseAnalysis } from "../ai/parse.js";
 import { analysisQueue, ocrQueue } from "../analysis/queue.js";
-import { getAiConfig, getAnalysisConcurrency, getOcrConfig, getOcrConcurrency } from "./settingsService.js";
+import {
+  getAiConfig,
+  getAnalysisConcurrency,
+  getOcrConfig,
+  getOcrConcurrency,
+  getOcrMaxPages,
+  getTextMaxPages
+} from "./settingsService.js";
 import type { AnalysisResult } from "../types.js";
 
 const inFlight = new Set<string>();
@@ -136,7 +143,10 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
           // Повторная запись создавала копии «-1», «-2» при каждом прогоне анализа:
           // они не попадают в БД и не удаляются вместе с письмом.
           await prepareAttachment(ctx.config.dataDir, emailId, att.filename, att.mimeType, buf, {
-            persist: false
+            persist: false,
+            // Лимиты страниц — из настроек, а не «сколько получится» (текст и OCR независимы).
+            ocrMaxPages: getOcrMaxPages(),
+            textMaxPages: getTextMaxPages()
           })
         );
         preparedAttIds.push(att.id);
@@ -184,8 +194,10 @@ export async function runAnalysis(emailId: string): Promise<AnalysisResult | nul
       const text = attachmentTexts[i];
       if (text && text.trim()) setAttachmentText(preparedAttIds[i], text);
     });
+    // Пометки берём не только у необработанных вложений: у обработанного PDF с обрезкой
+    // (ai.ocrMaxPages) тоже есть note, и раньше он молча не доходил до модели.
     const notes = prepared
-      .filter((p) => !p.handled)
+      .filter((p) => !p.handled || (p.note ?? "").trim().length > 0)
       .map((p) => p.filename + ": " + (p.note ?? "не обработано"));
 
     const from = email.from

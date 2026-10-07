@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 /**
  * Черновики с вложениями: содержимое лежит файлами, в JSON — ссылки.
@@ -9,7 +10,15 @@ import path from "node:path";
  */
 import { initApp } from "../init.js";
 import { closeDb } from "../db/index.js";
-import { getDraft, insertAccount, insertAttachment, insertEmail, listDrafts } from "../repos.js";
+import {
+  deleteAccount,
+  getDraft,
+  insertAccount,
+  insertAttachment,
+  insertEmail,
+  listAccounts,
+  listDrafts
+} from "../repos.js";
 import { NodeSecretStore } from "../secrets.js";
 import { DraftAttachmentError, createDraft, draftDir, readDraftAttachment, removeDraft, saveDraft } from "./draftService.js";
 
@@ -217,5 +226,52 @@ describe("удаление", () => {
     expect(getDraft(draft.id)).toBeNull();
     expect(fs.existsSync(draftDir(draft.id))).toBe(false);
     expect(listDrafts(accountId).some((d) => d.id === draft.id)).toBe(false);
+  });
+});
+
+describe("черновик в клиентском режиме (локальных ящиков нет)", () => {
+  test("создаётся при accountId серверного ящика, которого нет в локальной базе", () => {
+    const serverAccountId = "server-" + randomUUID();
+    expect(listAccounts().some((a) => a.id === serverAccountId)).toBe(false);
+
+    const draft = createDraft({
+      accountId: serverAccountId,
+      to: [{ address: "to@test.local" }],
+      subject: "Черновик клиента",
+      bodyText: "текст"
+    });
+
+    expect(draft.accountId).toBe(serverAccountId);
+    expect(listDrafts(serverAccountId).map((d) => d.id)).toContain(draft.id);
+
+    // Автосохранение и удаление в клиентском режиме тоже обязаны работать.
+    expect(saveDraft(draft.id, { subject: "Правка" })!.subject).toBe("Правка");
+    removeDraft(draft.id);
+    expect(getDraft(draft.id)).toBeNull();
+  });
+});
+
+describe("удаление ящика", () => {
+  test("черновики удалённого ящика не остаются сиротами", () => {
+    const acc = insertAccount(
+      {
+        protocol: "pop3",
+        host: "mail.test",
+        port: 995,
+        tls: "ssl",
+        authType: "login",
+        username: "doomed@mail.test",
+        password: "p",
+        settings: { signatureEnabled: false }
+      },
+      new NodeSecretStore(dir).encrypt("p")
+    );
+    const draft = createDraft({ accountId: acc.id, to: [], subject: "Осиротеет?", bodyText: "т" });
+    expect(getDraft(draft.id)).not.toBeNull();
+
+    deleteAccount(acc.id);
+
+    // Раньше это делал ON DELETE CASCADE; после снятия FK каскад обязан остаться явным.
+    expect(getDraft(draft.id)).toBeNull();
   });
 });

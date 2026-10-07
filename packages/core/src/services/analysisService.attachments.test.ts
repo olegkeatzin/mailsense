@@ -35,6 +35,7 @@ jest.mock("../attachments/pdf.js", () => ({
   __esModule: true,
   pdfToImages: async () => ({ pages: [], totalPages: 0, truncated: false }),
   pdfToText: async () => "",
+  pdfToTextResult: async () => ({ text: "", totalPages: 0, pagesRead: 0, truncated: false }),
   pdfPageToImage: async () => null
 }));
 

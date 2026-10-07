@@ -1,4 +1,5 @@
 import { createCanvas, Path2D as NapiPath2D, DOMMatrix as NapiDOMMatrix } from "@napi-rs/canvas";
+import { DEFAULT_TEXT_MAX_PAGES } from "../config.js";
 
 (globalThis as Record<string, unknown>).Path2D ??= NapiPath2D;
 (globalThis as Record<string, unknown>).DOMMatrix ??= NapiDOMMatrix;
@@ -9,11 +10,31 @@ export interface PdfRenderResult {
   truncated: boolean;
 }
 
-export async function pdfToText(data: Buffer, maxPages = 20): Promise<string> {
+export interface PdfTextResult {
+  /** Склеенный текст прочитанных страниц (с маркерами «--- стр. N ---»). */
+  text: string;
+  /** Всего страниц в документе. */
+  totalPages: number;
+  /** Сколько страниц реально прочитано (ограничено лимитом). */
+  pagesRead: number;
+  /** Документ длиннее лимита — часть текста НЕ прочитана. */
+  truncated: boolean;
+}
+
+/**
+ * Текст вложенного слоя PDF с явным лимитом страниц.
+ *
+ * Лимит здесь не про экономию времени (чтение слоя почти бесплатно — миллисекунды на страницу),
+ * а про честность: раньше предел 20 страниц был зашит в значение по умолчанию и о нём никто
+ * не знал — длинный документ молча отдавал в промпт только начало. Теперь вызывающий код
+ * знает totalPages/pagesRead и обязан сказать об обрезке.
+ */
+export async function pdfToTextResult(data: Buffer, maxPages = DEFAULT_TEXT_MAX_PAGES): Promise<PdfTextResult> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const doc = await pdfjs.getDocument({ data: new Uint8Array(data), useSystemFonts: true }).promise;
   const parts: string[] = [];
-  const limit = Math.min(doc.numPages, maxPages);
+  const totalPages = doc.numPages;
+  const limit = Math.min(totalPages, maxPages);
   try {
     for (let i = 1; i <= limit; i++) {
       const page = await doc.getPage(i);
@@ -29,7 +50,12 @@ export async function pdfToText(data: Buffer, maxPages = 20): Promise<string> {
   } finally {
     await doc.destroy();
   }
-  return parts.join("\n\n");
+  return { text: parts.join("\n\n"), totalPages, pagesRead: limit, truncated: totalPages > limit };
+}
+
+/** Только текст. Обёртка над pdfToTextResult — для вызовов, которым метаданные не нужны. */
+export async function pdfToText(data: Buffer, maxPages = DEFAULT_TEXT_MAX_PAGES): Promise<string> {
+  return (await pdfToTextResult(data, maxPages)).text;
 }
 
 /**

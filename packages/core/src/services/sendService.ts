@@ -15,6 +15,67 @@ export interface SendResult {
   messageId: string;
 }
 
+/**
+ * Отказ по данным запроса на отправку (fromName/replyTo). Это 400-класс, а не сбой сервера:
+ * такие поля нельзя «почистить молча» — человек увидит в письме не то, что написал.
+ */
+export class ComposeInputError extends Error {}
+
+/** Предел длины имени в заголовке From (замороженный интерфейс). */
+const FROM_NAME_MAX = 120;
+
+/**
+ * Имя работника для From. Пустая строка = поле не задано (работает прежний путь из настроек).
+ * CR/LF, кавычки и обратный слэш ломают заголовок — отказ, а не тихая чистка.
+ */
+function readFromName(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const name = raw.trim();
+  if (!name) return "";
+  if (name.length > FROM_NAME_MAX) {
+    throw new ComposeInputError("Имя отправителя длиннее " + FROM_NAME_MAX + " символов");
+  }
+  for (const ch of name) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x20 || code === 0x7f) {
+      throw new ComposeInputError("Имя отправителя содержит перевод строки или управляющий символ");
+    }
+    if (ch === '"' || ch === "\\") {
+      throw new ComposeInputError("Имя отправителя содержит кавычку или обратный слэш — заголовок будет сломан");
+    }
+  }
+  return name;
+}
+
+/** Адрес пригоден для заголовка: одна «собака», непустые части, домен с точкой, без пробелов и служебных знаков. */
+function isValidAddress(value: string): boolean {
+  if (!value || value.length > 254) return false;
+  const at = value.indexOf("@");
+  if (at <= 0 || at !== value.lastIndexOf("@")) return false;
+  const local = value.slice(0, at);
+  const domain = value.slice(at + 1);
+  if (!local || !domain.includes(".") || domain.startsWith(".") || domain.endsWith(".") || domain.includes("..")) {
+    return false;
+  }
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code <= 0x20 || code === 0x7f) return false;
+    if (',;<>()[]"\\'.includes(ch)) return false;
+  }
+  return true;
+}
+
+/** Reply-To: пустая строка = не задано; иначе адрес обязан быть корректным. */
+function readReplyTo(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const value = raw.trim();
+  if (!value) return "";
+  if (!isValidAddress(value)) {
+    throw new ComposeInputError("Некорректный адрес для ответа (Reply-To): «" + value + "»");
+  }
+  return value;
+}
+
 function addressTo(a: EmailAddress): string {
   return a.name ? `"${a.name.replace(/"/g, '\\"')}" <${a.address}>` : a.address;
 }
@@ -56,12 +117,18 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
   if (!account) throw new Error("Аккаунт не найден");
   if (!compose.to || compose.to.length === 0) throw new Error("Укажите получателя");
 
+  // Валидация заголовков — ДО любых сетевых операций и чтения вложений.
+  const fromName = readFromName(compose.fromName);
+  const replyTo = readReplyTo(compose.replyTo);
+
   const smtpPassword = decryptSmtpPassword(account);
 
-  // Отображаемое имя из настроек аккаунта (Thunderbird-подобно): "Иванов И.И." <user@host>.
+  // Имя: сначала имя работника (Р18), иначе — отображаемое имя ящика (Thunderbird-подобно).
+  // Адрес всегда адрес ящика аккаунта: подмена адреса запрещена.
   const displayName = typeof account.settings.displayName === "string" ? account.settings.displayName.trim() : "";
-  const fromHeader = displayName
-    ? '"' + displayName.replace(/"/g, '\\"') + '" <' + account.username + ">"
+  const headerName = fromName || displayName;
+  const fromHeader = headerName
+    ? '"' + headerName.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '" <' + account.username + ">"
     : account.username;
 
   const storedMessageId = randomUUID() + "@mailsense.local";
@@ -94,7 +161,8 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
     })),
     inReplyTo,
     references,
-    messageId: headerMessageId
+    messageId: headerMessageId,
+    replyTo: replyTo || undefined
   });
 
   const email = insertEmail({

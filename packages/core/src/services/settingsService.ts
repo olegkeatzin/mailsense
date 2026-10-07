@@ -1,4 +1,4 @@
-import type { AiConfig } from "../config.js";
+import { DEFAULT_OCR_MAX_PAGES, DEFAULT_TEXT_MAX_PAGES, type AiConfig } from "../config.js";
 import { getContext } from "../context.js";
 import { getSetting, setSetting, listSettings } from "../repos.js";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_TEMPLATE } from "../ai/prompt.js";
@@ -14,8 +14,40 @@ export function getAiConfig(): AiConfig {
     ocrBaseUrl: getSetting("ai.ocrBaseUrl") ?? undefined,
     ocrModel: getSetting("ai.ocrModel") ?? undefined,
     concurrency: Number(getSetting("ai.concurrency") ?? "1"),
-    ocrConcurrency: Number(getSetting("ai.ocrConcurrency") ?? "3")
+    ocrConcurrency: Number(getSetting("ai.ocrConcurrency") ?? "3"),
+    ocrMaxPages: readPageLimit(
+      getSetting("ai.ocrMaxPages") ?? String(base.ocrMaxPages ?? DEFAULT_OCR_MAX_PAGES),
+      DEFAULT_OCR_MAX_PAGES
+    ),
+    textMaxPages: readPageLimit(
+      getSetting("ai.textMaxPages") ?? String(base.textMaxPages ?? DEFAULT_TEXT_MAX_PAGES),
+      DEFAULT_TEXT_MAX_PAGES
+    )
   };
+}
+
+/** Верхняя граница лимита страниц: защита от «прочитать 100 000 страниц» из настроек. */
+const MAX_PAGE_LIMIT = 200;
+
+/**
+ * Мусор в настройке не должен превращаться в NaN или в бесконечный цикл рендера:
+ * нецелое, ноль, отрицательное и выход за диапазон трактуем как дефолт.
+ */
+function readPageLimit(raw: string | number, fallback: number): number {
+  const n = Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= MAX_PAGE_LIMIT ? n : fallback;
+}
+
+/** Сколько страниц PDF рендерить и распознавать OCR (настройка ai.ocrMaxPages). */
+export function getOcrMaxPages(): number {
+  const base = getContext().config.ai.ocrMaxPages ?? DEFAULT_OCR_MAX_PAGES;
+  return readPageLimit(getSetting("ai.ocrMaxPages") ?? String(base), DEFAULT_OCR_MAX_PAGES);
+}
+
+/** Сколько страниц PDF читать из текстового слоя (настройка ai.textMaxPages). */
+export function getTextMaxPages(): number {
+  const base = getContext().config.ai.textMaxPages ?? DEFAULT_TEXT_MAX_PAGES;
+  return readPageLimit(getSetting("ai.textMaxPages") ?? String(base), DEFAULT_TEXT_MAX_PAGES);
 }
 
 export function setAiConfig(cfg: Partial<AiConfig>): void {
@@ -27,6 +59,8 @@ export function setAiConfig(cfg: Partial<AiConfig>): void {
   if (cfg.ocrModel !== undefined) setSetting("ai.ocrModel", cfg.ocrModel);
   if (cfg.concurrency !== undefined) setSetting("ai.concurrency", String(cfg.concurrency));
   if (cfg.ocrConcurrency !== undefined) setSetting("ai.ocrConcurrency", String(cfg.ocrConcurrency));
+  if (cfg.ocrMaxPages !== undefined) setSetting("ai.ocrMaxPages", String(cfg.ocrMaxPages));
+  if (cfg.textMaxPages !== undefined) setSetting("ai.textMaxPages", String(cfg.textMaxPages));
 }
 
 /** Параллельность запросов к основной (summary) модели. */

@@ -3,12 +3,15 @@ import { getContext } from "../context.js";
 import { logger } from "../logger.js";
 import {
   clearDeletedEmail,
+  clearOutOfRange,
   emailExistsByMessageId,
   getAccount,
   insertAttachment,
   insertEmail,
   knownUidsForAccount,
-  patchAccountSettings
+  listOutOfRange,
+  patchAccountSettings,
+  rememberOutOfRange
 } from "../repos.js";
 import { parseRawEmail, type ParsedEmail } from "../mail/parser.js";
 import { parseMsg } from "../mail/msg.js";
@@ -24,7 +27,13 @@ import type { MailConnector } from "../mail/connector.js";
 
 export interface FetchResult {
   added: number;
+  /** Письма, которые скан не сохранил: отсечены диапазоном дат или оказались дублями. */
   skipped: number;
+  /**
+   * Сколько писем в этот скан НЕ скачивались: они уже помечены «видно, но вне диапазона».
+   * Наблюдаемый признак «тело не качали» — иначе на быстром стенде это по времени не поймать.
+   */
+  knownOutOfRange: number;
 }
 
 export interface FetchEmailsOptions {
@@ -88,7 +97,11 @@ async function persistParsedEmail(
   }
 
   for (const att of parsed.attachments) {
-    const prep = await prepareAttachment(dataDir, email.id, att.filename, att.mimeType, att.content);
+    // Синхронизация: только текст. Картинки здесь не сохраняются и не используются,
+    // а рендер PDF стоит секунды на документ — на каждом скане ящика это зряшная работа.
+    const prep = await prepareAttachment(dataDir, email.id, att.filename, att.mimeType, att.content, {
+      textOnly: true
+    });
     insertAttachment({
       emailId: email.id,
       filename: att.filename,
@@ -160,6 +173,7 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
 
   let added = 0;
   let skipped = 0;
+  let knownOutOfRange = 0;
   /** Письма, добавленные именно этим сканом: их отдаём точке «письма добавлены». */
   const addedEmailIds: string[] = [];
 
@@ -168,6 +182,16 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
   const processFolder = async (imapFolder: string, storeFolder: string): Promise<void> => {
     // Ручной скан не считает удалённые письма известными — иначе их не вернуть.
     const knownUids = knownUidsForAccount(accountId, storeFolder, includeDeleted);
+    // Письма, отсечённые диапазоном в прошлый раз, повторно НЕ качаем — но только пока
+    // запрошенный диапазон их не покрывает: расширили диапазон → письмо скачается и сохранится.
+    // Иначе «экономия трафика» превратилась бы в тихую потерю данных.
+    for (const rec of listOutOfRange(accountId, storeFolder)) {
+      if (!rec.serverDate) continue; // дату не разобрали — не рискуем, пусть скачается снова
+      if (inDateRange(rec.serverDate, opts.since, opts.until)) continue;
+      if (knownUids.has(rec.uid)) continue;
+      knownUids.add(rec.uid);
+      knownOutOfRange++;
+    }
     // POP3-коннектор серверного поиска по датам не имеет — отдаём как есть,
     // а диапазон применяем клиентски по разобранной дате письма.
     const messages = await connector.fetchNew(imapFolder, knownUids, { since, until });
@@ -175,6 +199,8 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
       try {
         const parsed = await parseRawEmail(raw.source);
         if (!inDateRange(parsed.date, opts.since, opts.until)) {
+          // Помним UID и дату: следующий скан это письмо уже не скачает.
+          rememberOutOfRange(accountId, storeFolder, raw.uid, parsed.date);
           skipped++;
           continue;
         }
@@ -187,6 +213,8 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
           includeDeleted
         );
         if (savedId) {
+          // Письмо сохранено (например, диапазон расширили) — запись «вне диапазона» больше не нужна.
+          clearOutOfRange(accountId, storeFolder, raw.uid);
           added++;
           addedEmailIds.push(savedId);
         } else {
@@ -232,7 +260,10 @@ async function doFetchEmails(accountId: string, opts: FetchEmailsOptions = {}): 
   // отменяет скан — письма уже сохранены (см. runMailSyncHook).
   await runMailSyncHook({ accountId, addedEmailIds });
 
-  return { added, skipped };
+  // skipped — «сколько не сохранили за этот скан». Письма, которые уже были помечены
+  // «вне диапазона», в этот счёт входят: для вызывающего они тоже пропущены,
+  // и его таблица «added/skipped» не «прыгает» между одинаковыми сканами.
+  return { added, skipped: skipped + knownOutOfRange, knownOutOfRange };
 }
 
 // Один аккаунт обслуживается одним соединением за раз: параллельные сканы
@@ -288,5 +319,6 @@ export async function importEmails(
     }
   }
 
-  return { added, skipped };
+  // Импорт файлов диапазоном не ограничен: «виденных вне диапазона» здесь быть не может.
+  return { added, skipped, knownOutOfRange: 0 };
 }

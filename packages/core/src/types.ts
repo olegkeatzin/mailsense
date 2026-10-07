@@ -280,6 +280,14 @@ export interface ComposeAttachment {
 
 export interface ComposeInput {
   accountId: string;
+  /**
+   * Имя работника для заголовка From: письмо уходит с адреса служебного ящика, но подписано
+   * человеком (Р18). Адрес ВСЕГДА берётся у аккаунта — подменить его нельзя.
+   * Пустая строка/undefined = прежнее поведение (имя из настроек ящика).
+   */
+  fromName?: string;
+  /** Адрес для ответа (заголовок Reply-To): правило «ответ уходит с ящика получения» (Р19). */
+  replyTo?: string;
   to: EmailAddress[];
   cc?: EmailAddress[];
   bcc?: EmailAddress[];

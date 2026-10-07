@@ -133,6 +133,27 @@ export const deletedEmails = sqliteTable(
   })
 );
 
+/**
+ * Письма, отсечённые диапазоном дат при скане (POP3 не умеет искать по датам на сервере).
+ * Храним UID и дату с сервера: следующий скан не тянет тело повторно, но при более
+ * широком диапазоне письмо скачивается и сохраняется — «виденное» ≠ «выброшенное».
+ */
+export const outOfRangeEmails = sqliteTable(
+  "out_of_range_emails",
+  {
+    accountId: text("account_id")
+      .notNull()
+      .references(() => accounts.id, { onDelete: "cascade" }),
+    folder: text("folder").notNull().default("INBOX"),
+    uid: text("uid").notNull(),
+    serverDate: text("server_date"),
+    createdAt: text("created_at").notNull()
+  },
+  (t) => ({
+    acctUidIdx: uniqueIndex("out_of_range_emails_account_folder_uid_idx").on(t.accountId, t.folder, t.uid)
+  })
+);
+
 export const threads = sqliteTable(
   "threads",
   {
@@ -155,9 +176,9 @@ export const drafts = sqliteTable(
   "drafts",
   {
     id: text("id").primaryKey(),
-    accountId: text("account_id")
-      .notNull()
-      .references(() => accounts.id, { onDelete: "cascade" }),
+    // ⚠️ Без внешнего ключа на accounts: черновик личный, а в тонком клиенте локальных ящиков
+    // нет — id приходит с сервера. Каскад удаления ящика теперь явный (repos.deleteAccount).
+    accountId: text("account_id").notNull(),
     to: text("to").notNull().default("[]"),
     cc: text("cc").notNull().default("[]"),
     bcc: text("bcc").notNull().default("[]"),
@@ -216,7 +237,19 @@ export const settings = sqliteTable("settings", {
   value: text("value").notNull()
 });
 
-export const schema = { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, templates, contacts, settings };
+export const schema = {
+  accounts,
+  emails,
+  attachments,
+  analysisResults,
+  deletedEmails,
+  outOfRangeEmails,
+  threads,
+  drafts,
+  templates,
+  contacts,
+  settings
+};
 
 export type DbEmails = typeof emails.$inferSelect;
 export type DbAccounts = typeof accounts.$inferSelect;

@@ -11,7 +11,7 @@ jest.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
   getDocument: (...args: unknown[]) => mockGetDocument(...args)
 }));
 
-import { pdfPageCount, pdfPageToImage, pdfToImages, pdfToText } from "./pdf.js";
+import { pdfPageCount, pdfPageToImage, pdfToImages, pdfToText, pdfToTextResult } from "./pdf.js";
 
 interface FakePage {
   getTextContent: () => Promise<{ items: Array<{ str: string }> }>;
@@ -169,5 +169,49 @@ describe("рендер одной страницы", () => {
     const { doc } = withPages(1);
     await pdfPageToImage(Buffer.from("%PDF-1.4"), 5);
     expect(doc.destroy).toHaveBeenCalled();
+  });
+});
+
+describe("текстовый слой: явный лимит и метаданные", () => {
+  test("pdfToTextResult отдаёт текст и говорит, сколько страниц прочитано", async () => {
+    withPages(35, "Стр");
+    const res = await pdfToTextResult(Buffer.from("%PDF-1.4"), 20);
+
+    expect(res.totalPages).toBe(35);
+    expect(res.pagesRead).toBe(20);
+    expect(res.truncated).toBe(true);
+    expect(res.text).toContain("--- стр. 20 ---");
+    expect(res.text).not.toContain("--- стр. 21 ---");
+  });
+
+  test("короткий документ не помечается обрезанным", async () => {
+    withPages(5, "Стр");
+    const res = await pdfToTextResult(Buffer.from("%PDF-1.4"), 20);
+
+    expect(res.totalPages).toBe(5);
+    expect(res.pagesRead).toBe(5);
+    expect(res.truncated).toBe(false);
+  });
+
+  test("pdfToText остаётся тонкой обёрткой над pdfToTextResult", async () => {
+    withPages(3, "Стр");
+    expect(await pdfToText(Buffer.from("%PDF-1.4"), 2)).toContain("--- стр. 2 ---");
+    expect(await pdfToText(Buffer.from("%PDF-1.4"), 2)).not.toContain("--- стр. 3 ---");
+  });
+});
+
+describe("«количество листов» не зависит от лимита OCR", () => {
+  test("pdfPageCount считает ВСЕ страницы, даже когда рендер обрезан лимитом", async () => {
+    // Обрезка OCR экономит время, но графа «Кол-во листов» в журнале обязана
+    // показывать весь документ: иначе протокол с приложениями «худеет» в учёте.
+    withPages(12);
+    const data = Buffer.from("%PDF-1.4");
+    const sheets = await pdfPageCount(data);
+    const rendered = await pdfToImages(data, 10);
+
+    expect(sheets).toBe(12);
+    expect(rendered.totalPages).toBe(12);
+    expect(rendered.pages).toHaveLength(10);
+    expect(rendered.truncated).toBe(true);
   });
 });

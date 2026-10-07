@@ -1,7 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { and, desc, eq, gte, inArray, isNotNull, isNull, ne, or, sql } from "drizzle-orm";
 import { getDb } from "./db/index.js";
 import { schema } from "./db/schema.js";
+import { getContext } from "./context.js";
+import { logger } from "./logger.js";
 import { normalizeMessageId } from "./mail/parser.js";
 import type {
   Account,
@@ -20,7 +24,19 @@ import type {
   Thread
 } from "./types.js";
 
-const { accounts, emails, attachments, analysisResults, deletedEmails, threads, drafts, templates, contacts, settings } = schema;
+const {
+  accounts,
+  emails,
+  attachments,
+  analysisResults,
+  deletedEmails,
+  outOfRangeEmails,
+  threads,
+  drafts,
+  templates,
+  contacts,
+  settings
+} = schema;
 
 function now(): string {
   return new Date().toISOString();
@@ -145,8 +161,99 @@ export function updateAccount(
   return getAccount(id);
 }
 
+/**
+ * Пути файлов вложений, привязанных к письмам (до удаления строк: после их уже не найти).
+ */
+function attachmentPathsForEmails(emailIds: string[]): string[] {
+  if (!emailIds.length) return [];
+  return getDb()
+    .select({ storagePath: attachments.storagePath })
+    .from(attachments)
+    .where(inArray(attachments.emailId, emailIds))
+    .all()
+    .map((r) => r.storagePath)
+    .filter((p): p is string => !!p);
+}
+
+/**
+ * Убирает файлы, на которые больше не ссылается НИ ОДНА строка attachments.
+ *
+ * ⚠️ Удаляем ПОСЛЕ коммита удаления записей и никогда не бросаем наружу: письмо уже удалено,
+ * и «ничего не удалилось» из-за занятого файла хуже, чем оставшийся мусор. Ошибка — в журнал.
+ * Проверка ссылок обязательна: две записи могут указывать на один путь, и снести файл,
+ * нужный другой строке, значит потерять чужое вложение.
+ */
+function removeOrphanAttachmentFiles(paths: string[]): void {
+  const unique = [...new Set(paths)];
+  if (!unique.length) return;
+  const db = getDb();
+  for (const file of unique) {
+    const still = db.select({ id: attachments.id }).from(attachments).where(eq(attachments.storagePath, file)).get();
+    if (still) continue;
+    try {
+      fs.unlinkSync(file);
+    } catch (err) {
+      // Файла уже нет — это не ошибка: цель достигнута.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        logger.warn({ file, err: (err as Error).message }, "Не удалось удалить файл вложения");
+      }
+    }
+    // Каталог письма после удаления вложений пуст — он тоже мусор. rmdir не тронет непустой.
+    try {
+      fs.rmdirSync(path.dirname(file));
+    } catch {
+      /* не пуст, уже удалён или нет прав — не повод падать */
+    }
+  }
+}
+
+/** Каталоги файлов черновиков: живут отдельно от писем (<dataDir>/drafts/<id>). */
+function removeDraftDirs(draftIds: string[]): void {
+  if (!draftIds.length) return;
+  let dataDir: string;
+  try {
+    dataDir = getContext().config.dataDir;
+  } catch {
+    logger.warn({ count: draftIds.length }, "Каталог данных недоступен — файлы черновиков не удалены");
+    return;
+  }
+  for (const id of draftIds) {
+    try {
+      fs.rmSync(path.join(dataDir, "drafts", id), { recursive: true, force: true });
+    } catch (err) {
+      logger.warn({ draftId: id, err: (err as Error).message }, "Не удалось удалить файлы черновика");
+    }
+  }
+}
+
 export function deleteAccount(id: string): void {
-  getDb().delete(accounts).where(eq(accounts.id, id)).run();
+  const db = getDb();
+  // Пути файлов и черновики собираем ДО удаления: после каскада строк их уже не найти.
+  const emailIds = db
+    .select({ id: emails.id })
+    .from(emails)
+    .where(eq(emails.accountId, id))
+    .all()
+    .map((r) => r.id);
+  const files = attachmentPathsForEmails(emailIds);
+  const draftIds = db
+    .select({ id: drafts.id })
+    .from(drafts)
+    .where(eq(drafts.accountId, id))
+    .all()
+    .map((r) => r.id);
+
+  // Раньше черновики удалялись каскадом внешнего ключа drafts.account_id → accounts.id.
+  // FK снят (черновик может ссылаться на серверный ящик, которого нет в локальной базе),
+  // поэтому чистим их здесь — в одной транзакции с удалением ящика, иначе останутся сироты.
+  db.transaction((tx) => {
+    tx.delete(drafts).where(eq(drafts.accountId, id)).run();
+    tx.delete(accounts).where(eq(accounts.id, id)).run();
+  });
+
+  // Файлы — после коммита: сбой уборки не должен откатывать удаление ящика.
+  removeOrphanAttachmentFiles(files);
+  removeDraftDirs(draftIds);
 }
 
 /** Точечно обновляет поле в settings-аккаунта (JSON), не затирая остальные. */
@@ -244,6 +351,44 @@ export function knownUidsForAccount(accountId: string, folder: string, includeDe
     .all();
   for (const d of deleted) set.add(d.uid);
   return set;
+}
+
+/**
+ * Запоминает письмо, отсечённое диапазоном дат: UID и дату с сервера.
+ * Следующий скан это тело уже не скачает (POP3-коннектор серверного поиска по датам не имеет).
+ */
+export function rememberOutOfRange(accountId: string, folder: string, uid: string, serverDate: string | null): void {
+  getDb()
+    .insert(outOfRangeEmails)
+    .values({ accountId, folder, uid, serverDate: serverDate ?? null, createdAt: now() })
+    .onConflictDoUpdate({
+      target: [outOfRangeEmails.accountId, outOfRangeEmails.folder, outOfRangeEmails.uid],
+      set: { serverDate: serverDate ?? null }
+    })
+    .run();
+}
+
+/** Записи «вне диапазона» папки: UID и дата, которую скан разобрал из письма. */
+export function listOutOfRange(accountId: string, folder: string): Array<{ uid: string; serverDate: string | null }> {
+  return getDb()
+    .select({ uid: outOfRangeEmails.uid, serverDate: outOfRangeEmails.serverDate })
+    .from(outOfRangeEmails)
+    .where(and(eq(outOfRangeEmails.accountId, accountId), eq(outOfRangeEmails.folder, folder)))
+    .all();
+}
+
+/** Убирает запись: письмо сохранено (или стало известно другим путём). */
+export function clearOutOfRange(accountId: string, folder: string, uid: string): void {
+  getDb()
+    .delete(outOfRangeEmails)
+    .where(
+      and(
+        eq(outOfRangeEmails.accountId, accountId),
+        eq(outOfRangeEmails.folder, folder),
+        eq(outOfRangeEmails.uid, uid)
+      )
+    )
+    .run();
 }
 
 /** Убирает надгробия письма — после того как оно снова сохранено из ящика. */
@@ -542,7 +687,9 @@ export function setEmailsFolder(ids: string[], folder: string): void {
 export function deleteEmails(ids: string[]): number {
   if (ids.length === 0) return 0;
   const db = getDb();
-  return db.transaction((tx) => {
+  // Пути собираем до удаления строк: потом их уже не найти.
+  const files = attachmentPathsForEmails(ids);
+  const changed = db.transaction((tx) => {
     const rows = tx.select().from(emails).where(inArray(emails.id, ids)).all();
     const ts = now();
     for (const r of rows) {
@@ -562,6 +709,9 @@ export function deleteEmails(ids: string[]): number {
     tx.delete(attachments).where(inArray(attachments.emailId, ids)).run();
     return tx.delete(emails).where(inArray(emails.id, ids)).run().changes;
   });
+  // Файлы убираем после коммита: ошибка удаления файла не откатывает удаление писем.
+  removeOrphanAttachmentFiles(files);
+  return changed;
 }
 
 // ---------------- Attachments ----------------

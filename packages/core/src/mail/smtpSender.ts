@@ -19,6 +19,8 @@ export interface SmtpSendOptions {
   inReplyTo?: string;
   references?: string;
   messageId?: string;
+  /** Заголовок Reply-To: ответ должен уходить на ящик получения, а не на общий адрес. */
+  replyTo?: string;
 }
 
 /** Оборачивает Message-ID в угловые скобки (для заголовков In-Reply-To / References). */
@@ -63,7 +65,8 @@ export async function sendSmtp(
     attachments: opts.attachments,
     inReplyTo: opts.inReplyTo,
     references: opts.references,
-    messageId: opts.messageId
+    messageId: opts.messageId,
+    replyTo: opts.replyTo
   };
 
   const builder = nodemailer.createTransport({ streamTransport: true, buffer: true, newline: "unix" });

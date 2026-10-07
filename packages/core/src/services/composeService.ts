@@ -169,12 +169,18 @@ export function buildComposeTemplate(input: {
   accountId: string;
   mode: ComposeMode;
   emailId?: string | null;
+  /**
+   * false — НЕ подставлять подпись ящика: клиент присылает своё тело с личной подписью
+   * работника (Р18). По умолчанию true — поведение прежнее.
+   */
+  useAccountSignature?: boolean;
 }): ComposeTemplate {
   const account = getAccount(input.accountId);
   if (!account) throw new Error("Аккаунт не найден");
 
   const settings = account.settings as AccountSettings;
-  const sig = signatureOptions(settings);
+  const useAccountSignature = input.useAccountSignature !== false;
+  const sig = useAccountSignature ? signatureOptions(settings) : { enabled: false };
   const sigT = signatureText(sig);
   const sigH = signatureHtml(sig);
   const above = sig.position === "above";
@@ -197,7 +203,8 @@ export function buildComposeTemplate(input: {
 
   if (input.mode === "new" || !input.emailId) {
     tpl.bodyText = sigT ? "\n\n" + sigT : "";
-    tpl.bodyHtml = "<p></p>" + sigH;
+    // Без подписи ящика тело пустое: клиент подставит своё, с личной подписью работника.
+    tpl.bodyHtml = useAccountSignature ? "<p></p>" + sigH : "";
     return tpl;
   }
 

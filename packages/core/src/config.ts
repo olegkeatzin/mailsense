@@ -1,6 +1,25 @@
 import path from "node:path";
 import os from "node:os";
 
+/**
+ * Сколько страниц PDF рендерить в картинки для OCR по умолчанию (настройка ai.ocrMaxPages).
+ *
+ * Лимит сделан ЯВНЫМ: одна страница OCR на стенде идёт 4–13 с, документ на сотни страниц
+ * иначе займёт минуты. Обрезка НЕ влияет на графу «Кол-во листов» — её считает pdfPageCount
+ * по всем страницам — и честно помечается в примечании к вложению, чтобы аппарат видел,
+ * что документ прочитан не весь.
+ */
+export const DEFAULT_OCR_MAX_PAGES = 10;
+
+/**
+ * Сколько страниц PDF читать из ТЕКСТОВОГО СЛОЯ по умолчанию (настройка ai.textMaxPages).
+ *
+ * Отдельный ключ, а не общий с OCR: чтение слоя почти бесплатно (миллисекунды на страницу),
+ * поэтому дефолт выше — 20; страница OCR стоит 4–13 с, там дефолт 10. Общий ключ заставлял бы
+ * выбирать меньшее из двух и молча терять текст длинного документа.
+ */
+export const DEFAULT_TEXT_MAX_PAGES = 20;
+
 export interface AiConfig {
   baseUrl: string;
   apiKey: string;
@@ -15,6 +34,10 @@ export interface AiConfig {
   concurrency?: number;
   /** параллельность запросов к OCR-модели */
   ocrConcurrency?: number;
+  /** максимум страниц PDF, которые рендерятся и распознаются OCR (ai.ocrMaxPages) */
+  ocrMaxPages?: number;
+  /** максимум страниц PDF, которые читаются из текстового слоя (ai.textMaxPages) */
+  textMaxPages?: number;
 }
 
 export interface DefaultAccountConfig {
@@ -76,7 +99,9 @@ export function loadConfig(): Config {
       apiKey: env("MAILSENSE_AI_API_KEY", "not-needed"),
       model: env("MAILSENSE_AI_MODEL", ""),
       multimodal: env("MAILSENSE_AI_MULTIMODAL", "true") === "true",
-      timeoutMs: Number(env("MAILSENSE_AI_TIMEOUT_MS", "120000"))
+      timeoutMs: Number(env("MAILSENSE_AI_TIMEOUT_MS", "120000")),
+      ocrMaxPages: Number(env("MAILSENSE_AI_OCR_MAX_PAGES", String(DEFAULT_OCR_MAX_PAGES))),
+      textMaxPages: Number(env("MAILSENSE_AI_TEXT_MAX_PAGES", String(DEFAULT_TEXT_MAX_PAGES)))
     },
     defaultAccount,
     seedAccount: env("MAILSENSE_SEED_ACCOUNT", "false") === "true",

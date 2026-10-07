@@ -247,6 +247,64 @@ CREATE INDEX IF NOT EXISTS contacts_name_idx ON contacts(display_name);
 DROP INDEX IF EXISTS emails_message_id_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS emails_account_message_id_idx ON emails(account_id, message_id);
 `
+  },
+  {
+    // ⚠️ Номер 13 свободен: 11 занят исторической миграцией СЭД в SQLite (сверено с живой базой
+    // 2026-10-08: max = 12, 11 = edms_users_roles_sessions_audit), 12 — уникальность Message-ID.
+    version: 13,
+    name: "drafts_account_without_fk",
+    sql: `
+-- Черновик личный: в тонком клиенте локальных ящиков нет (/api/accounts проксируется на сервер),
+-- и внешний ключ на локальную accounts ронял создание черновика с «FOREIGN KEY constraint failed».
+-- account_id остаётся простым идентификатором — им может быть id серверного ящика.
+-- SQLite не умеет DROP CONSTRAINT: пересоздаём таблицу с переносом строк в транзакции миграции.
+DROP TABLE IF EXISTS drafts_new;
+CREATE TABLE drafts_new (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  "to" TEXT NOT NULL DEFAULT '[]',
+  cc TEXT NOT NULL DEFAULT '[]',
+  bcc TEXT NOT NULL DEFAULT '[]',
+  subject TEXT NOT NULL DEFAULT '',
+  body_text TEXT NOT NULL DEFAULT '',
+  body_html TEXT,
+  attachments TEXT NOT NULL DEFAULT '[]',
+  in_reply_to_email_id TEXT,
+  in_reply_to_message_id TEXT,
+  refs TEXT NOT NULL DEFAULT '[]',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+INSERT INTO drafts_new (id, account_id, "to", cc, bcc, subject, body_text, body_html, attachments,
+                        in_reply_to_email_id, in_reply_to_message_id, refs, created_at, updated_at)
+  SELECT id, account_id, "to", cc, bcc, subject, body_text, body_html, attachments,
+         in_reply_to_email_id, in_reply_to_message_id, refs, created_at, updated_at
+  FROM drafts;
+DROP TABLE drafts;
+ALTER TABLE drafts_new RENAME TO drafts;
+CREATE INDEX IF NOT EXISTS drafts_account_idx ON drafts(account_id);
+`
+  },
+  {
+    // ⚠️ Номер 14 — следующий свободный (13 занят миграцией черновиков в этом же наборе правок).
+    version: 14,
+    name: "out_of_range_emails",
+    sql: `
+-- POP3 не умеет искать по датам на сервере: скан скачивает тела и отсекает их клиентски.
+-- Раньше отсечённые письма нигде не запоминались, и каждый следующий скан (планировщик всегда
+-- передаёт since) качал их заново — на большом ящике это гигабайты впустую.
+-- Помним UID и дату с сервера: повторно тело не тянем, но при более широком диапазоне
+-- письмо скачивается и сохраняется.
+CREATE TABLE IF NOT EXISTS out_of_range_emails (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  folder TEXT NOT NULL DEFAULT 'INBOX',
+  uid TEXT NOT NULL,
+  server_date TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS out_of_range_emails_account_folder_uid_idx
+  ON out_of_range_emails(account_id, folder, uid);
+`
   }
 ];
 

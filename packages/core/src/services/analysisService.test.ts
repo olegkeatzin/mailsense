@@ -90,7 +90,7 @@ import {
   runAnalysis,
   stopAnalysis
 } from "./analysisService.js";
-import { setAiConfig } from "./settingsService.js";
+import { getOcrMaxPages, getTextMaxPages, setAiConfig } from "./settingsService.js";
 
 let dir = "";
 let accountId = "";
@@ -506,5 +506,66 @@ describe("массовые запуски", () => {
 
   test("analyzeRange по чужому аккаунту ничего не берёт", async () => {
     expect(analyzeRange(undefined, undefined, ["нет-такого-аккаунта"])).toBe(0);
+  });
+});
+
+describe("пометки об обрезке вложений", () => {
+  test("лимиты страниц из настроек уходят в подготовку вложения", async () => {
+    const email = makeEmail();
+    const file = makeAttachmentFile();
+    insertAttachment({
+      emailId: email.id,
+      filename: "протокол.pdf",
+      mimeType: "application/pdf",
+      size: 10,
+      storagePath: file,
+      extractedText: null,
+      contentId: null,
+      kind: "document",
+      handled: true
+    });
+    mockPrepare.mockResolvedValue(prepared({ filename: "протокол.pdf" }));
+    mockAnalyze.mockResolvedValue(ok());
+
+    await runAnalysis(email.id);
+
+    // Без явных лимитов PDF снова начнёт читаться «сколько получится» (20 страниц текста
+    // и 6 страниц рендера по неявным дефолтам).
+    const options = mockPrepare.mock.calls[0][5] as { ocrMaxPages?: number; textMaxPages?: number };
+    expect(options.ocrMaxPages).toBe(getOcrMaxPages());
+    expect(options.textMaxPages).toBe(getTextMaxPages());
+  });
+
+  test("пометка «распознаны первые N страниц из M» доходит до модели", async () => {
+    const email = makeEmail();
+    const file = makeAttachmentFile();
+    insertAttachment({
+      emailId: email.id,
+      filename: "протокол.pdf",
+      mimeType: "application/pdf",
+      size: 10,
+      storagePath: file,
+      extractedText: null,
+      contentId: null,
+      kind: "document",
+      handled: true
+    });
+    mockPrepare.mockResolvedValue(
+      prepared({
+        filename: "протокол.pdf",
+        images: ["data:image/png;base64,AAA"],
+        note: "распознаны первые 10 страниц из 12"
+      })
+    );
+    mockOcr.mockResolvedValue("текст страницы");
+    mockAnalyze.mockResolvedValue(ok());
+
+    await runAnalysis(email.id);
+
+    // Обработанное вложение с пометкой раньше молчало: модель не знала,
+    // что видит только часть документа.
+    const notes = (mockAnalyze.mock.calls[0][1] as { attachmentNotes: string[] }).attachmentNotes.join(" ");
+    expect(notes).toContain("распознаны первые 10 страниц из 12");
+    expect(notes).toContain("протокол.pdf");
   });
 });

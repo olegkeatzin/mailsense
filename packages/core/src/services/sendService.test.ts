@@ -35,7 +35,7 @@ import { initApp } from "../init.js";
 import { closeDb } from "../db/index.js";
 import { getEmail, listAttachments, listEmails } from "../repos.js";
 import { createAccount } from "./accountService.js";
-import { sendEmail, testSmtpConnection } from "./sendService.js";
+import { ComposeInputError, sendEmail, testSmtpConnection } from "./sendService.js";
 import { logger } from "../logger.js";
 import * as attachmentStore from "../attachments/store.js";
 import type { ComposeInput } from "../types.js";
@@ -127,6 +127,77 @@ describe("отправка", () => {
     });
     await sendEmail(compose({ accountId: named.id }));
     expect(mockSendSmtp.mock.calls[0][2].from).toBe('"Петров П.П." <named@mail.test>');
+  });
+
+  test("fromName работника перекрывает имя ящика, адрес остаётся адресом ящика", async () => {
+    const shared = createAccount({
+      protocol: "imap",
+      host: "mail.test",
+      port: 993,
+      tls: "ssl",
+      username: "shared-box@mail.test",
+      password: "пароль",
+      authType: "login",
+      settings: { displayName: "Аппарат генерального директора" }
+    });
+    await sendEmail(compose({ accountId: shared.id, fromName: "Сидорова А.А." }));
+    // Письмо уходит с общего ящика, но подписано именем работника.
+    expect(mockSendSmtp.mock.calls[0][2].from).toBe('"Сидорова А.А." <shared-box@mail.test>');
+  });
+
+  test("fromName не подменяет адрес: адрес всегда ящика аккаунта", async () => {
+    await sendEmail(compose({ fromName: "ivanov@mail.test" }));
+    expect(mockSendSmtp.mock.calls[0][2].from).toBe('"ivanov@mail.test" <user@mail.test>');
+  });
+
+  test("пустой fromName = поле не задано, поведение прежнее", async () => {
+    const named2 = createAccount({
+      protocol: "imap",
+      host: "mail.test",
+      port: 993,
+      tls: "ssl",
+      username: "named2@mail.test",
+      password: "пароль",
+      authType: "login",
+      settings: { displayName: "Петров П.П." }
+    });
+    await sendEmail(compose({ accountId: named2.id, fromName: "   " }));
+    expect(mockSendSmtp.mock.calls[0][2].from).toBe('"Петров П.П." <named2@mail.test>');
+  });
+
+  test("перевод строки в fromName — отказ, а не тихая чистка", async () => {
+    await expect(sendEmail(compose({ fromName: "Сидорова А.А.\r\nBcc: evil@test.local" }))).rejects.toThrow(
+      ComposeInputError
+    );
+    expect(mockSendSmtp).not.toHaveBeenCalled();
+  });
+
+  test("кавычка в fromName ломает заголовок — отказ", async () => {
+    await expect(sendEmail(compose({ fromName: 'ООО "Ромашка"' }))).rejects.toThrow(ComposeInputError);
+    expect(mockSendSmtp).not.toHaveBeenCalled();
+  });
+
+  test("слишком длинный fromName (больше 120) — отказ", async () => {
+    await expect(sendEmail(compose({ fromName: "я".repeat(121) }))).rejects.toThrow(ComposeInputError);
+    expect(mockSendSmtp).not.toHaveBeenCalled();
+  });
+
+  test("replyTo попадает в заголовок Reply-To", async () => {
+    await sendEmail(compose({ replyTo: "  replies@test.local " }));
+    expect(mockSendSmtp.mock.calls[0][2].replyTo).toBe("replies@test.local");
+  });
+
+  test("мусор в replyTo — отказ", async () => {
+    for (const bad of ["не адрес", "a@b", "a b@test.local", "@test.local", "a@test.local, b@test.local", "a@test.local\r\nBcc: x@y.z"]) {
+      mockSendSmtp.mockClear();
+      await expect(sendEmail(compose({ replyTo: bad }))).rejects.toThrow(ComposeInputError);
+      expect(mockSendSmtp).not.toHaveBeenCalled();
+    }
+  });
+
+  test("пустой replyTo = поле не задано", async () => {
+    await sendEmail(compose({ replyTo: "" }));
+    expect(mockSendSmtp.mock.calls[0][2].replyTo).toBeUndefined();
   });
 
   test("без отображаемого имени используется голый адрес", async () => {

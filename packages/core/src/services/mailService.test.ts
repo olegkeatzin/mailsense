@@ -25,17 +25,30 @@ jest.mock("./analysisService.js", () => ({
 
 // pdfjs-dist — ESM и в jest не грузится: разбор PDF подменяем, как в
 // attachments/index.test.ts. Вложение при этом проходит весь остальной путь.
+const mockPdfToImages = jest.fn(async () => ({ pages: [], totalPages: 0, truncated: false }));
+const mockPdfToTextResult = jest.fn(async () => ({ text: "", totalPages: 0, pagesRead: 0, truncated: false }));
 jest.mock("../attachments/pdf.js", () => ({
   __esModule: true,
-  pdfToImages: async () => ({ pages: [], totalPages: 0, truncated: false }),
+  pdfToImages: (...a: unknown[]) => mockPdfToImages(...a),
   pdfToText: async () => "",
+  pdfToTextResult: (...a: unknown[]) => mockPdfToTextResult(...a),
   pdfPageToImage: async () => null
 }));
 
 import { initApp } from "../init.js";
 import { closeDb } from "../db/index.js";
 import { eq } from "drizzle-orm";
-import { deleteEmails, getAccount, listAccounts, listAttachments, listEmails, setSetting } from "../repos.js";
+import {
+  deleteEmails,
+  getAccount,
+  insertAccount,
+  listAccounts,
+  listAttachments,
+  listEmails,
+  listOutOfRange,
+  setSetting
+} from "../repos.js";
+import { NodeSecretStore } from "../secrets.js";
 import { Pop3Connector } from "../mail/pop3Connector.js";
 import { getDb } from "../db/index.js";
 import { emails } from "../db/schema.js";
@@ -126,6 +139,117 @@ function fakeConnector(opts: FakeOptions = {}) {
   };
   return { connector: connector as unknown as MailConnector, calls, stats: () => ({ maxActive }) };
 }
+
+/**
+ * Коннектор, который ведёт себя как настоящий POP3: UIDL всегда, RETR — только для
+ * неизвестных UID. Считает «скачанные тела», чтобы тест ловил лишнюю перекачку.
+ */
+function rangeAwareConnector(messages: RawMessage[]) {
+  const knownSets: Set<string>[] = [];
+  let bodiesCount = 0;
+  const connector = {
+    connect: jest.fn(async () => undefined),
+    disconnect: jest.fn(async () => undefined),
+    listMailboxes: jest.fn(async () => []),
+    fetchNew: jest.fn(async (_folder: string, knownUids: Set<string>) => {
+      knownSets.push(new Set(knownUids));
+      const out = messages.filter((m) => !knownUids.has(m.uid));
+      bodiesCount += out.length; // это и есть RETR
+      return out;
+    })
+  };
+  return {
+    connector: connector as unknown as MailConnector,
+    bodies: () => bodiesCount,
+    lastKnown: () => knownSets[knownSets.length - 1] ?? new Set<string>()
+  };
+}
+
+describe("письма вне диапазона не скачиваются повторно (T30)", () => {
+  const NARROW = { since: "2026-01-01", until: "2026-12-31" };
+  const inRange = (): RawMessage => ({
+    uid: "in-1",
+    source: rawEmail({ messageId: "<in-" + randomUUID() + "@test.local>", date: "Wed, 15 Jan 2026 10:00:00 +0300" })
+  });
+  const outOfRange = (): RawMessage => ({
+    uid: "out-1",
+    source: rawEmail({ messageId: "<out-" + randomUUID() + "@test.local>", date: "Mon, 01 Jan 2024 10:00:00 +0300" })
+  });
+
+  /** Свой ящик на каждый сценарий: состояние «виденного» не должно течь между тестами. */
+  function pop3Account(username: string): string {
+    return insertAccount(
+      {
+        protocol: "pop3",
+        host: "mail.test",
+        port: 995,
+        tls: "ssl",
+        authType: "login",
+        username,
+        password: "p",
+        settings: {}
+      },
+      new NodeSecretStore(dir).encrypt("p")
+    ).id;
+  }
+
+  test("узкий → тот же узкий → широкий: тело не качается повторно, данные не теряются", async () => {
+    const acc = pop3Account("range@mail.test");
+    const messages = [inRange(), outOfRange()];
+
+    const first = rangeAwareConnector(messages);
+    mockBuildConnector.mockReturnValue(first.connector);
+    const scan1 = await fetchEmails(acc, NARROW);
+    expect(scan1.added).toBe(1);
+    expect(scan1.skipped).toBe(1);
+    expect(scan1.knownOutOfRange).toBe(0);
+    expect(first.bodies()).toBe(2); // первый скан тела ещё качает: иначе дату не узнать
+
+    expect(listOutOfRange(acc, "INBOX").map((r) => r.uid)).toEqual(["out-1"]);
+
+    const second = rangeAwareConnector(messages);
+    mockBuildConnector.mockReturnValue(second.connector);
+    const scan2 = await fetchEmails(acc, NARROW);
+    expect(scan2.added).toBe(0);
+    expect(scan2.skipped).toBe(1);
+    expect(scan2.knownOutOfRange).toBe(1);
+    expect(second.bodies()).toBe(0); // ⚠️ главное: тело не скачано
+    expect(second.lastKnown().has("out-1")).toBe(true);
+
+    const third = rangeAwareConnector(messages);
+    mockBuildConnector.mockReturnValue(third.connector);
+    const scan3 = await fetchEmails(acc, { since: "2023-01-01", until: "2026-12-31" });
+    expect(scan3.added).toBe(1); // более широкий диапазон — письмо скачано и сохранено
+    expect(third.bodies()).toBe(1);
+    expect(listOutOfRange(acc, "INBOX")).toEqual([]); // запись снята: письмо уже сохранено
+  });
+
+  test("скан без диапазона ничего не запоминает: письмо сохраняется сразу", async () => {
+    const acc = pop3Account("norange@mail.test");
+    const fake = rangeAwareConnector([outOfRange()]);
+    mockBuildConnector.mockReturnValue(fake.connector);
+
+    const res = await fetchEmails(acc);
+    expect(res.added).toBe(1);
+    expect(res.knownOutOfRange).toBe(0);
+    expect(listOutOfRange(acc, "INBOX")).toEqual([]);
+  });
+
+  test("дедуп по UID сохраняется: повторный широкий скан не даёт дублей", async () => {
+    const acc = pop3Account("dedup@mail.test");
+    const messages = [outOfRange()];
+
+    const first = rangeAwareConnector(messages);
+    mockBuildConnector.mockReturnValue(first.connector);
+    expect((await fetchEmails(acc, { since: "2023-01-01" })).added).toBe(1);
+
+    const again = rangeAwareConnector(messages);
+    mockBuildConnector.mockReturnValue(again.connector);
+    const second = await fetchEmails(acc, { since: "2023-01-01" });
+    expect(second.added).toBe(0);
+    expect(listEmails({ accountId: acc, folder: "INBOX" })).toHaveLength(1);
+  });
+});
 
 describe("получение писем из ящика", () => {
   test("письмо сохраняется, счётчик добавленных растёт", async () => {
@@ -220,7 +344,7 @@ describe("получение писем из ящика", () => {
     // Письма уже сохранены — терять результат из-за неудачного QUIT нельзя.
     const { connector } = fakeConnector({ messages: [], disconnectError: new Error("нет связи") });
     mockBuildConnector.mockReturnValue(connector);
-    await expect(fetchEmails(accountId)).resolves.toEqual({ added: 0, skipped: 0 });
+    await expect(fetchEmails(accountId)).resolves.toEqual({ added: 0, skipped: 0, knownOutOfRange: 0 });
   });
 });
 
@@ -376,7 +500,7 @@ describe("автоанализ", () => {
 });
 
 /** Письмо с двумя вложениями, у которых ОДИНАКОВОЕ имя файла. */
-function emailWithTwoSameNamedAttachments(): Buffer {
+function emailWithTwoSameNamedAttachments(messageId = "<two-acts@test.local>"): Buffer {
   const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
   return Buffer.from(
     [
@@ -384,7 +508,7 @@ function emailWithTwoSameNamedAttachments(): Buffer {
       "To: receiver@test.local",
       "Subject: Два акта",
       "Date: Wed, 15 Jan 2026 10:00:00 +0300",
-      "Message-ID: <two-acts@test.local>",
+      "Message-ID: " + messageId,
       "MIME-Version: 1.0",
       'Content-Type: multipart/mixed; boundary="BOUND"',
       "",
@@ -428,6 +552,22 @@ describe("вложения с одинаковым именем", () => {
     expect(atts[0].storagePath).not.toBe(atts[1].storagePath);
     expect(fs.readFileSync(atts[0].storagePath!, "utf8")).toBe("первый акт");
     expect(fs.readFileSync(atts[1].storagePath!, "utf8")).toBe("второй акт");
+  });
+});
+
+describe("синхронизация не рендерит PDF", () => {
+  test("при импорте письма страницы в картинки не рендерятся", async () => {
+    mockPdfToImages.mockClear();
+    mockPdfToTextResult.mockClear();
+
+    const res = await importEmails(accountId, "Imported", [
+      { filename: "sync-only.eml", data: emailWithTwoSameNamedAttachments("<sync-only-" + randomUUID() + "@test.local>") }
+    ]);
+    expect(res.added).toBe(1);
+
+    // Картинки при синхронизации не сохраняются и не используются — рендер был зряшной работой.
+    expect(mockPdfToImages).not.toHaveBeenCalled();
+    expect(mockPdfToTextResult).toHaveBeenCalled();
   });
 });
 
@@ -537,6 +677,7 @@ describe("импорт из файлов", () => {
   });
 
   test("пустой список файлов даёт нули", async () => {
-    expect(await importEmails(accountId, "Imported", [])).toEqual({ added: 0, skipped: 0 });
+    // Импорт не ограничен диапазоном: «виденных вне диапазона» тут не бывает.
+    expect(await importEmails(accountId, "Imported", [])).toEqual({ added: 0, skipped: 0, knownOutOfRange: 0 });
   });
 });

@@ -12,6 +12,8 @@ import {
   getAnalysisConcurrency,
   getOcrConfig,
   getOcrConcurrency,
+  getOcrMaxPages,
+  getTextMaxPages,
   getPromptSettings,
   getSettingValue,
   setAiConfig,
@@ -146,6 +148,61 @@ describe("промпты", () => {
     const p = getPromptSettings();
     expect(p.system).toBe("Ты помощник.");
     expect(p.userTemplate).toBe("Письмо: {{text}}");
+  });
+});
+
+describe("лимит страниц OCR (ai.ocrMaxPages)", () => {
+  test("по умолчанию 10 страниц", () => {
+    expect(getOcrMaxPages()).toBe(10);
+  });
+
+  test("значение из настроек применяется", () => {
+    setSettingValue("ai.ocrMaxPages", "7");
+    expect(getOcrMaxPages()).toBe(7);
+    expect(getAiConfig().ocrMaxPages).toBe(7);
+  });
+
+  test("setAiConfig сохраняет лимит", () => {
+    setAiConfig({ ocrMaxPages: 4 });
+    expect(getOcrMaxPages()).toBe(4);
+  });
+
+  test("мусор и выход за диапазон дают дефолт, а не NaN и не бесконечность", () => {
+    for (const bad of ["abc", "0", "-3", "2.5", "1000", ""]) {
+      setSettingValue("ai.ocrMaxPages", bad);
+      expect(getOcrMaxPages()).toBe(10);
+    }
+  });
+});
+
+describe("лимит страниц текстового слоя (ai.textMaxPages)", () => {
+  test("по умолчанию 20 страниц", () => {
+    expect(getTextMaxPages()).toBe(20);
+  });
+
+  test("значение из настроек применяется", () => {
+    setSettingValue("ai.textMaxPages", "35");
+    expect(getTextMaxPages()).toBe(35);
+    expect(getAiConfig().textMaxPages).toBe(35);
+  });
+
+  test("setAiConfig сохраняет лимит", () => {
+    setAiConfig({ textMaxPages: 12 });
+    expect(getTextMaxPages()).toBe(12);
+  });
+
+  test("мусор и выход за диапазон дают дефолт", () => {
+    for (const bad of ["abc", "0", "-1", "3.5", "1000", ""]) {
+      setSettingValue("ai.textMaxPages", bad);
+      expect(getTextMaxPages()).toBe(20);
+    }
+  });
+
+  test("лимиты текста и OCR независимы", () => {
+    setSettingValue("ai.textMaxPages", "30");
+    setSettingValue("ai.ocrMaxPages", "8");
+    expect(getTextMaxPages()).toBe(30);
+    expect(getOcrMaxPages()).toBe(8);
   });
 });
 

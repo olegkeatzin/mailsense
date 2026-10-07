@@ -114,4 +114,52 @@ describe("инструкция модели", () => {
   test("запрещает выдумывать подробности", () => {
     expect(REPORT_PROMPT).toContain("не выдумывай");
   });
+
+  test("отчёт — это ХОД или результат, а не только завершение (Р23)", () => {
+    // Решение заказчика: «проект готов, жду согласования» — тоже отчёт.
+    expect(REPORT_PROMPT).toMatch(/ход[еа]? или результат/i);
+    expect(REPORT_PROMPT).toMatch(/промежуточн/i);
+    expect(REPORT_PROMPT).toMatch(/жду согласования/i);
+    expect(REPORT_PROMPT).toMatch(/направлено на проверку|проект подготовлен/i);
+  });
+
+  test("summary промежуточного описывает состояние, а не выдаёт желаемое за сделанное", () => {
+    expect(REPORT_PROMPT).toMatch(/состояни/i);
+    expect(REPORT_PROMPT).toMatch(/желаемое за сделанное/i);
+    expect(REPORT_PROMPT).toMatch(/ожидает согласования/i);
+  });
+
+  test("не-отчёты перечислены по-прежнему", () => {
+    for (const word of ["вопрос", "уточнение", "отказ", "пересылка", "автоматический ответ", "посторонняя переписка"]) {
+      expect(REPORT_PROMPT.toLowerCase()).toContain(word);
+    }
+  });
+});
+
+describe("промежуточный ответ как черновик отчёта (Р23)", () => {
+  test("state-summary промежуточного ответа разбирается как отчёт", () => {
+    const raw = '{"is_report": true, "summary": "Проект ответа подготовлен, ожидает согласования"}';
+    const r = parseReportAnalysis(raw);
+    expect(r.isReport).toBe(true);
+    expect(r.summary).toBe("Проект ответа подготовлен, ожидает согласования");
+  });
+
+  test("мусор девяти видов — всегда «не отчёт», без исключений", () => {
+    const garbage = [
+      "",
+      "Не могу разобрать",
+      "{сломано",
+      "null",
+      '{"is_report": true}',
+      '{"is_report": true, "summary": ""}',
+      '{"is_report": true, "summary": "   "}',
+      '{"is_report": "true", "summary": "Готово"}',
+      '{"is_report": false, "summary": "выполнено"}'
+    ];
+    for (const raw of garbage) {
+      const r = parseReportAnalysis(raw);
+      expect(r.isReport).toBe(false);
+      expect(r.summary).toBe("");
+    }
+  });
 });

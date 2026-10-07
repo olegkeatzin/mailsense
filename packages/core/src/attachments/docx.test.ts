@@ -57,6 +57,13 @@ describe("разбор DOCX", () => {
     expect(parts.images).toEqual([]);
   });
 
+  test("в режиме «только текст» картинки не читаются", async () => {
+    const data = await buildDocx("Только текст", true);
+    const parts = await docxToParts(data, { images: false });
+    expect(parts.text).toContain("Только текст");
+    expect(parts.images).toEqual([]);
+  });
+
   test("битый файл не роняет разбор — возвращаются пустые части", async () => {
     const parts = await docxToParts(Buffer.from("это не docx"));
     expect(parts.text).toBe("");
