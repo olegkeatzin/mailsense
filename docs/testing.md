@@ -59,7 +59,15 @@ node scripts/test_resolutions.mjs           # API резолюций: 29 про�
 node scripts/test_roles_e2e.mjs             # по РОЛЯМ: 93 проверки, четыре роли + админ
 node scripts/test_stage5_notifications.mjs  # этап 5: уведомления и сроки — 177 проверок
 node scripts/test_stage5_sorting.mjs        # этап 5: правила сортировки — 78 проверок
+node scripts/test_pipeline_director.mjs     # пайплайн заказчика НАСТОЯЩИМИ письмами — 62 проверки
 ```
+
+⚠️ `test_pipeline_director.mjs` шлёт **реальные письма** через SMTP стенда и сканирует ящики по IMAP:
+внешнее письмо → служебный ящик аппарата → письмо директору из приложения → ответ директора письмом →
+`mark-approval` → `dispatch` → исполнитель → отчёт. Ему нужны переменные
+`STAND_MAIL_SERVICE_PASS`, `STAND_MAIL_DIRECTOR_PASS`, `STAND_MAIL_EXECUTOR_PASS`
+(и `STAND_MAIL_PARTNER_PASS` для резервного отправителя) плюс пароли ролей СЭД. Письма живут
+в реальных ящиках, поэтому проверка «письмо дошло» делается сканом, а не чтением своей же записи.
 
 Сценариям этапа 5 нужны переменные окружения с паролями стенда (`STAND_ADMIN_PASS`,
 `STAND_IVANOV_PASS`, `STAND_USER2_PASS`, `STAND_PARTNER_PASS`, `STAND_PETROVA_PASS`) и `BASE_URL`.
