@@ -108,6 +108,7 @@ import {
 } from "./auth.js";
 import { mountJournalRoutes } from "./journalRoutes.js";
 import { mountResolutionRoutes } from "./resolutionRoutes.js";
+import { mountNotificationRoutes } from "./notificationRoutes.js";
 import { createDocflowProxy } from "./proxy.js";
 import { intParam } from "./params.js";
 
@@ -1157,6 +1158,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   // -------- Документооборот: журнал регистрации (этап 2) --------
   mountJournalRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
   mountResolutionRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });
+  // Центр уведомлений и правила автосортировки (этап 5). Служебные пути внутри модуля
+  // объявлены до /:id — иначе Express примет «count» и «settings» за идентификатор.
+  mountNotificationRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
 
   // Ответ руководителя распознаётся сразу после синхронизации ящика: письмо приходит
   // в тред, резолюция переходит в «ждёт подтверждения», аппарат видит её в своей очереди.

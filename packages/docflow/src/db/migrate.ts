@@ -360,6 +360,84 @@ BEGIN
   END IF;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS users_email_uniq_idx ON users (lower(email)) WHERE email <> '';`
+  },
+  {
+    // Номер сверен с docflow_migrations ЖИВОЙ базы (mailsense) и тестовой 2026-10-07: там 1..6,
+    // значит свободен 7. Занятый номер молча пропускается — это уже стоило времени.
+    version: 7,
+    name: "notifications_templates_and_sort_rules",
+    sql: `-- Уведомления (этап 5): только ВНУТРИ приложения. Писем-напоминаний не отправляем (Р11).
+-- dedupe_key уникален в пределах пользователя: на этом держится идемпотентность
+-- материализации сроков — каждое чтение досчитывает недостающие напоминания,
+-- но повторно их не создаёт (второе чтение не должно плодить дубли).
+CREATE TABLE IF NOT EXISTS notifications (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  severity TEXT NOT NULL DEFAULT 'info',
+  dedupe_key TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  read_at TIMESTAMPTZ
+);
+CREATE UNIQUE INDEX IF NOT EXISTS notifications_dedupe_idx ON notifications(user_id, dedupe_key);
+CREATE INDEX IF NOT EXISTS notifications_user_idx ON notifications(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS notifications_unread_idx ON notifications(user_id) WHERE read_at IS NULL;
+
+-- Шаблоны текста уведомлений: key = kind. Правятся администратором в настройках.
+CREATE TABLE IF NOT EXISTS notification_templates (
+  key TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Правила автосортировки: маршрутизация и подсветка, НЕ авторегистрация.
+-- Документ по-прежнему создаёт человек: правило не выдаёт номер и не пишет в журнал.
+CREATE TABLE IF NOT EXISTS mail_sort_rules (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  match_from TEXT NOT NULL DEFAULT '',
+  match_to TEXT NOT NULL DEFAULT '',
+  match_subject TEXT NOT NULL DEFAULT '',
+  label TEXT NOT NULL DEFAULT '',
+  priority INTEGER,
+  note TEXT NOT NULL DEFAULT '',
+  created_by TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Приложение А9: типовые сроки. Колонка добавляется IF NOT EXISTS — таблица заведена
+-- ещё миграцией v2, и на живой базе колонки может не быть; обычный ADD COLUMN упал бы
+-- и остановил старт сервера.
+ALTER TABLE deadline_presets ADD COLUMN IF NOT EXISTS is_workday BOOLEAN NOT NULL DEFAULT TRUE;
+INSERT INTO deadline_presets (id, title, days, is_active, sort_order, is_workday) VALUES
+  ('wd-3', '3 рабочих дня', 3, TRUE, 10, TRUE),
+  ('wd-10', '10 рабочих дней', 10, TRUE, 20, TRUE),
+  ('cal-30', '30 календарных дней', 30, TRUE, 30, FALSE)
+ON CONFLICT (id) DO NOTHING;
+
+-- Дефолтные шаблоны для всех kind из §3. Дефолтных ПРАВИЛ сортировки не сеем:
+-- пустой список честнее выдуманного правила, которое пометит чужую почту.
+-- ON CONFLICT (key) DO NOTHING — цель указана явно: без цели гасится любой уникальный
+-- индекс, и повторный прогон выглядел бы успешным, ничего не сделав.
+INSERT INTO notification_templates (key, title, body) VALUES
+  ('resolution.assigned', 'Новое поручение {regNumber}', 'Вам поручено: {text}. Срок: {deadline}.'),
+  ('resolution.approved', 'Резолюция утверждена {regNumber}', 'Утверждено поручение: {text}. Пора отправлять исполнителям.'),
+  ('resolution.reported', 'Отчёт по поручению {regNumber}', '{author} отчитался: {text}'),
+  ('resolution.closed', 'Поручение исполнено {regNumber}', 'Поручение закрыто: {text}'),
+  ('resolution.due_soon', 'Срок через {daysLeft} дн. — {regNumber}', 'Поручение: {text}. Срок {deadline}.'),
+  ('resolution.due_today', 'Срок сегодня — {regNumber}', 'Поручение: {text}. Срок {deadline}.'),
+  ('resolution.overdue', 'Просрочено: {regNumber}', 'Поручение: {text}. Срок был {deadline}.'),
+  ('resolution.overdue_escalation', 'Просрочено у исполнителя: {regNumber}', 'Поручение: {text}. Срок был {deadline}.')
+ON CONFLICT (key) DO NOTHING;`
   }
 ];
 

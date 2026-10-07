@@ -356,6 +356,89 @@ const CASES: RouteCase[] = [
     method: "POST",
     path: "/api/docflow/resolutions/res-1/received",
     allowed: [...ROLES]
+  },
+  // -------- Этап 5: центр уведомлений и автосортировка (§6 + приложение А) --------
+  {
+    // notifications.view есть у всех пяти ролей: уведомление адресное, и «пустой список»
+    // у рядового не должен отличаться от «нет уведомлений». Учётка без ролей права не имеет.
+    what: "GET /api/docflow/notifications — свои уведомления видны всем пяти ролям",
+    method: "GET",
+    path: "/api/docflow/notifications",
+    allowed: [...ROLES]
+  },
+  {
+    what: "GET /api/docflow/notifications/count — счётчик для бейджа доступен всем ролям",
+    method: "GET",
+    path: "/api/docflow/notifications/count",
+    allowed: [...ROLES]
+  },
+  {
+    what: "POST /api/docflow/notifications/read-all — «прочитать все» только по своим строкам",
+    method: "POST",
+    path: "/api/docflow/notifications/read-all",
+    body: {},
+    allowed: [...ROLES]
+  },
+  {
+    what: "POST /api/docflow/notifications/:id/read — прочтение по идентификатору (владелец — из сессии)",
+    method: "POST",
+    path: "/api/docflow/notifications/n-1/read",
+    body: {},
+    allowed: [...ROLES]
+  },
+  {
+    what: "GET /api/docflow/notifications/settings — настройки и шаблоны только администратор",
+    method: "GET",
+    path: "/api/docflow/notifications/settings",
+    allowed: ["admin"]
+  },
+  {
+    what: "PUT /api/docflow/notifications/settings — менять настройки уведомлений только администратор",
+    method: "PUT",
+    path: "/api/docflow/notifications/settings",
+    body: { dueSoonDays: 3 },
+    allowed: ["admin"]
+  },
+  {
+    what: "GET /api/docflow/sorting/rules — правила автосортировки видит только администратор",
+    method: "GET",
+    path: "/api/docflow/sorting/rules",
+    allowed: ["admin"]
+  },
+  {
+    what: "POST /api/docflow/sorting/rules — заводить правила только администратор",
+    method: "POST",
+    path: "/api/docflow/sorting/rules",
+    body: { name: "Правило", matchFrom: "поставщик" },
+    allowed: ["admin"],
+    ok: 201
+  },
+  {
+    what: "POST /api/docflow/sorting/rules/preview — предпросмотр правила только администратор",
+    method: "POST",
+    path: "/api/docflow/sorting/rules/preview",
+    body: { name: "Правило", matchFrom: "поставщик" },
+    allowed: ["admin"]
+  },
+  {
+    what: "PATCH /api/docflow/sorting/rules/:id — правка правила только администратор",
+    method: "PATCH",
+    path: "/api/docflow/sorting/rules/r-1",
+    body: { note: "уточнение" },
+    allowed: ["admin"]
+  },
+  {
+    what: "DELETE /api/docflow/sorting/rules/:id — удаление правила только администратор",
+    method: "DELETE",
+    path: "/api/docflow/sorting/rules/r-1",
+    allowed: ["admin"]
+  },
+  {
+    // Подсказки срока нужны тому, кто назначает срок: аппарат, руководитель, администратор.
+    what: "GET /api/docflow/deadline-presets — типовые сроки поручающим",
+    method: "GET",
+    path: "/api/docflow/deadline-presets?from=2026-05-12",
+    allowed: ["admin", "secretary", "manager"]
   }
 ];
 

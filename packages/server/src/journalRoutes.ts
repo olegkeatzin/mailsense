@@ -6,7 +6,21 @@ import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import type express from "express";
 import { intParam } from "./params.js";
-import { buildXlsx, classifyKind, countAttachmentsByEmail, exportFileName, getEmailView, listAttachments, listEmailsWithAnalysis, logger, pdfPageCount } from "@mailsense/core";
+import {
+  buildXlsx,
+  classifyKind,
+  countAttachmentsByEmail,
+  exportFileName,
+  getEmailView,
+  listAttachments,
+  listEmailsWithAnalysis,
+  logger,
+  matchSortRules,
+  pdfPageCount,
+  type EmailListItem,
+  type MailSortInput,
+  type MailSortRule
+} from "@mailsense/core";
 import {
   AppError,
   DOCUMENT_STATUSES,
@@ -23,6 +37,7 @@ import {
   listDocuments,
   listDocumentsForExport,
   listRegisteredEmailIds,
+  listSortRules,
   linkDocumentEmail,
   peekNextNumber,
   registerDocument,
@@ -94,6 +109,35 @@ function actorOf(req: express.Request): Actor {
 
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length ? v : undefined;
+}
+
+/**
+ * Письма ящика, ещё не ставшие документом.
+ *
+ * ⚠️ Одно место для «Входящих на регистрацию» и предпросмотра правил сортировки:
+ * два списка с одинаковым смыслом разошлись бы, и правило в предпросмотре
+ * «ловило» бы не те письма, что видит аппарат.
+ */
+export async function unregisteredInbox(folder = "INBOX"): Promise<EmailListItem[]> {
+  const registered = new Set(await listRegisteredEmailIds());
+  return listEmailsWithAnalysis({ folder }).filter((e) => !registered.has(e.id));
+}
+
+/** Человек как строка для матчинга: имя и адрес — правило ищет подстроку в обоих. */
+export function personText(person: { name?: string; address?: string } | null | undefined): string {
+  return [person?.name, person?.address].filter(Boolean).join(" ");
+}
+
+/**
+ * Поля письма для матчинга правил — ЗАМОРОЖЕННЫЙ вход `matchSortRules` (§5).
+ * Матчинг делает core: здесь только приведение письма к его входу, без второй реализации.
+ */
+export function mailSortInput(email: EmailListItem): MailSortInput {
+  return {
+    from: personText(email.from),
+    to: (email.to ?? []).map(personText).join(" "),
+    subject: email.subject ?? ""
+  };
 }
 
 export function docFilterFromQuery(q: Record<string, unknown>): DocumentFilter {
@@ -483,13 +527,34 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     asyncHandler(async (req, res) => {
       const limit = intParam(req.query.limit, "limit", { fallback: 100, min: 1, max: 300 });
       const folder = str(req.query.folder) ?? "INBOX";
-      const registered = new Set(await listRegisteredEmailIds());
-      const emails = listEmailsWithAnalysis({ folder }).filter((e) => !registered.has(e.id));
-      const page = emails.slice(0, limit);
+      // А6: пагинации нет, список ограничен limit — total отдаём честно по фильтру.
+      const rulesOnly = req.query.rulesOnly === "1";
+      const sort = req.query.sort === "rules" ? "rules" : "date";
+      const emails = await unregisteredInbox(folder);
+      // Правила применяет matchSortRules из core (§6): второй реализации матчинга быть
+      // не должно — иначе предпросмотр правила и живой список разойдутся.
+      const rules = (await listSortRules()) as MailSortRule[];
+      const matched = emails.map((email) => ({ email, match: matchSortRules(rules, mailSortInput(email)) }));
+
+      // Порядок по умолчанию НЕ меняем: аппарат привык к нему, и «улучшение» сортировки
+      // молча сдвинуло бы рабочий список. sort=rules — осознанный выбор пользователя.
+      const filtered = rulesOnly ? matched.filter((m) => m.match.matched) : matched;
+      const ordered =
+        sort === "rules"
+          ? filtered
+              .slice()
+              .sort(
+                (a, b) =>
+                  (b.match.priority ?? -1) - (a.match.priority ?? -1) ||
+                  String(b.email.date ?? "").localeCompare(String(a.email.date ?? ""))
+              )
+          : filtered;
+      const page = ordered.slice(0, limit);
+
       // ⚠️ Вложения считаем ОДНИМ пакетным запросом. Раньше здесь стоял listAttachments
       // на каждое письмо: на 300 писем — 300 запросов в SQLite на один вызов маршрута.
-      const attachmentCounts = countAttachmentsByEmail(page.map((e) => e.id));
-      const items = page.map((e) => ({
+      const attachmentCounts = countAttachmentsByEmail(page.map((m) => m.email.id));
+      const items = page.map(({ email: e, match }) => ({
         emailId: e.id,
         accountId: e.accountId,
         subject: e.subject,
@@ -501,9 +566,15 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
         summary: e.analysis?.summary ?? "",
         priority: e.analysis?.priority ?? null,
         tags: e.analysis?.tags ?? [],
-        attachmentsCount: attachmentCounts.get(e.id) ?? 0
+        attachmentsCount: attachmentCounts.get(e.id) ?? 0,
+        // Поля правил автосортировки (§6). Регистрацию они НЕ заменяют: правило только
+        // помечает письмо и подсказывает аппарату, документ по-прежнему создаёт человек.
+        sortLabels: match.labels,
+        sortPriority: match.priority,
+        sortNotes: match.notes,
+        sortMatched: match.matched
       }));
-      res.json({ items, total: emails.length });
+      res.json({ items, total: ordered.length });
     })
   );
 

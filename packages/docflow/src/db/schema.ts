@@ -1,4 +1,14 @@
-import { boolean, index, integer, pgTable, primaryKey, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { desc, sql } from "drizzle-orm";
+import {
+  boolean,
+  index,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex
+} from "drizzle-orm/pg-core";
 
 /**
  * Схема серверной части (документооборот) на PostgreSQL.
@@ -247,7 +257,9 @@ export const deadlinePresets = pgTable("deadline_presets", {
   title: text("title").notNull(),
   days: integer("days").notNull().default(0),
   isActive: boolean("is_active").notNull().default(true),
-  sortOrder: integer("sort_order").notNull().default(0)
+  sortOrder: integer("sort_order").notNull().default(0),
+  /** Считать дни рабочими (выходные/праздники пропускаются) — приложение А9. */
+  isWorkday: boolean("is_workday").notNull().default(true)
 });
 
 export const resolutionTemplates = pgTable("resolution_templates", {
@@ -343,6 +355,69 @@ export const resolutionApprovals = pgTable(
   (t) => ({ resIdx: index("resolution_approvals_res_idx").on(t.resolutionId) })
 );
 
+/**
+ * Уведомления (этап 5). Только внутри приложения: писем-напоминаний не отправляем (Р11).
+ * dedupe_key уникален в пределах пользователя — на нём держится идемпотентность
+ * материализации сроков (второе чтение не создаёт дубль напоминания).
+ */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** Вид из NOTIFICATION_KINDS (см. notifications.ts). */
+    kind: text("kind").notNull(),
+    /** resolution | document — сущность, к которой относится уведомление. */
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull().default(""),
+    /** info | warning | danger. */
+    severity: text("severity").notNull().default("info"),
+    dedupeKey: text("dedupe_key").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    readAt: timestamp("read_at", { withTimezone: true })
+  },
+  (t) => ({
+    dedupeIdx: uniqueIndex("notifications_dedupe_idx").on(t.userId, t.dedupeKey),
+    userIdx: index("notifications_user_idx").on(t.userId, desc(t.createdAt)),
+    unreadIdx: index("notifications_unread_idx").on(t.userId).where(sql`read_at IS NULL`)
+  })
+);
+
+/** Шаблоны текста уведомлений: key = kind. Правятся администратором. */
+export const notificationTemplates = pgTable("notification_templates", {
+  key: text("key").primaryKey(),
+  /** Шаблон с {переменными}: {regNumber}, {summary}, {sender}, {deadline}, {daysLeft}, {text}, {author} (А2). */
+  title: text("title").notNull(),
+  body: text("body").notNull().default(""),
+  isActive: boolean("is_active").notNull().default(true),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow()
+});
+
+/**
+ * Правила автосортировки: маршрутизация и подсветка, НЕ авторегистрация.
+ * Правило не выдаёт номер и не создаёт запись в журнале — документ создаёт человек.
+ */
+export const mailSortRules = pgTable("mail_sort_rules", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  isActive: boolean("is_active").notNull().default(true),
+  sortOrder: integer("sort_order").notNull().default(0),
+  matchFrom: text("match_from").notNull().default(""),
+  matchTo: text("match_to").notNull().default(""),
+  matchSubject: text("match_subject").notNull().default(""),
+  label: text("label").notNull().default(""),
+  /** 1..5, больше — важнее; NULL — приоритет не подсказывать. */
+  priority: integer("priority"),
+  note: text("note").notNull().default(""),
+  createdBy: text("created_by"),
+  createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true, mode: "date" }).notNull().defaultNow()
+});
+
 export const docflowSchema = {
   users,
   roles,
@@ -361,7 +436,10 @@ export const docflowSchema = {
   resolutionTemplates,
   resolutions,
   resolutionAssignees,
-  resolutionApprovals
+  resolutionApprovals,
+  notifications,
+  notificationTemplates,
+  mailSortRules
 };
 
 export type DbUsers = typeof users.$inferSelect;
@@ -375,3 +453,6 @@ export type DbCorrespondent = typeof correspondents.$inferSelect;
 export type DbResolution = typeof resolutions.$inferSelect;
 export type DbResolutionAssignee = typeof resolutionAssignees.$inferSelect;
 export type DbResolutionApproval = typeof resolutionApprovals.$inferSelect;
+export type DbNotification = typeof notifications.$inferSelect;
+export type DbNotificationTemplate = typeof notificationTemplates.$inferSelect;
+export type DbMailSortRule = typeof mailSortRules.$inferSelect;

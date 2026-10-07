@@ -12,6 +12,8 @@ import { getDocflowDb } from "./db/index.js";
 import type { DocflowTx } from "./repo.js";
 import { docflowSchema } from "./db/schema.js";
 import { AppError } from "./errors.js";
+import { daysLeft, isOverdue } from "./deadlines.js";
+import { getDueSoonDays, notifyInTx, type NotificationKind } from "./notifications.js";
 import type {
   ApprovalMethod,
   ApprovalStep,
@@ -73,19 +75,11 @@ function mapResolution(row: typeof resolutions.$inferSelect): ResolutionRecord {
   };
 }
 
-/** Сколько дней осталось до срока: отрицательное — просрочено. */
-export function daysLeft(deadline: string | null, today = new Date()): number | null {
-  if (!deadline) return null;
-  const d = new Date(deadline + "T23:59:59");
-  if (Number.isNaN(d.getTime())) return null;
-  const ms = d.getTime() - today.getTime();
-  return Math.ceil(ms / (24 * 60 * 60 * 1000));
-}
-
-export function isOverdue(deadline: string | null, today = new Date()): boolean {
-  const d = daysLeft(deadline, today);
-  return d !== null && d < 0;
-}
+/**
+ * Сроки считаются в календарных днях — см. deadlines.ts. Функции реэкспортируются,
+ * потому что их исторически берут отсюда (listMyTasks, канбан, тесты).
+ */
+export { daysLeft, isOverdue };
 
 /** Ожидаемые отказы: неверный шаг, нет прав на действие, пустые обязательные поля. */
 function badState(message: string): AppError {
@@ -221,6 +215,8 @@ async function resolutionDetails(ids: string[]): Promise<Map<string, ResolutionD
   const out = new Map<string, ResolutionDetail>();
   if (!ids.length) return out;
   const db = getDocflowDb();
+  // Тот же порог, что у уведомлений о сроках (А5, А11): одна настройка на весь продукт.
+  const dueSoonDays = await getDueSoonDays();
 
   const recs = await db.select().from(resolutions).where(inArray(resolutions.id, ids));
   if (!recs.length) return out;
@@ -247,10 +243,14 @@ async function resolutionDetails(ids: string[]): Promise<Map<string, ResolutionD
   for (const rec of recs) {
     const doc = docById.get(rec.documentId);
     const nameOf = (uid: string | null): string => (uid ? nameById.get(uid) ?? "" : "");
+    const left = daysLeft(rec.deadline);
     out.set(rec.id, {
       ...mapResolution(rec),
       assignees: assignees.get(rec.id) ?? [],
       history: history.get(rec.id) ?? [],
+      // Подсветка срока: только у поручения «в работе» — исполненное не бывает «скоро».
+      daysLeft: left,
+      dueSoon: rec.status === "sent" && left !== null && left >= 0 && left <= dueSoonDays,
       documentNumber: doc?.regNumber ?? "",
       documentSummary: doc?.summary ?? doc?.documentName ?? "",
       documentEmailId: doc?.emailId ?? null,
@@ -298,6 +298,11 @@ async function applyTransition(
      * снаружи транзакции его можно обойти гонкой.
      */
     guard?: (tx: DocflowTx) => Promise<void>;
+    /**
+     * Событийное уведомление В ТОЙ ЖЕ транзакции, что и переход (§3). Отдельным хуком,
+     * а не «сбоку после вызова»: тогда уведомление и изменение либо оба есть, либо обоих нет.
+     */
+    afterChange?: (tx: DocflowTx, row: typeof resolutions.$inferSelect) => Promise<void>;
   }
 ): Promise<ResolutionRecord> {
   const db = getDocflowDb();
@@ -345,8 +350,85 @@ async function applyTransition(
     });
 
     const after = await tx.select().from(resolutions).where(eq(resolutions.id, id)).limit(1);
+    if (opts.afterChange) await opts.afterChange(tx, after[0]);
     return mapResolution(after[0]);
   });
+}
+
+type ResolutionRow = typeof resolutions.$inferSelect;
+
+/**
+ * Переменные шаблона уведомления. Имена заморожены приложением А2 контракта:
+ * {regNumber}, {summary}, {sender}, {deadline}, {daysLeft}, {text}, {author}.
+ * {sender} берётся из письма (почтовая база) и здесь недоступен — остаётся как есть.
+ */
+async function notificationVars(
+  tx: DocflowTx,
+  row: ResolutionRow,
+  author = ""
+): Promise<Record<string, string | number>> {
+  const doc = (
+    await tx
+      .select({ regNumber: documents.regNumber, summary: documents.summary })
+      .from(documents)
+      .where(eq(documents.id, row.documentId))
+      .limit(1)
+  )[0];
+  return {
+    regNumber: doc?.regNumber ?? "",
+    summary: doc?.summary ?? "",
+    deadline: row.deadline ?? "не указан",
+    text: row.text,
+    author
+  };
+}
+
+/**
+ * Событийное уведомление резолюции — внутри переданной транзакции.
+ *
+ * Ключ включает отметку времени события: повторная отправка после отката — это новое
+ * событие и новое уведомление, а «двойной клик» по одному переходу второго перехода не даёт.
+ */
+async function notifyResolutionEvent(
+  tx: DocflowTx,
+  opts: {
+    kind: NotificationKind;
+    resolution: ResolutionRow;
+    userIds: Array<string | null>;
+    stamp: string;
+    author?: string;
+  }
+): Promise<void> {
+  const vars = await notificationVars(tx, opts.resolution, opts.author ?? "");
+  for (const userId of [...new Set(opts.userIds.filter((v): v is string => !!v))]) {
+    await notifyInTx(tx, {
+      userId,
+      kind: opts.kind,
+      entityId: opts.resolution.id,
+      dedupeKey: opts.kind + ":" + opts.resolution.id + ":" + userId + ":" + opts.stamp,
+      vars
+    });
+  }
+}
+
+/** Закрытие поручения: узнают утвердивший и все исполнители (§3). */
+async function notifyClosed(tx: DocflowTx, row: ResolutionRow, actor: Actor): Promise<void> {
+  await notifyResolutionEvent(tx, {
+    kind: "resolution.closed",
+    resolution: row,
+    userIds: [row.approvedBy, ...(await assigneeIdsIn(tx, row.id))],
+    stamp: row.updatedAt,
+    author: actor.name
+  });
+}
+
+/** Исполнители поручения — кому адресовано уведомление. */
+async function assigneeIdsIn(tx: DocflowTx, resolutionId: string): Promise<string[]> {
+  const rows = await tx
+    .select({ userId: resolutionAssignees.userId })
+    .from(resolutionAssignees)
+    .where(eq(resolutionAssignees.resolutionId, resolutionId));
+  return rows.map((r) => r.userId);
 }
 
 export interface AssigneeInput {
@@ -644,7 +726,18 @@ export async function approveResolution(
     step: "approved",
     method: "app",
     comment: opts.comment ?? null,
-    action: "resolution.approve"
+    action: "resolution.approve",
+    // Аппарат (prepared_by) должен узнать, что решение принято: без этого поручение
+    // «утверждено» ждало бы отправки, о которой никто не помнит (§3).
+    afterChange: async (tx, row) => {
+      await notifyResolutionEvent(tx, {
+        kind: "resolution.approved",
+        resolution: row,
+        userIds: [row.preparedBy],
+        stamp: row.approvedAt ?? row.updatedAt,
+        author: actor.name
+      });
+    }
   });
 
   // Исполнителей меняем после перехода: так они попадают в тот же след аудита,
@@ -724,7 +817,17 @@ export async function confirmEmailApproval(
     step: "confirmed",
     method: "email",
     comment: opts.comment ?? null,
-    action: "resolution.confirm_approval"
+    action: "resolution.confirm_approval",
+    // Второй путь утверждения (ответ письмом) сообщает аппарату то же самое.
+    afterChange: async (tx, row) => {
+      await notifyResolutionEvent(tx, {
+        kind: "resolution.approved",
+        resolution: row,
+        userIds: [row.preparedBy],
+        stamp: row.approvedAt ?? row.updatedAt,
+        author: actor.name
+      });
+    }
   });
   if (opts.assignees) await replaceAssignees(id, opts.assignees, actor);
   return (await getResolution(id)) ?? result;
@@ -771,7 +874,18 @@ export async function dispatchResolution(
     method: opts.dispatchEmailId ? "email" : "manual",
     emailId: opts.dispatchEmailId ?? null,
     comment: opts.comment ?? null,
-    action: "resolution.dispatch"
+    action: "resolution.dispatch",
+    // Уведомление исполнителям — в той же транзакции, что и переход в «отправлено»:
+    // иначе поручение ушло бы, а исполнитель о нём не узнал (или наоборот).
+    afterChange: async (tx, row) => {
+      await notifyResolutionEvent(tx, {
+        kind: "resolution.assigned",
+        resolution: row,
+        userIds: await assigneeIdsIn(tx, id),
+        stamp: row.dispatchedAt ?? row.updatedAt,
+        author: actor.name
+      });
+    }
   });
 }
 
@@ -1014,6 +1128,9 @@ export async function listResolutions(filter: ResolutionFilter = {}): Promise<Re
  */
 export async function listMyTasks(userId: string): Promise<TaskItem[]> {
   const db = getDocflowDb();
+  // Порог «за N дней» — та же настройка, что и у уведомлений о сроках (А5): UI и напоминания
+  // обязаны подсвечивать срок одинаково, иначе «осталось 2 дня» и молчание рядом выглядят багом.
+  const dueSoonDays = await getDueSoonDays();
   const rows = await db
     .select({ a: resolutionAssignees, r: resolutions, doc: documents })
     .from(resolutionAssignees)
@@ -1042,6 +1159,7 @@ export async function listMyTasks(userId: string): Promise<TaskItem[]> {
       emailId: r.r.dispatchEmailId,
       // Исполненная задача не бывает просроченной, даже если срок прошёл.
       overdue: r.a.reportAt === null && isOverdue(deadline),
+      dueSoon: r.a.reportAt === null && left !== null && left >= 0 && left <= dueSoonDays,
       daysLeft: left
     };
   });
@@ -1195,6 +1313,14 @@ export async function reportExecution(
       newValue: stringify({ text, emailId: input.emailId ?? null }),
       createdAt: ts
     });
+    // Отчёт записан — аппарат и подписант узнают об этом в той же транзакции (§3).
+    await notifyResolutionEvent(tx, {
+      kind: "resolution.reported",
+      resolution: current,
+      userIds: [current.preparedBy, current.approvedBy],
+      stamp: ts,
+      author: actor.name
+    });
   });
 
   return applyClosingRule(resolutionId, actor);
@@ -1220,7 +1346,10 @@ async function applyClosingRule(resolutionId: string, actor: Actor): Promise<Res
       comment: responsible
         ? "Исполнено: отчитался ответственный " + (responsible.fullName || "")
         : "Исполнено: отчитались все исполнители",
-      action: "resolution.done"
+      action: "resolution.done",
+      // Автоматическое закрытие — тоже закрытие: иначе о нём узнали бы только те,
+      // кто открыл карточку, а «Поручение исполнено» так и не пришло бы.
+      afterChange: (tx, row) => notifyClosed(tx, row, actor)
     });
   }
   return (await getResolution(resolutionId))!;
@@ -1384,7 +1513,8 @@ export async function closeResolution(
     to: "done",
     step: "dispatched",
     comment,
-    action: "resolution.done"
+    action: "resolution.done",
+    afterChange: (tx, row) => notifyClosed(tx, row, actor)
   });
 }
 

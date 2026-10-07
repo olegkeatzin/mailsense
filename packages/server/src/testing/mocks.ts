@@ -59,7 +59,13 @@ export function coreMockModule(): Record<string, unknown> {
     sendEmail: jest.fn(async () => ({ emailId: "sent-1", messageId: "<sent-1@stand.test>" })),
     buildXlsx: jest.fn(() => Buffer.from("xlsx")),
     exportFileName: jest.fn((name: string) => name + ".xlsx"),
-    directoryStatus: jest.fn(() => ({ configured: false, connected: false }))
+    directoryStatus: jest.fn(() => ({ configured: false, connected: false })),
+    // Этап 5: матчинг правил сортировки и рабочие дни. Формы — по контракту §5:
+    // пустой результат обязан быть объектом, иначе маршрут упал бы на чтении .matched.
+    matchSortRules: jest.fn(() => ({ matched: false, labels: [], notes: [], priority: null, ruleIds: [] })),
+    validateSortRule: jest.fn(() => ({ ok: true, errors: [] })),
+    addWorkingDays: jest.fn((from: string) => from),
+    isWorkingDay: jest.fn(() => true)
   };
   return new Proxy(module, {
     get(target, prop) {
@@ -259,7 +265,64 @@ export function docflowMockModule(): Record<string, unknown> {
 
     // Аудит.
     listAudit: stub([]),
-    countAudit: stub(0)
+    countAudit: stub(0),
+
+    // Этап 5: центр уведомлений.
+    listNotifications: jest.fn(async () => ({ items: [], unread: 0, total: 0, enabled: true })),
+    countUnreadNotifications: jest.fn(async () => 0),
+    markNotificationRead: jest.fn(async () => ({ ok: true, unread: 0 })),
+    markAllNotificationsRead: jest.fn(async () => 0),
+    materializeDeadlineNotificationsSafe: jest.fn(async () => undefined),
+    notificationsEnabled: jest.fn(async () => true),
+    getNotificationSettings: jest.fn(async () => ({
+      enabled: true,
+      dueSoonDays: 3,
+      workdayDeadlines: true,
+      holidays: [] as string[],
+      variables: [] as Array<{ key: string; title: string }>,
+      templates: []
+    })),
+    saveNotificationSettings: jest.fn(async () => ({
+      enabled: true,
+      dueSoonDays: 3,
+      workdayDeadlines: true,
+      holidays: [] as string[],
+      variables: [] as Array<{ key: string; title: string }>,
+      templates: []
+    })),
+
+    // Этап 5: правила автосортировки.
+    listSortRules: jest.fn(async () => []),
+    getSortRule: jest.fn(async (id: string) => ({
+      id,
+      name: "Правило",
+      isActive: true,
+      sortOrder: 0,
+      matchFrom: "поставщик",
+      matchTo: "",
+      matchSubject: "",
+      label: "",
+      priority: null,
+      note: ""
+    })),
+    saveSortRule: jest.fn(async (input: { id?: string }) => ({
+      id: input?.id ?? "rule-1",
+      name: "Правило",
+      isActive: true,
+      sortOrder: 0,
+      matchFrom: "поставщик",
+      matchTo: "",
+      matchSubject: "",
+      label: "",
+      priority: null,
+      note: ""
+    })),
+    deleteSortRule: jest.fn(async () => true),
+    /** Проверка правил, регистрируемая сервером в хранилище (одна реализация — core). */
+    setSortRuleValidator: jest.fn(),
+    listDeadlinePresets: jest.fn(async () => [
+      { id: "wd-3", title: "3 рабочих дня", days: 3, isWorkday: true, sortOrder: 10 }
+    ])
   };
   return module;
 }

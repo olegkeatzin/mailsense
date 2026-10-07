@@ -38,7 +38,8 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
       "task.report",
       "users.manage",
       "settings.manage",
-      "audit.view"
+      "audit.view",
+      "notifications.view"
     ]
   },
   {
@@ -56,7 +57,9 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
       "resolution.create",
       "resolution.dispatch",
       "task.view",
-      "task.report"
+      "task.report",
+      // Аппарат ведёт сроки и подтверждает отчёты — без центра уведомлений он их не увидит.
+      "notifications.view"
     ]
   },
   {
@@ -64,21 +67,29 @@ export const ROLE_DEFINITIONS: RoleDefinition[] = [
     name: "Руководитель",
     description: "Наложение резолюций и контроль исполнения",
     sortOrder: 30,
-    permissions: ["journal.view", "resolution.create", "resolution.edit", "resolution.approve", "task.view"]
+    permissions: [
+      "journal.view",
+      "resolution.create",
+      "resolution.edit",
+      "resolution.approve",
+      "task.view",
+      "notifications.view"
+    ]
   },
   {
     id: "executor",
     name: "Исполнитель",
     description: "Получение задач и отчёт об исполнении",
     sortOrder: 40,
-    permissions: ["journal.view", "task.view", "task.report"]
+    permissions: ["journal.view", "task.view", "task.report", "notifications.view"]
   },
   {
     id: "signer",
     name: "Подписант",
     description: "Утверждение резолюций (ген.дир или тот, кому он делегировал право подписи)",
     sortOrder: 50,
-    permissions: ["journal.view", "resolution.approve", "task.view"]
+    // Уведомления нужны и подписанту: он видит, что поручение ушло и чем закончилось.
+    permissions: ["journal.view", "resolution.approve", "task.view", "notifications.view"]
   }
 ];
 

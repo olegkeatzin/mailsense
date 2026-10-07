@@ -34,7 +34,12 @@ export type Permission =
   | "task.report"
   | "users.manage"
   | "settings.manage"
-  | "audit.view";
+  | "audit.view"
+  /**
+   * Центр уведомлений: свои уведомления видит каждый вошедший (§6 контракта).
+   * Право есть у всех пяти ролей, но не у учётки без ролей: уведомления адресные.
+   */
+  | "notifications.view";
 
 export interface Role {
   id: string;
@@ -380,6 +385,14 @@ export interface ResolutionRecord {
 export interface ResolutionDetail extends ResolutionRecord {
   assignees: ResolutionAssignee[];
   history: ResolutionApprovalEntry[];
+  /**
+   * Сколько дней осталось до срока (отрицательное — просрочено) — приложение А11.
+   * Канбан считает подсветку по серверному значению, а не по своему порогу: иначе
+   * картинка на карточке и напоминание разойдутся на границе порога.
+   */
+  daysLeft: number | null;
+  /** Срок наступает в пределах notifications.dueSoonDays (А11). */
+  dueSoon: boolean;
   /** Номер документа журнала — для навигации и писем. */
   documentNumber: string;
   documentSummary: string;
@@ -421,6 +434,8 @@ export interface TaskItem {
   emailId: string | null;
   /** Просрочена ли задача на момент чтения. */
   overdue: boolean;
+  /** Срок наступает в пределах notifications.dueSoonDays (А5) — для подсветки. */
+  dueSoon: boolean;
   /** Сколько дней осталось (отрицательное — просрочено). */
   daysLeft: number | null;
 }
@@ -446,6 +461,98 @@ export interface BoardColumn {
   items: ResolutionDetail[];
 }
 
+
+// ---------------- Уведомления и автосортировка (СЭД, этап 5) ----------------
+
+/** Уровень уведомления: цвет иконки в центре уведомлений. */
+export type NotificationSeverity = "info" | "warning" | "danger";
+
+/**
+ * Раздел интерфейса, куда ведёт уведомление (контракт §7). Сервер отдаёт именно
+ * раздел, а не URL: маршруты — дело клиента, и они меняются чаще, чем событие.
+ */
+export type NotificationLink = "tasks" | "approvals" | "confirmation" | "board" | "journal" | null;
+
+/**
+ * Уведомление в том виде, в каком его видит клиент (контракт §6).
+ *
+ * `deadline` и `daysLeft` не хранятся в таблице: они считаются на чтении из резолюции,
+ * иначе после продления срока в уведомлении осталась бы старая дата.
+ */
+export interface AppNotification {
+  id: string;
+  kind: string;
+  entityType: "resolution" | "document";
+  entityId: string;
+  title: string;
+  body: string;
+  severity: NotificationSeverity;
+  createdAt: string;
+  readAt: string | null;
+  deadline: string | null;
+  daysLeft: number | null;
+  link: NotificationLink;
+}
+
+/** Шаблон текста уведомления (key = kind). */
+export interface NotificationTemplate {
+  key: string;
+  title: string;
+  body: string;
+  isActive: boolean;
+  updatedAt: string;
+}
+
+/** Переменная шаблона уведомления: имя для текста и человеческая подпись (А2). */
+export interface NotificationVariable {
+  key: string;
+  title: string;
+}
+
+/** Настройки уведомлений для админской вкладки (§4 и приложение А). */
+export interface NotificationSettingsView {
+  enabled: boolean;
+  dueSoonDays: number;
+  workdayDeadlines: boolean;
+  /** Нерабочие дни (праздники) для расчёта типового срока в рабочих днях (А3). */
+  holidays: string[];
+  /** Что можно подставить в шаблон — список заморожен (А2). */
+  variables: NotificationVariable[];
+  templates: NotificationTemplate[];
+}
+
+export interface NotificationPage {
+  items: AppNotification[];
+  unread: number;
+  total: number;
+  /** Включены ли уведомления целиком: клиент гасит бейдж, не дёргая настройки (А4). */
+  enabled: boolean;
+}
+
+/**
+ * Правило автосортировки в том виде, в каком оно лежит в БД.
+ *
+ * Имена полей совпадают с `MailSortRule` из @mailsense/core (§5) — матчинг делает
+ * core, и второй реализации быть не должно; здесь только хранение.
+ */
+export interface MailSortRuleRecord {
+  id: string;
+  name: string;
+  isActive: boolean;
+  sortOrder: number;
+  matchFrom: string;
+  matchTo: string;
+  matchSubject: string;
+  label: string;
+  /** 1..5, больше — важнее; null — не подсказывать. */
+  priority: number | null;
+  note: string;
+}
+
+/**
+ * Права на этапе 5 добавляются аддитивно: `notifications.view` — всем ролям,
+ * настройки и правила остаются за `settings.manage` (только администратор).
+ */
 export interface LoginInput {
   login: string;
   password: string;
