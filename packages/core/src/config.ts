@@ -50,6 +50,185 @@ export interface DefaultAccountConfig {
   authType: "login" | "plain" | "oauth2";
 }
 
+/**
+ * Ящик, заданный переменной окружения MAILSENSE_MAILBOXES: то же, что вводит интерфейс,
+ * только без интерфейса — контейнер разворачивается целиком из .env.
+ */
+export interface MailboxConfig {
+  username: string;
+  password: string;
+  protocol: "imap" | "pop3";
+  host: string;
+  port: number;
+  tls: "none" | "ssl" | "starttls";
+  authType: "login" | "plain" | "oauth2";
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpTls?: "none" | "ssl" | "starttls";
+  smtpUsername?: string;
+  smtpPassword?: string;
+}
+
+const TLS_MODES = ["none", "ssl", "starttls"] as const;
+const AUTH_TYPES = ["login", "plain", "oauth2"] as const;
+
+/** Поля ящика, которые ядро понимает. Всё остальное — предупреждение о возможной опечатке. */
+const KNOWN_MAILBOX_KEYS = new Set([
+  "username",
+  "password",
+  "protocol",
+  "host",
+  "port",
+  "tls",
+  "authType",
+  "smtpHost",
+  "smtpPort",
+  "smtpTls",
+  "smtpUsername",
+  "smtpPassword"
+]);
+
+/**
+ * tls в переменной задают и булевым (true → ssl, false → none), и строкой режима
+ * (для starttls булева мало). Не задано — «ssl»: безопасный дефолт, а не открытый канал.
+ */
+function readTls(
+  raw: unknown,
+  title: string,
+  where: string,
+  errors: string[]
+): "none" | "ssl" | "starttls" | null {
+  if (raw === undefined || raw === null) return "ssl";
+  if (typeof raw === "boolean") return raw ? "ssl" : "none";
+  if (typeof raw === "string" && (TLS_MODES as readonly string[]).includes(raw)) {
+    return raw as "none" | "ssl" | "starttls";
+  }
+  errors.push(where + ": " + title + "tls — ожидается true/false или none|ssl|starttls");
+  return null;
+}
+
+/**
+ * Разбирает MAILSENSE_MAILBOXES. Возвращает ящики и понятные причины пропуска:
+ * один плохой элемент НЕ роняет остальные и не мешает старту (правило из постановки).
+ * Чистая функция — тесты проверяют её без базы и окружения.
+ */
+export function parseMailboxes(raw: string | null | undefined): {
+  mailboxes: MailboxConfig[];
+  errors: string[];
+  warnings: string[];
+} {
+  const text = (raw ?? "").trim();
+  if (!text) return { mailboxes: [], errors: [], warnings: [] };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { mailboxes: [], errors: ["MAILSENSE_MAILBOXES: не разобрать JSON-массив ящиков"], warnings: [] };
+  }
+  if (!Array.isArray(parsed)) {
+    return { mailboxes: [], errors: ["MAILSENSE_MAILBOXES: ожидается JSON-массив ящиков"], warnings: [] };
+  }
+
+  const mailboxes: MailboxConfig[] = [];
+  const errors: string[] = [];
+  /**
+   * Неизвестное поле — предупреждение, а не отказ: ящик рабочий, но опечатка
+   * (например smtpPortt) иначе тихо не применилась бы, и причину искали бы в другом месте.
+   */
+  const warnings: string[] = [];
+
+  parsed.forEach((item, i) => {
+    const where = "ящик #" + (i + 1);
+    if (item === null || typeof item !== "object" || Array.isArray(item)) {
+      errors.push(where + ": ожидается объект с полями ящика");
+      return;
+    }
+    const raw = item as Record<string, unknown>;
+
+    const username = typeof raw.username === "string" ? raw.username.trim() : "";
+    if (!username) {
+      errors.push(where + ": не указан адрес ящика (username)");
+      return;
+    }
+    const at = where + " (" + username + ")";
+
+    const password = typeof raw.password === "string" ? raw.password : "";
+    if (!password) {
+      errors.push(at + ": не указан пароль");
+      return;
+    }
+    if (raw.protocol !== "imap" && raw.protocol !== "pop3") {
+      errors.push(at + ": неизвестный протокол — ожидается imap или pop3");
+      return;
+    }
+    const host = typeof raw.host === "string" ? raw.host.trim() : "";
+    if (!host) {
+      errors.push(at + ": не указан сервер (host)");
+      return;
+    }
+    const port = raw.port;
+    if (typeof port !== "number" || !Number.isInteger(port) || port < 1 || port > 65535) {
+      errors.push(at + ": порт должен быть числом 1..65535");
+      return;
+    }
+    const tls = readTls(raw.tls, "", at, errors);
+    if (tls === null) return;
+
+    let authType: "login" | "plain" | "oauth2" = "login";
+    if (raw.authType !== undefined && raw.authType !== null) {
+      if (typeof raw.authType !== "string" || !(AUTH_TYPES as readonly string[]).includes(raw.authType)) {
+        errors.push(at + ": способ входа — ожидается login|plain|oauth2");
+        return;
+      }
+      authType = raw.authType as "login" | "plain" | "oauth2";
+    }
+
+    const smtpHost = typeof raw.smtpHost === "string" && raw.smtpHost.trim() ? raw.smtpHost.trim() : undefined;
+    let smtpPort: number | undefined;
+    if (raw.smtpPort !== undefined && raw.smtpPort !== null) {
+      const p = raw.smtpPort;
+      if (typeof p !== "number" || !Number.isInteger(p) || p < 1 || p > 65535) {
+        errors.push(at + ": порт SMTP должен быть числом 1..65535");
+        return;
+      }
+      smtpPort = p;
+    }
+    let smtpTls: "none" | "ssl" | "starttls" | undefined;
+    if (raw.smtpTls !== undefined && raw.smtpTls !== null) {
+      const t = readTls(raw.smtpTls, "SMTP ", at, errors);
+      if (t === null) return;
+      smtpTls = t;
+    }
+    const smtpUsername = typeof raw.smtpUsername === "string" && raw.smtpUsername.trim() ? raw.smtpUsername.trim() : undefined;
+    const smtpPassword = typeof raw.smtpPassword === "string" && raw.smtpPassword ? raw.smtpPassword : undefined;
+
+    const unknownKeys = Object.keys(raw)
+      .filter((key) => !KNOWN_MAILBOX_KEYS.has(key))
+      .sort();
+    if (unknownKeys.length) {
+      warnings.push(at + ": неизвестные поля " + unknownKeys.join(", ") + " — пропущены");
+    }
+
+    mailboxes.push({
+      username,
+      password,
+      protocol: raw.protocol,
+      host,
+      port,
+      tls,
+      authType,
+      ...(smtpHost ? { smtpHost } : {}),
+      ...(smtpPort !== undefined ? { smtpPort } : {}),
+      ...(smtpTls ? { smtpTls } : {}),
+      ...(smtpUsername ? { smtpUsername } : {}),
+      ...(smtpPassword ? { smtpPassword } : {})
+    });
+  });
+
+  return { mailboxes, errors, warnings };
+}
+
 export interface Config {
   dataDir: string;
   port: number;
@@ -57,6 +236,12 @@ export interface Config {
   ai: AiConfig;
   defaultAccount: DefaultAccountConfig | null;
   seedAccount: boolean;
+  /** Ящики из MAILSENSE_MAILBOXES (контейнер разворачивается из окружения). */
+  mailboxes: MailboxConfig[];
+  /** Причины, по которым ящик из переменной пропущен (их логирует засев). */
+  mailboxErrors: string[];
+  /** Предупреждения по ящикам из переменной: засев их логирует, но ящик создаётся. */
+  mailboxWarnings: string[];
   /**
    * Адрес сервера документооборота. Почта при этом остаётся локальной: клиент
    * держит свой ящик и свою базу, а на сервер ходит только за журналом,
@@ -90,6 +275,8 @@ export function loadConfig(): Config {
         }
       : null;
 
+  const mailboxes = parseMailboxes(env("MAILSENSE_MAILBOXES", ""));
+
   return {
     dataDir,
     port: Number(env("MAILSENSE_PORT", "8123")),
@@ -109,6 +296,9 @@ export function loadConfig(): Config {
     },
     defaultAccount,
     seedAccount: env("MAILSENSE_SEED_ACCOUNT", "false") === "true",
+    mailboxes: mailboxes.mailboxes,
+    mailboxErrors: mailboxes.errors,
+    mailboxWarnings: mailboxes.warnings,
     docflowServerUrl: env("MAILSENSE_DOCFLOW_URL", "").trim().replace(/\/+$/, "") || null
   };
 }

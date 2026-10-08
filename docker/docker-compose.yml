@@ -80,7 +80,28 @@ services:
       - MAILSENSE_AI_TIMEOUT_MS=${MAILSENSE_AI_TIMEOUT_MS:-120000}
       - MAILSENSE_AI_OCR_MAX_PAGES=${MAILSENSE_AI_OCR_MAX_PAGES:-10}
       - MAILSENSE_AI_TEXT_MAX_PAGES=${MAILSENSE_AI_TEXT_MAX_PAGES:-20}
-      # Засев тестового почтового ящика (по умолчанию выключен)
+      # --- Развёртывание из окружения (необязательно) ---
+      # Каталог, ящики и роли служебных ящиков можно задать здесь, чтобы не заходить в интерфейс.
+      # Правило: значение из окружения применяется ТОЛЬКО если настройки ещё нет в базе —
+      # заданное администратором в интерфейсе всегда важнее и перезапуском не отменяется.
+      #   MAILSENSE_LDAP_URL=ldaps://srv-dc01.enterprise.local:636
+      #   MAILSENSE_LDAP_BASE_DN=DC=enterprise,DC=local
+      #   MAILSENSE_LDAP_LOGIN=ldap-bind@enterprise.local
+      #   MAILSENSE_LDAP_PASSWORD=…
+      # Ящики — JSON-массивом (protocol: imap или pop3; tls: true/false или none/ssl/starttls):
+      #   MAILSENSE_MAILBOXES=[{"username":"post@mail.test","password":"…","protocol":"imap",
+      #     "host":"mail.test","port":993,"tls":true,"smtpHost":"mail.test","smtpPort":465,"smtpTls":true}]
+      # Роли служебных ящиков — адресами (ищутся среди засеянных):
+      #   MAILSENSE_SERVICE_MAILBOX=post@mail.test
+      #   MAILSENSE_EXTERNAL_MAILBOX=info@mail.test
+      - MAILSENSE_MAILBOXES=${MAILSENSE_MAILBOXES:-}
+      - MAILSENSE_LDAP_URL=${MAILSENSE_LDAP_URL:-}
+      - MAILSENSE_LDAP_BASE_DN=${MAILSENSE_LDAP_BASE_DN:-}
+      - MAILSENSE_LDAP_LOGIN=${MAILSENSE_LDAP_LOGIN:-}
+      - MAILSENSE_LDAP_PASSWORD=${MAILSENSE_LDAP_PASSWORD:-}
+      - MAILSENSE_SERVICE_MAILBOX=${MAILSENSE_SERVICE_MAILBOX:-}
+      - MAILSENSE_EXTERNAL_MAILBOX=${MAILSENSE_EXTERNAL_MAILBOX:-}
+      # Засев ОДНОГО тестового ящика — только стенд и разработка, в проде выключено
       - MAILSENSE_SEED_ACCOUNT=${MAILSENSE_SEED_ACCOUNT:-false}
       - MAILSENSE_MAIL_USER=${MAILSENSE_MAIL_USER:-}
       - MAILSENSE_MAIL_PASS=${MAILSENSE_MAIL_PASS:-}

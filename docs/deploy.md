@@ -9,13 +9,26 @@
 | `MAILSENSE_DATA_DIR` | каталог данных (SQLite, вложения, логи) |
 | `MAILSENSE_PORT` | порт сервера, по умолчанию 8123 |
 | `MAILSENSE_AI_BASE_URL`, `MAILSENSE_AI_MODEL` | модель выжимки |
-| `MAILSENSE_MAIL_HOST` / `_PORT` / `_USER` / `_PASS` | засев тестового ящика |
+| `MAILSENSE_AI_OCR_BASE_URL`, `MAILSENSE_AI_OCR_MODEL` | модель OCR — **свой адрес и модель**, не обязательно те же, что у выжимки |
+| `MAILSENSE_AI_API_KEY`, `_MULTIMODAL`, `_TIMEOUT_MS` | ключ, мультимодальность, таймаут ИИ |
+| `MAILSENSE_AI_OCR_MAX_PAGES`, `MAILSENSE_AI_TEXT_MAX_PAGES` | лимиты страниц PDF (рендер для OCR и текстовый слой) |
+| `MAILSENSE_MAILBOXES` | почтовые ящики JSON-массивом — развёртывание без захода в интерфейс |
+| `MAILSENSE_LDAP_URL` / `_BASE_DN` / `_LOGIN` / `_PASSWORD` | каталог (AD) из окружения |
+| `MAILSENSE_SERVICE_MAILBOX`, `MAILSENSE_EXTERNAL_MAILBOX` | роли служебных ящиков (внутренний, внешняя приёмная) по адресу |
+| `MAILSENSE_MAIL_HOST` / `_PORT` / `_USER` / `_PASS` | засев ОДНОГО тестового ящика (стенд) |
 | `MAILSENSE_SEED_ACCOUNT` | засевать ли дефолтный аккаунт |
 | `DOCFLOW_DATABASE_URL` | PostgreSQL документооборота; без неё СЭД выключена |
 | `MAILSENSE_DOCFLOW_URL` | режим клиента: адрес удалённого сервера |
 | `MAILSENSE_ADMIN_LOGINS` | кому выдать роль администратора (через запятую) |
 | `DOCFLOW_TEST_DATABASE_URL` | база для тестов СЭД |
 | `TZ` | часовой пояс предприятия — им определяется «сегодня» для сроков, журнала и напоминаний |
+
+⚠️ **Настройки из окружения применяются только к тому, чего ещё нет в базе.** Значения
+`MAILSENSE_LDAP_*`, `MAILSENSE_MAILBOXES`, `MAILSENSE_SERVICE_MAILBOX`/`MAILSENSE_EXTERNAL_MAILBOX`
+и `MAILSENSE_AI_*` заполняют настройки при первом запуске; заданное администратором в интерфейсе
+всегда важнее и перезапуском контейнера не отменяется. Пароли (каталога и ящиков) хранятся
+зашифрованными ключом из `data/`; ошибки засева не мешают старту — ищите в журнале строку
+«Засев из окружения». Подробности и пример `.env` — в `docs/deploy-guide.md`.
 
 ⚠️ **Часовой пояс задаёт день предприятия.** Если `TZ` не задан, берётся пояс хоста, а на сервере это
 часто UTC: тогда с 00:00 до 03:00 МСК вчерашний срок выглядит сегодняшним, а «Просрочено» приходит

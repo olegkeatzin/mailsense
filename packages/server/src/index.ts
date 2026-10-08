@@ -11,6 +11,7 @@ import {
 } from "@mailsense/docflow";
 import { createApp } from "./app.js";
 import { applyDocflowStartupPolicy } from "./docflowStartup.js";
+import { seedFromEnvironment } from "./envSeed.js";
 import type http from "node:http";
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -47,6 +48,12 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     // Автономный сервер: документооборот в PostgreSQL (DOCFLOW_DATABASE_URL),
     // почта при этом остаётся в локальной SQLite рядом, в каталоге данных.
     await initDocflowDb();
+    // Засев из окружения (T51): каталог и роли служебных ящиков. Ящики к этому моменту уже
+    // засеяны ядром (initApp выше), поэтому ящик можно найти по адресу.
+    // ⚠️ Хранилище настроек каталога ставим ПОСЛЕ засева: оно наполняет кэш ядра из базы,
+    // и значения из окружения должны попасть в него сразу, а не после перезапуска.
+    const seeded = await seedFromEnvironment({ env: process.env, mailboxSeed: init.mailboxSeed });
+    logger.info(seeded.summary);
     // Сервер становится владельцем настроек каталога: их задаёт предприятие,
     // пользователю остаётся ввести только свой логин и пароль.
     await installLdapSettingsStore();

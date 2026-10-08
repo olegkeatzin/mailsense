@@ -66,6 +66,13 @@ export class MailProfileInputError extends Error {}
 export function coreMockModule(): Record<string, unknown> {
   const module: Record<string, unknown> = {
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+    // Шифрование секретов: заглушка с тем же контрактом, что у ядра (T51 — пароль каталога).
+    getContext: jest.fn(() => ({
+      secrets: {
+        encrypt: (plain: string) => "ШИФР:" + plain,
+        decrypt: (cipher: string) => String(cipher).replace("ШИФР:", "")
+      }
+    })),
     getAllSettings: jest.fn(() => ({})),
     getSettingValue: jest.fn(() => null),
     getAiConfig: jest.fn(() => ({})),
@@ -93,6 +100,8 @@ export function coreMockModule(): Record<string, unknown> {
       }
     ]),
     listAttachments: jest.fn(() => []),
+    // Поиск ящика по адресу (T50): в ядре сравнение в JS, регистр и пробелы не важны.
+    getAccountByUsername: jest.fn(() => null),
     getEmailView: jest.fn(() => null),
     listEmailsWithAnalysis: jest.fn(() => []),
     listThreadsGrouped: jest.fn(() => []),
@@ -179,6 +188,7 @@ export function docflowMockModule(): Record<string, unknown> {
     setDocflowEnabled: jest.fn(async () => undefined),
     // Настройки документооборота: свежая база — строки ещё нет (null).
     getSetting: jest.fn(async () => null),
+    setSetting: jest.fn(async () => undefined),
     SETTING_DOCFLOW_ENABLED: "docflow.enabled",
     login: stub({ token: "t", user: null, expiresAt: null }),
     logout: stub(undefined),
@@ -351,6 +361,9 @@ export function docflowMockModule(): Record<string, unknown> {
 
     // Р12: служебный ящик отправки. explicit = «администратор выбор делал» (в т.ч. снял).
     getServiceAccountState: jest.fn(async () => ({ explicit: false, accountId: null })),
+    // Ключи настроек ролей служебных ящиков (T25/T51) — те же строки, что в docflow.
+    SERVICE_ACCOUNT_SETTING: "docflow.serviceAccountId",
+    EXTERNAL_ACCOUNT_SETTING: "docflow.externalAccountId",
     getExternalAccountState: jest.fn(async () => ({ explicit: false, accountId: null })),
     getServiceAccountId: jest.fn(async () => null),
     getExternalAccountId: jest.fn(async () => null),

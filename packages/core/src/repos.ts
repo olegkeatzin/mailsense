@@ -95,6 +95,25 @@ export function getAccount(id: string): Account | null {
   return row ? mapAccount(row) : null;
 }
 
+/**
+ * Ящик по адресу (username), регистр и краевые пробелы не важны.
+ * Нужен серверу, чтобы назначать служебные роли по адресу ящика.
+ *
+ * ⚠️ Сравниваем в JS, а не через SQL lower(): в SQLite lower() работает только по ASCII
+ * (rules §5.6) — на кириллице такой поиск молча не нашёл бы ящик. Ящиков в базе единицы,
+ * поэтому перебор дешевле правильности.
+ */
+export function getAccountByUsername(username: string): Account | null {
+  const wanted = (username ?? "").trim().toLowerCase();
+  if (!wanted) return null;
+  const row = getDb()
+    .select()
+    .from(accounts)
+    .all()
+    .find((r) => r.username.trim().toLowerCase() === wanted);
+  return row ? mapAccount(row) : null;
+}
+
 export function countAccounts(): number {
   return getDb().select().from(accounts).all().length;
 }

@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.js";
+import { loadConfig, parseMailboxes } from "./config.js";
 
 /**
  * Конфигурация читается из окружения один раз при старте. Ошибка здесь тихо
@@ -20,6 +20,7 @@ const KEYS = [
   "MAILSENSE_MAIL_HOST",
   "MAILSENSE_MAIL_PORT",
   "MAILSENSE_SEED_ACCOUNT",
+  "MAILSENSE_MAILBOXES",
   "MAILSENSE_DOCFLOW_URL"
 ];
 
@@ -67,6 +68,122 @@ describe("OCR-источник и OCR-модель из окружения", () 
   test("пробелы вокруг значения обрезаются", () => {
     process.env.MAILSENSE_AI_OCR_MODEL = "  glm-ocr  ";
     expect(loadConfig().ai.ocrModel).toBe("glm-ocr");
+  });
+});
+
+describe("ящики из MAILSENSE_MAILBOXES", () => {
+  test("нормальный список читается целиком", () => {
+    const r = parseMailboxes(
+      JSON.stringify([
+        {
+          username: "post@mail.test",
+          password: "secret",
+          protocol: "imap",
+          host: "mail.test",
+          port: 993,
+          tls: true,
+          smtpHost: "mail.test",
+          smtpPort: 465,
+          smtpTls: true
+        },
+        { username: "pop3@mail.test", password: "p2", protocol: "pop3", host: "mail.test", port: 995, tls: true }
+      ])
+    );
+
+    expect(r.errors).toEqual([]);
+    expect(r.mailboxes).toHaveLength(2);
+    expect(r.mailboxes[0]).toMatchObject({
+      username: "post@mail.test",
+      password: "secret",
+      protocol: "imap",
+      host: "mail.test",
+      port: 993,
+      tls: "ssl",
+      smtpHost: "mail.test",
+      smtpPort: 465,
+      smtpTls: "ssl",
+      authType: "login"
+    });
+    expect(r.mailboxes[1]).toMatchObject({ protocol: "pop3", tls: "ssl" });
+  });
+
+  test("tls принимает и булево, и строку режима", () => {
+    const r = parseMailboxes(
+      JSON.stringify([
+        { username: "a@mail.test", password: "p", protocol: "imap", host: "h", port: 143, tls: false },
+        { username: "b@mail.test", password: "p", protocol: "imap", host: "h", port: 587, tls: "starttls" }
+      ])
+    );
+    expect(r.errors).toEqual([]);
+    expect(r.mailboxes[0].tls).toBe("none");
+    expect(r.mailboxes[1].tls).toBe("starttls");
+  });
+
+  test("пустая переменная — это «списка нет», а не ошибка", () => {
+    expect(parseMailboxes(undefined)).toEqual({ mailboxes: [], errors: [], warnings: [] });
+    expect(parseMailboxes("   ")).toEqual({ mailboxes: [], errors: [], warnings: [] });
+  });
+
+  test("неизвестное поле — предупреждение, а не отказ: ящик остаётся", () => {
+    // Опечатка (smtpPortt) иначе тихо не применилась бы, и человек искал бы причину в другом месте.
+    const r = parseMailboxes(
+      JSON.stringify([
+        {
+          username: "post@mail.test",
+          password: "p",
+          protocol: "imap",
+          host: "h",
+          port: 993,
+          tls: true,
+          smtpPortt: 465,
+          bcc: "x"
+        }
+      ])
+    );
+
+    expect(r.errors).toEqual([]);
+    expect(r.mailboxes).toHaveLength(1);
+    expect(r.mailboxes[0].username).toBe("post@mail.test");
+    expect(r.warnings).toEqual(["ящик #1 (post@mail.test): неизвестные поля bcc, smtpPortt — пропущены"]);
+  });
+
+  test("у нормального ящика предупреждений нет", () => {
+    const r = parseMailboxes(
+      JSON.stringify([{ username: "post@mail.test", password: "p", protocol: "imap", host: "h", port: 993, tls: true }])
+    );
+    expect(r.warnings).toEqual([]);
+  });
+
+  test("битый JSON — одна понятная ошибка, а не падение", () => {
+    const r = parseMailboxes("[{это не json");
+    expect(r.mailboxes).toEqual([]);
+    expect(r.errors).toHaveLength(1);
+    expect(r.errors[0]).toContain("JSON");
+  });
+
+  test("JSON не массив — ошибка", () => {
+    const r = parseMailboxes('{"username": "a@mail.test"}');
+    expect(r.mailboxes).toEqual([]);
+    expect(r.errors[0]).toContain("массив");
+  });
+
+  test("плохой элемент пропускается, остальные остаются", () => {
+    const r = parseMailboxes(
+      JSON.stringify([
+        { username: "ok@mail.test", password: "p", protocol: "imap", host: "h", port: 993, tls: true },
+        { username: "", password: "p", protocol: "imap", host: "h", port: 993, tls: true },
+        { username: "bad-proto@mail.test", password: "p", protocol: "smtp", host: "h", port: 993, tls: true },
+        { username: "bad-port@mail.test", password: "p", protocol: "imap", host: "h", port: "993", tls: true },
+        { username: "no-host@mail.test", password: "p", protocol: "imap", port: 993, tls: true },
+        "просто строка"
+      ])
+    );
+
+    expect(r.mailboxes.map((m) => m.username)).toEqual(["ok@mail.test"]);
+    expect(r.errors).toHaveLength(5);
+    // В причинах видно, какой именно ящик пропущен (по номеру в списке или по адресу).
+    expect(r.errors.join(" ")).toContain("протокол");
+    expect(r.errors.join(" ")).toContain("порт");
   });
 });
 
