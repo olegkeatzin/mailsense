@@ -64,10 +64,12 @@ typecheck: ## Проверка типов SPA
 package-linux: build ## Собрать .deb (Linux)
 	cd apps/electron && $(PNPM) dist:linux
 
-package-deb: build ## Собрать .deb (Linux)
+package-deb: build ## Собрать .deb (Linux); адрес сервера: make package-deb SERVER_URL=http://…
+	cd apps/electron && node scripts/make-server-json.mjs "$(SERVER_URL)"
 	cd apps/electron && $(PNPM) dist:deb
 
-package-win: build ## Собрать Windows zip
+package-win: build ## Собрать Windows zip; адрес сервера: make package-win SERVER_URL=http://mail.example.local:8123
+	cd apps/electron && node scripts/make-server-json.mjs "$(SERVER_URL)"
 	cd apps/electron && $(PNPM) dist:win
 
 package-win-exe: build ## Собрать Windows portable .exe (один файл, без установки)

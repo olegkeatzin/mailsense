@@ -1,0 +1,2 @@
+# Файл адреса сервера генерируется при сборке комплекта (make package-win SERVER_URL=…)
+server.json

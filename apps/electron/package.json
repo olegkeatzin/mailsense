@@ -11,6 +11,7 @@
     "build": "tsup",
     "start": "electron .",
     "dist": "electron-builder",
+    "server-json": "node scripts/make-server-json.mjs",
     "dist:linux": "electron-builder --linux",
     "dist:deb": "electron-builder --linux deb",
     "dist:win": "electron-builder --win",
@@ -61,6 +62,12 @@
     "files": [
       "dist/**/*",
       "package.json"
+    ],
+    "extraFiles": [
+      {
+        "from": "build-extra",
+        "to": "."
+      }
     ],
     "extraResources": [
       {
