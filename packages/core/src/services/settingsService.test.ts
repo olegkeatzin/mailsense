@@ -107,6 +107,16 @@ describe("OCR-модель", () => {
     expect(ocr.model).toBe("glm-ocr");
   });
 
+  test("ни окружения, ни настройки — падаем на основную модель и адрес", () => {
+    // В этом стенде конфиг без MAILSENSE_AI_OCR_*: getAiConfig отдаёт undefined,
+    // а getOcrConfig уходит на основную модель — прежнее поведение сохранено.
+    expect(getAiConfig().ocrBaseUrl).toBeUndefined();
+    expect(getAiConfig().ocrModel).toBeUndefined();
+    const ocr = getOcrConfig();
+    expect(ocr.baseUrl).toBe("http://config.test/v1");
+    expect(ocr.model).toBe("cfg-model");
+  });
+
   test("модель OCR может быть своей при общем адресе", () => {
     setAiConfig({ baseUrl: "http://main.test/v1", model: "main-model", ocrBaseUrl: "", ocrModel: "glm-ocr" });
     const ocr = getOcrConfig();

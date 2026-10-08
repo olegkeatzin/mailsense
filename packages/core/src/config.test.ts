@@ -13,6 +13,8 @@ const KEYS = [
   "MAILSENSE_AI_MODEL",
   "MAILSENSE_AI_MULTIMODAL",
   "MAILSENSE_AI_TIMEOUT_MS",
+  "MAILSENSE_AI_OCR_BASE_URL",
+  "MAILSENSE_AI_OCR_MODEL",
   "MAILSENSE_MAIL_USER",
   "MAILSENSE_MAIL_PASS",
   "MAILSENSE_MAIL_HOST",
@@ -36,6 +38,36 @@ afterAll(() => {
     if (saved[k] === undefined) delete process.env[k];
     else process.env[k] = saved[k];
   }
+});
+
+describe("OCR-источник и OCR-модель из окружения", () => {
+  test("переменные подхватываются", () => {
+    process.env.MAILSENSE_AI_OCR_BASE_URL = "http://100.74.62.22:3010/v1";
+    process.env.MAILSENSE_AI_OCR_MODEL = "glm-ocr";
+
+    const ai = loadConfig().ai;
+    expect(ai.ocrBaseUrl).toBe("http://100.74.62.22:3010/v1");
+    expect(ai.ocrModel).toBe("glm-ocr");
+  });
+
+  test("без переменных — undefined, а не пустая строка", () => {
+    const ai = loadConfig().ai;
+    expect(ai.ocrBaseUrl).toBeUndefined();
+    expect(ai.ocrModel).toBeUndefined();
+  });
+
+  test("пустая переменная или одни пробелы = «не задано»", () => {
+    process.env.MAILSENSE_AI_OCR_BASE_URL = "";
+    process.env.MAILSENSE_AI_OCR_MODEL = "   ";
+    const ai = loadConfig().ai;
+    expect(ai.ocrBaseUrl).toBeUndefined();
+    expect(ai.ocrModel).toBeUndefined();
+  });
+
+  test("пробелы вокруг значения обрезаются", () => {
+    process.env.MAILSENSE_AI_OCR_MODEL = "  glm-ocr  ";
+    expect(loadConfig().ai.ocrModel).toBe("glm-ocr");
+  });
 });
 
 describe("значения по умолчанию", () => {

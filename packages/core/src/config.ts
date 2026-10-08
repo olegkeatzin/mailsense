@@ -101,7 +101,11 @@ export function loadConfig(): Config {
       multimodal: env("MAILSENSE_AI_MULTIMODAL", "true") === "true",
       timeoutMs: Number(env("MAILSENSE_AI_TIMEOUT_MS", "120000")),
       ocrMaxPages: Number(env("MAILSENSE_AI_OCR_MAX_PAGES", String(DEFAULT_OCR_MAX_PAGES))),
-      textMaxPages: Number(env("MAILSENSE_AI_TEXT_MAX_PAGES", String(DEFAULT_TEXT_MAX_PAGES)))
+      textMaxPages: Number(env("MAILSENSE_AI_TEXT_MAX_PAGES", String(DEFAULT_TEXT_MAX_PAGES))),
+      // OCR может жить на ДРУГОМ сервере, чем выжимка: в контейнере интерфейса нет,
+      // поэтому источник и модель задаются переменными. Пусто = «не задано» (не пустая строка).
+      ocrBaseUrl: env("MAILSENSE_AI_OCR_BASE_URL", "").trim() || undefined,
+      ocrModel: env("MAILSENSE_AI_OCR_MODEL", "").trim() || undefined
     },
     defaultAccount,
     seedAccount: env("MAILSENSE_SEED_ACCOUNT", "false") === "true",

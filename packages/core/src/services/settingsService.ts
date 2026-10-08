@@ -3,6 +3,15 @@ import { getContext } from "../context.js";
 import { getSetting, setSetting, listSettings } from "../repos.js";
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_USER_TEMPLATE } from "../ai/prompt.js";
 
+/**
+ * Пустая строка (в том числе из одних пробелов) — это «не задано».
+ * Нужно, чтобы пустая переменная окружения не перебивала fallback на основную модель.
+ */
+function nonEmpty(value: string | null | undefined): string | undefined {
+  const trimmed = (value ?? "").trim();
+  return trimmed || undefined;
+}
+
 export function getAiConfig(): AiConfig {
   const base = getContext().config.ai;
   return {
@@ -11,8 +20,11 @@ export function getAiConfig(): AiConfig {
     model: getSetting("ai.model") ?? base.model,
     multimodal: (getSetting("ai.multimodal") ?? String(base.multimodal)) === "true",
     timeoutMs: base.timeoutMs,
-    ocrBaseUrl: getSetting("ai.ocrBaseUrl") ?? undefined,
-    ocrModel: getSetting("ai.ocrModel") ?? undefined,
+    // Приоритет: настройка в базе (админ поменял через интерфейс) → переменная окружения →
+    // пусто, и тогда getOcrConfig уходит на основную модель и адрес. Пустое значение
+    // (в том числе из пробелов) — это «не задано», а не заданный пустой адрес.
+    ocrBaseUrl: nonEmpty(getSetting("ai.ocrBaseUrl")) ?? nonEmpty(base.ocrBaseUrl),
+    ocrModel: nonEmpty(getSetting("ai.ocrModel")) ?? nonEmpty(base.ocrModel),
     concurrency: Number(getSetting("ai.concurrency") ?? "1"),
     ocrConcurrency: Number(getSetting("ai.ocrConcurrency") ?? "3"),
     ocrMaxPages: readPageLimit(
