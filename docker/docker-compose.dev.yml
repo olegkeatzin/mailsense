@@ -4,6 +4,9 @@
 #
 #   make pg        # поднять
 #   docker compose -f docker/docker-compose.dev.yml down    # остановить
+# Имя проекта своё: иначе «down» на боевом compose останавливал бы и эту базу разработки,
+# потому что оба файла лежат в одном каталоге и по умолчанию получают общее имя проекта.
+name: mailsense-dev
 services:
   postgres:
     image: postgres:16-alpine
