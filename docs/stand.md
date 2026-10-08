@@ -102,6 +102,11 @@ DOCFLOW_DATABASE_URL=postgres://mailsense:testpass@127.0.0.1:55432/mailsense MAI
 | `users.manage` / `settings.manage` / `audit.view` | да | — | — | — | — |
 | `notifications.view` | да | да | да | да | да |
 
+⚠️ Не все логины из таблицы есть в каталоге AD: там заведены только `test`, `user2`, `partner`,
+`Иванов_ИИ` и `Петрова_МА` (у остальных четырёх ящиков ролей нет). `admin-extra-1`,
+`admin-extra-2`, `ivanov@test.local`, `noauto@test.local`, `Petrov` и `Новый_Логин` живут только в
+базе документооборота. Что именно лежит в каталоге — раздел 5.1.
+
 ---
 
 ## 4. Почтовые учётки стенда
@@ -138,6 +143,146 @@ DOCFLOW_DATABASE_URL=postgres://mailsense:testpass@127.0.0.1:55432/mailsense MAI
 | ИИ OCR | `http://100.74.62.22:3010/v1`, `glm-ocr` |
 | Лимиты PDF | OCR 10 страниц, текстовый слой 20 (настраиваются: `ai.ocrMaxPages`, `ai.textMaxPages`) |
 | Часовой пояс | задаётся `TZ` процесса; «сегодня» для сроков и журнала считается по нему |
+
+### 5.1 Что лежит в каталоге: снимок живого LDAP (2026-10-08)
+
+Каталог стенда — **Samba AD DC** домена `stand.test` (realm `STAND.TEST`), заведённый только как
+справочник/адресная книга и способ входа. Он **не** хранит ни роли СЭД, ни почтовые пароли, ни
+кадровые поля. Снимок ниже снят прямым LDAPS-bind'ом сервисной учёткой (`ldap-bind@stand.test`),
+то есть это ровно то, что видит приложение. Данные каталога живут в docker-томе `stand-ldap-samba`
+и переживают пересоздание контейнера. Отвечают все три порта: LDAP 389, LDAPS 636, Global Catalog
+3268 (проверено bind'ом).
+
+**Состав домена** (обход всего поддерева `DC=stand,DC=test`):
+
+| Что | Количество | Комментарий |
+|---|---|---|
+| Всего объектов | 277 | включая служебные разделы, DNS-узлы и встроенные группы |
+| Учётные записи (`objectClass=user`) | 14 | 9 «людей» + `ldap-bind` + `Administrator`, `krbtgt`, `Guest` + учётка компьютера `DC$` |
+| Группы (`objectClass=group`) | 37 | все встроенные AD; ни одной группы подразделения |
+| Компьютеры (`objectClass=computer`) | 1 | контроллер домена `CN=DC,OU=Domain Controllers` |
+| Подразделения (`objectClass=organizationalUnit`) | 2 | `OU=KNIITMU` (люди) и `OU=Domain Controllers` |
+| Контейнеры (`objectClass=container`) | 123 | `CN=Users`, `CN=Builtin`, `CN=System` и прочая структура AD |
+
+**Структура** (важна для Base DN: от корня домена AD отдаёт referrals, а не результат):
+
+```
+DC=stand,DC=test
+├── OU=KNIITMU                        ← база поиска приложения: здесь все «люди»
+│   ├── CN=Test Mail Test             test
+│   ├── CN=User Two Mail Test         user2
+│   ├── CN=Kolobok Mail Test          kolobok
+│   ├── CN=Partner Mail Test          partner
+│   ├── CN=Client Mail Test           client
+│   ├── CN=Supplier Mail Test         supplier
+│   ├── CN=Support Mail Test          support
+│   ├── CN=Иван Иванов                Иванов_ИИ
+│   └── CN=Мария Петрова              Петрова_МА
+├── CN=Users                          ← встроенные учётки + сервисный bind приложения
+│   ├── CN=ldap-bind                  (description: «LDAP bind for mail.test»)
+│   └── CN=Administrator, CN=krbtgt, CN=Guest
+├── OU=Domain Controllers → CN=DC      ← сам контроллер домена (dc.stand.test)
+└── CN=Builtin, CN=System, CN=Configuration, CN=Schema, DC=DomainDnsZones, DC=ForestDnsZones
+```
+
+Разделы `CN=Configuration`, `CN=Schema`, `DC=DomainDnsZones` — служебные, приложению не нужны.
+
+**«Люди» в `OU=KNIITMU`** — девять учёток; логин — UPN, адрес ящика — в атрибуте `mail`:
+
+| sAMAccountName | UPN (логин) | mail | cn / displayName | givenName, sn |
+|---|---|---|---|---|
+| `test` | `test@stand.test` | `test@mail.test` | Test Mail Test | Test, Mail Test |
+| `user2` | `user2@stand.test` | `user2@mail.test` | User Two Mail Test | User Two, Mail Test |
+| `kolobok` | `kolobok@stand.test` | `kolobok@mail.test` | Kolobok Mail Test | Kolobok, Mail Test |
+| `partner` | `partner@stand.test` | `partner@mail.test` | Partner Mail Test | Partner, Mail Test |
+| `client` | `client@stand.test` | `client@mail.test` | Client Mail Test | Client, Mail Test |
+| `supplier` | `supplier@stand.test` | `supplier@mail.test` | Supplier Mail Test | Supplier, Mail Test |
+| `support` | `support@stand.test` | `support@mail.test` | Support Mail Test | Support, Mail Test |
+| `Иванов_ИИ` | `Иванов_ИИ@stand.test` | `ivanov_ii@mail.test` | Иван Иванов | Иван, Иванов |
+| `Петрова_МА` | `Петрова_МА@stand.test` | `petrova_ma@mail.test` | Мария Петрова | Мария, Петрова |
+
+Как и на проде, `sAMAccountName`/UPN — кириллицей, `mail` — латиницей (см. `test mail/ldap/seed.sh`).
+Пароли домена — в `test mail/README.md`; у `Иванов_ИИ` и `Петрова_МА` они **специально другие**, чем
+почтовые (`IvanovPass123!` и `PetrovaPass123!` против `IvanovMail456!` и `PetrovaMail456!`), — чтобы
+разделение «почтовая учётка ≠ доменная» было видно. У остальных семи доменный пароль совпадает с
+почтовым.
+
+**Служебные и встроенные учётки:**
+
+| DN | sAMAccountName | Пароль | Что это |
+|---|---|---|---|
+| `CN=ldap-bind,CN=Users` | `ldap-bind` | `LdapBind123!` | Сервисная bind-учётка приложения (UPN `ldap-bind@stand.test`, `mail` не заполнен) |
+| `CN=Administrator,CN=Users` | `Administrator` | `AsupAdmin123!` | Администратор домена из `docker-compose.yml` (UPN не заполнен, но bind `Administrator@stand.test` проходит) |
+| `CN=krbtgt,CN=Users` | `krbtgt` | — | Служебная учётка центра выдачи билетов Kerberos |
+| `CN=Guest,CN=Users` | `Guest` | — | Встроенный гость, **отключён** (`userAccountControl` = 66082) |
+| `CN=DC,OU=Domain Controllers` | `DC$` | — | Учётка компьютера контроллера домена |
+
+**Что заполнено, а что пусто.** У «людей» заполнены `cn`, `sn`, `givenName`, `displayName`,
+`sAMAccountName`, `userPrincipalName`, `mail`, `distinguishedName`, `objectClass`/`objectCategory`,
+`objectGUID`, `objectSid`, `name`, `primaryGroupID`, `userAccountControl`, `pwdLastSet`,
+`accountExpires`, `whenCreated`/`whenChanged` и счётчики входов (`lastLogon`, `logonCount`).
+**Кадровых полей в каталоге стенда нет**: `title`, `department`, `telephoneNumber`, `manager`,
+`company` не заполнены ни у кого. Поэтому в базе СЭД у этих сотрудников пустые `department`,
+`position` и `phone`, а адресная книга показывает только ФИО и адрес.
+
+**Признаки учётных записей.** У всех девяти: `userAccountControl` = 66048 (`NORMAL_ACCOUNT` +
+`DONT_EXPIRE_PASSWORD` — учётка включена, пароль бессрочный), `accountExpires` = 0 (срок не
+ограничен), `primaryGroupID` = 513 (`Domain Users`), `pwdLastSet` = 29.09.2026 (момент заведения).
+Атрибут `memberOf` **пуст у всех**: в явных группах AD никто не состоит, и права приложение по
+группам каталога не выдаёт — роли лежат в базе документооборота (раздел 3).
+
+**Группы.** 37 групп, все встроенные AD (`Domain Admins`, `Enterprise Admins`, `Schema Admins`,
+`Administrators`, `Users`, `Guests`, …). Явные участники есть только у 11 групп, и это
+`Administrator`, `Guest` и служебные SID-ы. Групп вида «аппарат / руководители / исполнители» в
+каталоге нет.
+
+**Способы входа** (проверено на живом каталоге):
+
+| Что пробуем | Результат |
+|---|---|
+| `ldap-bind@stand.test` / `LdapBind123!` (UPN) | ок — так ходит приложение |
+| `CN=ldap-bind,CN=Users,DC=stand,DC=test` + пароль (DN) | ок |
+| `test@stand.test` / `Test1234!` | ок |
+| `STAND\test` + пароль (NetBIOS-домен) | ок |
+| `Петрова_МА@stand.test` / `PetrovaPass123!` (кириллица в UPN) | ок |
+| `Administrator@stand.test` / `AsupAdmin123!` | ок (UPN у записи пуст, Samba сопоставляет по имени) |
+| `test@mail.test` (адрес ящика вместо доменного логина) | 49 invalidCredentials — **по почтовому адресу в домен не пускают** |
+| неверный пароль | 49 invalidCredentials |
+| пустые логин/пароль (анонимно) | bind проходит, но поиск отклоняется (rc=1) — без bind каталог не читается |
+| сертификат LDAPS | самоподписанный Samba (`CN=DC.stand.test`, без SAN, годен до 29.08.2028) → нужен `rejectUnauthorized=false` |
+
+**Чего в каталоге нет.** Учётки из раздела 3, которые заведены **не** в AD, а в базе СЭД:
+`admin-extra-1`, `admin-extra-2` (`source=manual`), `ivanov@test.local`, `noauto@test.local`
+(`source=local`), а также `Petrov@test.local` и `Новый_Логин@test.local` (`source=ldap`, но в
+каталоге их нет — их создали сценарии/API). Ролей, прав, блокировок и почтовых паролей в LDAP тоже
+нет: почта входит по своей базе (`postfix-accounts.cf`).
+
+**Как приложение ходит в каталог** (значения — из базы стенда на 2026-10-08):
+
+| Настройка / поведение | Значение |
+|---|---|
+| `ldap.enabled` / `ldap.url` | `true` / `ldaps://127.0.0.1:636` |
+| `ldap.baseDn` | `OU=KNIITMU,DC=stand,DC=test` |
+| Bind | `ldap.login` = `ldap-bind@stand.test`, пароль зашифрован (`ldap.passwordEncrypted`, ключ `packages/server/data/secret.key`) |
+| Формат входа | `ldap.loginFormat=upn`, `ldap.upnSuffix=@stand.test`; `ldap.netbiosDomain=ASUP` — наследие прода, при UPN-формате не используется |
+| Фильтр | `ldap.userFilter` пуст → встроенный `(&(objectCategory=person)(objectClass=user)(mail=*)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))`; под `OU=KNIITMU` это ровно те 9 человек |
+| Что читает | вход: `sAMAccountName`, UPN, `mail`, `cn`/`displayName`, `title`, `department`, `telephoneNumber`, `manager`, `distinguishedName`; адресная книга: `displayName`, `mail`, `sAMAccountName`, `cn`, `title`, `department`, `telephoneNumber` |
+| Когда читает | при каждом входе (bind для проверки пароля + профиль в `users`), по синхронизации справочника (`POST /api/users/sync`), при поиске в адресной книге |
+| Кэш | таблица `contacts` в `packages/server/data/mailsense.sqlite`; на стенде в ней 3 записи, обновляется при поиске и полной выгрузке каталога |
+| Предел подсказок | настройка `ldap.sizeLimit=25`, но фактический предел задаёт запрос `/api/contacts/search?limit=` (по умолчанию 25, максимум 50) |
+
+**Проверить самому** (в обычной консоли: в песочнице DSH доступ к docker закрыт):
+
+```bash
+# все учётки домена — та же команда, что в test mail/ldap/seed.sh
+docker exec ldap samba-tool user list -H ldap://127.0.0.1 -U 'Administrator%AsupAdmin123!'
+
+# что именно лежит в OU=KNIITMU (ldbsearch есть внутри контейнера — им же проверяется healthcheck)
+docker exec ldap ldbsearch -H /var/lib/samba/private/sam.ldb -b 'OU=KNIITMU,DC=stand,DC=test' '(objectClass=user)'
+
+# полный прогон проверок каталога и модели «почта ≠ домен» (из папки test mail)
+python3 test_ldap.py
+```
 
 ---
 
@@ -225,6 +370,8 @@ curl -X PUT http://127.0.0.1:8123/api/docflow/settings \
 | `ECONNREFUSED 127.0.0.1:55432` | Не поднята база стенда: `make pg` (или `docker compose -f docker/docker-compose.dev.yml up -d`) |
 | Порт 8123 занят | Уже запущен другой экземпляр: найти и остановить (`netstat -ano | findstr :8123`) |
 | Вход отвечает 400 | Документооборот выключен: `PUT /api/docflow/settings {"enabled":true}` (или настройка `docflow.enabled`) |
+| Вход отвечает «Неверный логин или пароль» | Доменная учётка ≠ почтовая: логин — UPN (`test@stand.test`), пароль — доменный. По адресу ящика (`test@mail.test`) каталог не пускает (49 invalidCredentials) — раздел 5.1 |
+| Каталог не отвечает | Проверить контейнер `ldap` (`docker logs ldap --tail 20`) и порты 389/636/3268; URL, Base DN и bind-учётка — в разделе 5.1 |
 | Почта пустая у аппарата | Не назначены/не настроены служебные ящики; скан запускает аппарат |
 | Нет прав в интерфейсе | Роль не выдана в базе: проверить `user_roles`; админ получает роль по `MAILSENSE_ADMIN_LOGINS` при первом входе |
 | Даты сроков «сдвинуты» | Проверить `TZ` процесса и часовой пояс машины |
