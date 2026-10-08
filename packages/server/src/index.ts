@@ -10,6 +10,7 @@ import {
   seedLocalAdmin
 } from "@mailsense/docflow";
 import { createApp } from "./app.js";
+import { applyDocflowStartupPolicy } from "./docflowStartup.js";
 import type http from "node:http";
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -52,6 +53,12 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     try {
       await cleanupSessions();
       await seedLocalAdmin();
+      // T48: серверное развёртывание — это развёртывание СЭД. На свежей базе включаем её сами,
+      // иначе вход администратора не работает, а API остаётся открытым (тупик первичной настройки).
+      await applyDocflowStartupPolicy({
+        serverDatabase: true,
+        envValue: process.env.MAILSENSE_DOCFLOW_ENABLED
+      });
     } catch (err) {
       logger.warn({ err: (err as Error).message }, "Не удалось инициализировать документооборот");
     }
@@ -67,6 +74,12 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
       );
   } else {
     // База документооборота не задана — приложение работает как почтовый клиент.
+    // Политику всё равно зовём: если оператор задал MAILSENSE_DOCFLOW_ENABLED, он должен
+    // увидеть в журнале, что переменная здесь не действует, а не гадать.
+    await applyDocflowStartupPolicy({
+      serverDatabase: false,
+      envValue: process.env.MAILSENSE_DOCFLOW_ENABLED
+    });
     logger.info(
       "Документооборот не настроен (нет DOCFLOW_DATABASE_URL) — приложение работает как почтовый клиент"
     );

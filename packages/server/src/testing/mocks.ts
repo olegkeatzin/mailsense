@@ -176,7 +176,10 @@ export function docflowMockModule(): Record<string, unknown> {
     ),
     sessionTtlHours: stub(24),
     authStatus: stub({ enabled: true }),
-    setDocflowEnabled: stub(undefined),
+    setDocflowEnabled: jest.fn(async () => undefined),
+    // Настройки документооборота: свежая база — строки ещё нет (null).
+    getSetting: jest.fn(async () => null),
+    SETTING_DOCFLOW_ENABLED: "docflow.enabled",
     login: stub({ token: "t", user: null, expiresAt: null }),
     logout: stub(undefined),
 
