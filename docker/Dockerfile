@@ -24,6 +24,8 @@ COPY packages/server/package.json packages/server/
 COPY packages/web/package.json packages/web/
 COPY apps/electron/package.json apps/electron/
 # Electron для серверного образа не нужен: ставим только нужные пакеты.
+# Порядок важен: сначала манифесты и зависимости, потом исходники. Если .dockerignore начнёт
+# пропускать packages/*/node_modules, COPY перетрёт установленное и сборка упадёт на tsup.
 RUN pnpm install --frozen-lockfile --filter @mailsense/core --filter @mailsense/docflow --filter @mailsense/server --filter @mailsense/web
 
 COPY packages ./packages

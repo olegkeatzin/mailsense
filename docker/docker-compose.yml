@@ -16,7 +16,10 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-mailsense}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в .env}
     volumes:
-      - mailsense-pg:/var/lib/postgresql/data
+      # Данные базы — ОБЫЧНАЯ ПАПКА НА ХОСТЕ, а не том внутри Docker: администратору нужно
+      # видеть размер, класть рядом бэкапы и уметь скопировать каталог. Путь меняется через
+      # POSTGRES_DATA_PATH в .env (по умолчанию docker/pgdata).
+      - ${POSTGRES_DATA_PATH:-./pgdata}:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-mailsense} -d ${POSTGRES_DB:-mailsense}"]
       interval: 10s
@@ -37,7 +40,15 @@ services:
     ports:
       - "8123:8123"
     volumes:
-      - mailsense-data:/data
+      # Почтовая база SQLite, вложения, ключ шифрования и логи — тоже папка на хосте
+      # (MAILSENSE_DATA_PATH в .env, по умолчанию docker/data). Бэкап = копирование каталога.
+      - ${MAILSENSE_DATA_PATH:-./data}:/data
+      # Логи контейнера не растут бесконечно: 10 МБ × 5 файлов.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     environment:
       # Документооборот живёт в PostgreSQL; в /data остаются почтовая база,
       # вложения, ключ шифрования и логи.

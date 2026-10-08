@@ -1,0 +1,16 @@
+# Эффективный файл исключений для сборки серверного образа.
+# ⚠️ Контекст сборки — КОРЕНЬ репозитория (см. docker/docker-compose.yml: context: ..),
+# поэтому Docker читает ЭТОТ файл, а не docker/.dockerignore.
+# Без него в образ попадали хостовые node_modules/dist и перетирали установленные внутри:
+# сборка падала на «Cannot find module .../packages/core/node_modules/tsup/dist/cli-default.js».
+# Проверено сборкой образа.
+**/node_modules
+**/node_modules/**
+**/dist
+**/dist/**
+**/release
+**/release/**
+**/.git
+**/.git/**
+**/*.log
+data

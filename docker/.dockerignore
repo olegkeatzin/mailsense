@@ -1,5 +1,13 @@
+# ВАЖНО: исключать надо и каталог, и его содержимое.
+# Одного **/node_modules недостаточно: BuildKit копировал хостовые packages/*/node_modules,
+# перетирая те, что поставил pnpm внутри образа, и сборка падала на «Cannot find module
+# packages/core/node_modules/tsup/dist/cli-default.js». Проверено сборкой образа.
 **/node_modules
+**/node_modules/**
 **/dist
+**/dist/**
 **/release
+**/release/**
 **/.git
+**/.git/**
 data
