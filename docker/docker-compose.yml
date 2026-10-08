@@ -86,6 +86,9 @@ services:
       # заданное администратором в интерфейсе всегда важнее и перезапуском не отменяется.
       #   MAILSENSE_LDAP_URL=ldaps://srv-dc01.enterprise.local:636
       #   MAILSENSE_LDAP_BASE_DN=DC=enterprise,DC=local
+      # Логин и пароль каталога — это СЛУЖЕБНАЯ (bind) учётная запись, от имени которой приложение
+      # читает Active Directory (поиск сотрудников для исполнителей, адресная книга), а НЕ учётки
+      # работников: работники входят своими доменными учётками, и они нигде не сохраняются.
       #   MAILSENSE_LDAP_LOGIN=ldap-bind@enterprise.local
       #   MAILSENSE_LDAP_PASSWORD=…
       # Ящики — JSON-массивом (protocol: imap или pop3; tls: true/false или none/ssl/starttls):

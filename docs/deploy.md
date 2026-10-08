@@ -13,7 +13,8 @@
 | `MAILSENSE_AI_API_KEY`, `_MULTIMODAL`, `_TIMEOUT_MS` | ключ, мультимодальность, таймаут ИИ |
 | `MAILSENSE_AI_OCR_MAX_PAGES`, `MAILSENSE_AI_TEXT_MAX_PAGES` | лимиты страниц PDF (рендер для OCR и текстовый слой) |
 | `MAILSENSE_MAILBOXES` | почтовые ящики JSON-массивом — развёртывание без захода в интерфейс |
-| `MAILSENSE_LDAP_URL` / `_BASE_DN` / `_LOGIN` / `_PASSWORD` | каталог (AD) из окружения |
+| `MAILSENSE_LDAP_URL` / `_BASE_DN` | адрес и база поиска каталога (AD) |
+| `MAILSENSE_LDAP_LOGIN` / `_PASSWORD` | **служебная** учётная запись для чтения каталога (поиск сотрудников, адресная книга), не учётки работников |
 | `MAILSENSE_SERVICE_MAILBOX`, `MAILSENSE_EXTERNAL_MAILBOX` | роли служебных ящиков (внутренний, внешняя приёмная) по адресу |
 | `MAILSENSE_MAIL_HOST` / `_PORT` / `_USER` / `_PASS` | засев ОДНОГО тестового ящика (стенд) |
 | `MAILSENSE_SEED_ACCOUNT` | засевать ли дефолтный аккаунт |
