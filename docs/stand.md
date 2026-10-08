@@ -24,6 +24,26 @@
 Почтовый сервер — отдельный контейнер с ящиками `@mail.test`; POP3 (110/995) тоже доступен,
 подробности и ограничения — в `docs/mail.md` (раздел «POP3 в проде»).
 
+### Контейнеры стенда
+
+| Контейнер | Образ | Порты (хост) | Что это |
+|---|---|---|---|
+| `mailserver` | `ghcr.io/docker-mailserver/docker-mailserver:latest` | 25, 110, 143, 465, 587, 993, 995, 18080 | Почта: SMTP, POP3, IMAP, IMAPS, SMTPS. Ящики `@mail.test` |
+| `ldap` | `nowsci/samba-domain:latest` | 389, 636, 3268 | Домен и каталог AD: `stand.test`, пользователи и группы |
+| `mailsense-db-dev` | `postgres:16-alpine` | 55432 | PostgreSQL стенда (`mailsense`) и тестовая база (`mailsense_test`) |
+
+Все три поднимаются с `restart: unless-stopped`, то есть переживают перезапуск Docker.
+
+```bash
+docker ps                                   # что поднято и здорово ли
+docker logs mailserver --tail 20            # почта
+docker logs ldap --tail 20                  # домен/каталог
+docker compose -f docker/docker-compose.dev.yml up -d      # вернуть базу стенда
+```
+
+**Само приложение стенда в контейнере не работает** — оно запускается процессом Node на 8123
+(см. раздел ниже). Контейнерное развёртывание продукта — отдельная история, раздел 6.
+
 ---
 
 ## 2. Как поднять нативный стенд
