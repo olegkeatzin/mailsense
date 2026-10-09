@@ -7,7 +7,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test": "node ../core/node_modules/jest/bin/jest.js --runInBand --forceExit --config jest.config.cjs"
+    "test": "node ../core/node_modules/jest/bin/jest.js --forceExit --config jest.config.cjs",
+    "test:serial": "node ../core/node_modules/jest/bin/jest.js --runInBand --forceExit --config jest.config.cjs"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Button, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, message } from "antd";
+import { Alert, Button, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, message } from "antd";
 import { SaveOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api, resolutionApi } from "../api";
@@ -22,6 +22,15 @@ import {
   type User
 } from "../types";
 import { humanError } from "../utils/humanError";
+import {
+  EdmsMailSelect,
+  edmsActionOptions,
+  edmsMailProblem,
+  edmsSendErrorText,
+  isEdmsMailError,
+  preferredActionAccountId,
+  useEdmsMail
+} from "./edmsMail";
 
 /**
  * Карточка документа: графы журнала, связанные письма и история изменений.
@@ -56,6 +65,28 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
   const [signers, setSigners] = useState<User[]>([]);
 
   const editable = can("journal.edit");
+  /**
+   * Ящик для писем СЭД (T53). Показываем выбор только там, где работник отправляет
+   * (аппарат): у исполнителя выбора в действиях нет — он задаётся в личных настройках.
+   */
+  const canDispatch = can("resolution.dispatch");
+  /** Переход в личные настройки по ссылке из отказа («Выбрать другой ящик»). */
+  const openSettings = useStore((s) => s.openSettings);
+  const edms = useEdmsMail(canDispatch);
+  const [edmsAccountId, setEdmsAccountId] = useState<string | null>(null);
+
+  useEffect(() => {
+    const settings = edms.settings;
+    if (!settings) return;
+    // Список для действий = служебный + выбранный личный (D-T55). Сменил работник выбор
+    // в личных настройках — вместе с ним меняются список и предвыбранное значение.
+    setEdmsAccountId((prev) => {
+      const options = edmsActionOptions(settings);
+      if (prev && options.some((o) => o.id === prev)) return prev;
+      // Выбранный ящик мог исчезнуть: показываем его человеческой строкой, а не теряем молча.
+      return preferredActionAccountId(settings) ?? settings.accountId ?? null;
+    });
+  }, [edms.settings]);
 
   /** Перечитывает резолюции документа: после каждого шага список меняется. */
   const loadResolutions = useCallback(async () => {
@@ -79,6 +110,35 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       .catch(() => setSigners([]));
   }, [forwardOpen]);
 
+  /**
+   * Отказ по ящику объясняем и сразу даём путь починить: ссылка открывает настройки
+   * на вкладке «Личные настройки», где лежит «Почта для СЭД». Иначе аппарат оказывается
+   * заблокирован и идёт писать в поддержку.
+   */
+  const showMailError = (e: unknown) => {
+    const text = edmsSendErrorText(e);
+    if (!isEdmsMailError(e)) {
+      message.error(text);
+      return;
+    }
+    message.error({
+      content: (
+        <span>
+          {text}{" "}
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0, height: "auto" }}
+            onClick={() => openSettings("profile")}
+          >
+            Выбрать другой ящик
+          </Button>
+        </span>
+      ),
+      duration: 8
+    });
+  };
+
   async function actResolution(id: string, fn: () => Promise<unknown>, ok: string) {
     try {
       await fn();
@@ -86,7 +146,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       await loadResolutions();
       onChanged?.();
     } catch (e) {
-      message.error(humanError(e));
+      showMailError(e);
     }
   }
 
@@ -376,7 +436,23 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
 
                         {/* Отправка — только аппарат и только после утверждения. */}
                         {r.status === "approved" && can("resolution.dispatch") ? (
-                          <Button size="small" type="primary" onClick={() => actResolution(r.id, () => resolutionApi.dispatch(r.id), "Отправлено исполнителям")}>
+                          <Button
+                            size="small"
+                            type="primary"
+                            onClick={() => {
+                              // Без выбранного ящика письмо не уходит: «первый подходящий» не подставляем.
+                              const problem = edmsMailProblem(edms.settings);
+                              if (problem) {
+                                message.warning(problem);
+                                return;
+                              }
+                              void actResolution(
+                                r.id,
+                                () => resolutionApi.dispatch(r.id, edmsAccountId ?? undefined),
+                                "Отправлено исполнителям"
+                              );
+                            }}
+                          >
                             Отправить исполнителям
                           </Button>
                         ) : null}
@@ -452,26 +528,50 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
             message.warning("Выберите руководителя");
             return;
           }
+          // Ящик обязателен: без него не отправляем и говорим, что сделать.
+          const problem = edmsMailProblem(edms.settings);
+          if (problem) {
+            message.warning(problem);
+            return;
+          }
           setForwardBusy(true);
           try {
-            const r = await resolutionApi.forward(documentId ?? "", forwardTo);
+            const r = await resolutionApi.forward(documentId ?? "", forwardTo, edmsAccountId ?? undefined);
             message.success("Письмо направлено: " + (r.sentTo ?? ""));
             setForwardOpen(false);
             await loadResolutions();
             onChanged?.();
           } catch (e) {
-            message.error(humanError(e));
+            showMailError(e);
           } finally {
             setForwardBusy(false);
           }
         }}
       >
         <p style={{ color: "#666", fontSize: 13 }}>
-          Письмо уйдёт с ящика аппарата на адрес руководителя из каталога, вместе с кратким
-          содержанием. Резолюцию — кому и что поручить — он напишет сам.
+          Письмо уйдёт на адрес руководителя из каталога, вместе с кратким содержанием.
+          Резолюцию — кому и что поручить — он напишет сам.
         </p>
+        <div style={{ marginBottom: 8 }}>
+          {/* Причину показываем сразу в окне: «выберите ящик» человек должен видеть до нажатия. */}
+          {edmsMailProblem(edms.settings) ? (
+            <Alert
+              type="warning"
+              showIcon
+              style={{ marginBottom: 8 }}
+              message={edmsMailProblem(edms.settings)}
+            />
+          ) : null}
+          <EdmsMailSelect
+            value={edmsAccountId}
+            onChange={setEdmsAccountId}
+            settings={edms.settings}
+            loading={edms.loading}
+          />
+        </div>
         <Select
           style={{ width: "100%" }}
+          aria-label="Кому направить"
           placeholder="Кому направить"
           value={forwardTo ?? undefined}
           onChange={(v) => setForwardTo(v)}

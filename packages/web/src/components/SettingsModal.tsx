@@ -1092,9 +1092,19 @@ export default function SettingsModal() {
 
   // Модалка не размонтирует вкладки, поэтому при каждом открытии настроек
   // пересоздаём их: иначе список шаблонов и статус каталога остаются устаревшими.
+  // Вкладку можно попросить заранее (например, из отказа отправки: «выбрать другой ящик»).
+  const requestedTab = useStore((s) => s.settingsTab);
   useEffect(() => {
     if (open) setReloadKey((k) => k + 1);
   }, [open]);
+
+  useEffect(() => {
+    if (open && requestedTab) {
+      setActiveTab(requestedTab);
+      // Просьбу исполняем один раз: дальше человек сам ходит по вкладкам.
+      useStore.setState({ settingsTab: null });
+    }
+  }, [open, requestedTab]);
 
   return (
     <Modal

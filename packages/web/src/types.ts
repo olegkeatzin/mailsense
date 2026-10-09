@@ -62,6 +62,46 @@ export interface AccountInput {
  * Письмо-источник поручения (T41): урезанный вид письма для исполнителя,
  * у которого нет права mail.view. Ни ящика, ни папок, ни путей к файлам сервер не отдаёт.
  */
+/** Ящик, с которого работник может отправлять письма СЭД (T53). */
+export interface EdmsMailOption {
+  id: string;
+  username: string;
+  host: string;
+  /** Готов ли ящик к отправке: без SMTP письмо не уйдёт. */
+  smtpReady: boolean;
+  /** Служебный ящик подставляет администратор, личный — свой рабочий. */
+  kind: "service" | "personal";
+}
+
+/** Запись выбранного ящика: сервер отдаёт её без признака kind (он есть только в списке allowed). */
+export interface EdmsMailAccountRef {
+  id: string;
+  username: string;
+  host: string;
+  smtpReady: boolean;
+}
+
+/** Выдача ящиков работнику администратором (T57). */
+export interface EdmsMailAllowance {
+  userId: string;
+  /** Выданные ящики (без дублей); пустой массив — ничего не выдано. */
+  accountIds: string[];
+  allowed: EdmsMailOption[];
+  /**
+   * Ящик, который был выбран работником и только что отозван: его выбор сброшен.
+   * Показываем администратору, иначе непонятно, почему у работника пропала настройка.
+   */
+  resetChoice: string | null;
+}
+
+/** Личный выбор ящика для СЭД: что выбрано, что можно выбрать и что предложено по умолчанию. */
+export interface EdmsMailSettings {
+  accountId: string | null;
+  account: EdmsMailAccountRef | null;
+  allowed: EdmsMailOption[];
+  defaultAccountId: string | null;
+}
+
 export interface TaskSourceEmail {
   resolutionId: string;
   emailId: string;

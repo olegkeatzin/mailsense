@@ -126,6 +126,8 @@ interface State extends FilterState {
   wakeAnalysisProgress: () => void;
   loading: boolean;
   settingsOpen: boolean;
+  /** Вкладка, которую просят открыть в настройках («Личные настройки», «Подключение»). */
+  settingsTab: string | null;
   aiConfig: AiConfig | null;
   compose: { open: boolean; mode: ComposeMode; emailId: string | null; draft: Draft | null };
   openCompose: (mode: ComposeMode, emailId?: string | null) => void;
@@ -210,6 +212,8 @@ interface State extends FilterState {
   analyzeAll: () => Promise<void>;
   stopAnalysis: () => Promise<void>;
   setSettingsOpen: (v: boolean) => void;
+  /** Открыть настройки сразу на нужной вкладке: из отказа отправки человек попадает по делу. */
+  openSettings: (tab?: string) => void;
   moveSelected: (folder: string) => Promise<void>;
   updateAnalysis: (patch: Record<string, unknown>) => Promise<void>;
   toggleSelect: (id: string) => void;
@@ -353,6 +357,7 @@ export const useStore = create<State>()((set, get) => ({
   analysisEpoch: 0,
   loading: false,
   settingsOpen: false,
+  settingsTab: null,
   aiConfig: null,
   compose: { open: false, mode: "new", emailId: null, draft: null },
   draftsOpen: false,
@@ -716,7 +721,8 @@ export const useStore = create<State>()((set, get) => ({
     await get().loadEmails();
   },
 
-  setSettingsOpen: (v: boolean) => set({ settingsOpen: v }),
+  setSettingsOpen: (v: boolean) => set({ settingsOpen: v, settingsTab: v ? get().settingsTab : null }),
+  openSettings: (tab) => set({ settingsOpen: true, settingsTab: tab ?? null }),
   setSection: (section: AppSection) => {
     // Раздел, на который нет прав, не открываем даже программно (переход из уведомления,
     // чужой раздел после смены пользователя): иначе раздел запросит чужие маршруты.

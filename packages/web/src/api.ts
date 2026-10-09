@@ -19,8 +19,10 @@ import type {
   DirectoryStatus,
   EmailView,
   IncomingItem,
+  EdmsMailSettings,
   JournalFilter,
   TaskSourceEmail,
+  EdmsMailAllowance,
   LdapSettings,
   MailProfile,
   MailProfilePatch,
@@ -61,13 +63,19 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     let msg = res.statusText;
+    let code: string | undefined;
     try {
       const body = await res.json();
       if (body?.error) msg = body.error;
+      // Код нужен экрану: по нему показываем понятный текст, а не серверную формулировку.
+      if (typeof body?.code === "string") code = body.code;
     } catch {
       /* ignore */
     }
-    throw new Error(msg);
+    const err = new Error(msg) as Error & { code?: string; status?: number };
+    err.code = code;
+    err.status = res.status;
+    throw err;
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -520,11 +528,39 @@ export const resolutionApi = {
     });
   },
 
+  /**
+   * Личный ящик для СЭД (T53): с него уходят письма руководителю и исполнителям.
+   * Ответ контрагенту всегда уходит с ящика, куда письмо пришло, — этот выбор на него не влияет.
+   */
+  myEdmsMail() {
+    return request<EdmsMailSettings>("/api/docflow/my-edms-mail");
+  },
+  saveMyEdmsMail(accountId: string | null) {
+    return request<EdmsMailSettings>("/api/docflow/my-edms-mail", {
+      method: "PUT",
+      body: JSON.stringify({ accountId })
+    });
+  },
+
+  /** Выдача ящиков работнику (право settings.manage): что ему разрешено выбирать в СЭД. */
+  userEdmsMailAllowance(userId: string) {
+    return request<EdmsMailAllowance>(
+      "/api/docflow/users/" + encodeURIComponent(userId) + "/edms-mail-allowance"
+    );
+  },
+  saveUserEdmsMailAllowance(userId: string, accountIds: string[]) {
+    return request<EdmsMailAllowance>(
+      "/api/docflow/users/" + encodeURIComponent(userId) + "/edms-mail-allowance",
+      { method: "PUT", body: JSON.stringify({ accountIds }) }
+    );
+  },
+
   /** Аппарат направляет письмо руководителю: резолюции ещё нет, решает он. */
-  forward(documentId: string, toUserId: string) {
+  forward(documentId: string, toUserId: string, accountId?: string) {
     return request<Resolution & { sentTo?: string; sentEmailId?: string }>("/api/docflow/resolutions/forward", {
       method: "POST",
-      body: JSON.stringify({ documentId, toUserId })
+      // accountId — ящик, с которого уходит письмо (T53). Без него сервер берёт личную настройку.
+      body: JSON.stringify(accountId ? { documentId, toUserId, accountId } : { documentId, toUserId })
     });
   },
 
@@ -566,8 +602,12 @@ export const resolutionApi = {
     });
   },
 
-  dispatch(id: string) {
-    return request<Resolution>("/api/docflow/resolutions/" + id + "/dispatch", { method: "POST", body: "{}" });
+  dispatch(id: string, accountId?: string) {
+    return request<Resolution>("/api/docflow/resolutions/" + id + "/dispatch", {
+      method: "POST",
+      // Ящик отправки (T53): без него сервер возьмёт личную настройку работника.
+      body: JSON.stringify(accountId ? { accountId } : {})
+    });
   },
 
   cancel(id: string, comment: string) {
@@ -584,10 +624,10 @@ export const resolutionApi = {
 
 
   /** Отчёт исполнителя об исполнении: описывает, что сделано (этап 4). */
-  report(id: string, text: string, emailId?: string | null) {
+  report(id: string, text: string, emailId?: string | null, accountId?: string) {
     return request<Resolution>("/api/docflow/resolutions/" + id + "/report", {
       method: "POST",
-      body: JSON.stringify({ text, emailId })
+      body: JSON.stringify(accountId ? { text, emailId, accountId } : { text, emailId })
     });
   },
 

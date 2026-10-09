@@ -19,7 +19,15 @@ jest.mock("../api", () => ({
     authStatus: jest.fn(),
     logout: jest.fn()
   },
-  resolutionApi: { myTasks: jest.fn(), markReceived: jest.fn(), sourceEmail: jest.fn(), icsUrl: () => "" },
+  resolutionApi: {
+    myTasks: jest.fn(),
+    markReceived: jest.fn(),
+    sourceEmail: jest.fn(),
+    icsUrl: () => "",
+    // Вкладка «Личные настройки» содержит раздел «Почта для СЭД» — он читает выбор ящика.
+    myEdmsMail: jest.fn(),
+    saveMyEdmsMail: jest.fn()
+  },
   notificationApi: { list: jest.fn(), sortRules: jest.fn(), settings: jest.fn() }
 }));
 
@@ -115,6 +123,18 @@ describe("доступ к почте по правам (T44)", () => {
     expect(screen.getByRole("button", { name: /Черновики/ })).not.toBeNull();
     expect(screen.getByRole("button", { name: /Личные настройки/ })).not.toBeNull();
     expect(screen.getByRole("button", { name: /Мои задачи/ })).not.toBeNull();
+  });
+
+  it("настройки открываются на запрошенной вкладке (ссылка «Выбрать другой ящик»)", async () => {
+    setPermissions([]);
+    useStore.setState({ settingsOpen: true, settingsTab: "profile" });
+    render(<SettingsModal />);
+
+    // Вкладка «Личные настройки» активна сразу: человек попадает туда, где чинится выбор ящика.
+    expect(await screen.findByRole("tab", { name: "Личные настройки", selected: true })).not.toBeNull();
+    expect(await screen.findByText("Почта для СЭД")).not.toBeNull();
+    // Просьбу исполнили один раз — дальше вкладками ходит сам человек.
+    expect(useStore.getState().settingsTab).toBeNull();
   });
 
   it("без права task.view кнопки «Мои задачи» нет, личные разделы остаются", async () => {

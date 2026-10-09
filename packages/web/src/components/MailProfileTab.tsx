@@ -3,6 +3,7 @@ import { Alert, Button, Input, Select, Skeleton, Switch, Typography, message } f
 import { api } from "../api";
 import { humanError } from "../utils/humanError";
 import { isProfileEmpty } from "../utils/personalSignature";
+import { EdmsMailSection } from "./EdmsMailSection";
 import type { MailProfile } from "../types";
 
 /**
@@ -181,6 +182,9 @@ export function MailProfileTab() {
       <Button type="primary" loading={saving} onClick={() => void save()}>
         Сохранить
       </Button>
+
+      {/* Выбор ящика для писем СЭД — тоже личная настройка (T53). */}
+      <EdmsMailSection />
     </div>
   );
 }

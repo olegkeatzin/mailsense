@@ -2,6 +2,13 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { installDomEnvironment } from "./dom";
 
+/**
+ * Вкладка нумерации тяжёлая: antd-таблица, модалки закрытия/отмены года и список периодов.
+ * В одиночном прогоне под нагрузкой (QA работал в браузере) тест «неверный год…» не уложился
+ * в лимит jest и упал по ТАЙМАУТУ, а не по проверке. Лимит поднят, сами проверки те же.
+ */
+jest.setTimeout(120000);
+
 jest.mock("../api", () => ({
   api: {
     numbering: jest.fn(),

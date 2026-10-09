@@ -12,7 +12,7 @@ import { useStore } from "../store";
 export function MailUnavailable() {
   const setSection = useStore((s) => s.setSection);
   const setDraftsOpen = useStore((s) => s.setDraftsOpen);
-  const setSettingsOpen = useStore((s) => s.setSettingsOpen);
+  const openSettings = useStore((s) => s.openSettings);
   const canViewTasks = useStore((s) => s.can("task.view"));
 
   return (
@@ -31,7 +31,7 @@ export function MailUnavailable() {
             <Button icon={<FileTextOutlined />} onClick={() => setDraftsOpen(true)}>
               Черновики
             </Button>
-            <Button icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)}>
+            <Button icon={<SettingOutlined />} onClick={() => openSettings("profile")}>
               Личные настройки
             </Button>
           </Space>
