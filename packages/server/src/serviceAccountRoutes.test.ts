@@ -60,6 +60,9 @@ beforeEach(() => {
   mockedCore.listAccounts.mockReturnValue([account()]);
   mockedCore.getSettingValue.mockReturnValue(null);
   mockedDocflow.getServiceAccountState.mockResolvedValue({ explicit: true, accountId: "acc-1" });
+  // Личный выбор «почты для СЭД» по умолчанию не сделан: иначе состояние одного теста
+  // утекало бы в следующие (jest.clearAllMocks() снимает вызовы, но НЕ подмену значения).
+  mockedDocflow.getUserSetting.mockResolvedValue(null);
   mockedDocflow.getExternalAccountState.mockResolvedValue({ explicit: false, accountId: null });
   mockedDocflow.setServiceAccountId.mockResolvedValue("acc-1");
   mockedDocflow.setServiceAccounts.mockResolvedValue({ internal: "acc-1", external: null });
@@ -235,18 +238,47 @@ describe("отправка поручения использует служеб�
     expect(mockedCore.sendEmail).not.toHaveBeenCalled();
   });
 
-  test("несуществующий accountId в теле — 400, а не молчаливая подмена ящика", async () => {
+  test("accountId вне разрешённых — 403 account_not_allowed, а не молчаливая подмена ящика", async () => {
+    // Р24: явно переданный ящик обязан быть в разрешённых (служебный + личный рабочий).
     const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
       token: token("secretary"),
       body: { accountId: "acc-призрак" }
     });
 
-    expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ code: "unknown_account" });
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: "account_not_allowed" });
     expect(mockedDocflow.dispatchResolution).not.toHaveBeenCalled();
   });
 
-  test("служебный ящик не задан — работаем, но предупреждаем в лог", async () => {
+  test("разрешённый, но исчезнувший ящик — 400 unknown_account", async () => {
+    // Ящик выбран в настройках (значит, разрешён), но его уже нет среди ящиков почты:
+    // в списке есть другой ящик, поэтому это именно «ящик не найден», а не «ящиков нет».
+    mockedCore.listAccounts.mockReturnValue([account({ id: "acc-other", username: "other@mail.test" })]);
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
+      token: token("secretary"),
+      body: { accountId: "acc-1" }
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "unknown_account" });
+  });
+
+  test("выбранный личный ящик удалён — 400 account_missing, без подстановки служебного (T58)", async () => {
+    mockedDocflow.getUserSetting.mockResolvedValueOnce("acc-удалён");
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
+      token: token("secretary"),
+      body: {}
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "account_missing" });
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
+    expect(mockedDocflow.dispatchResolution).not.toHaveBeenCalled();
+  });
+
+  test("служебный ящик не задан — отправки нет: «первый подходящий» запрещён (Р24)", async () => {
     mockedDocflow.getServiceAccountState.mockResolvedValue({ explicit: false, accountId: null });
 
     const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
@@ -254,9 +286,10 @@ describe("отправка поручения использует служеб�
       body: {}
     });
 
-    expect(res.status).toBe(200);
-    expect(mockedCore.sendEmail).toHaveBeenCalled();
-    expect(mockedCore.logger.warn).toHaveBeenCalled();
+    expect(res.status).toBe(400);
+    expect(res.body).toMatchObject({ code: "not_configured" });
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
+    expect(String((res.body as { error: string }).error)).toContain("не выбран");
   });
 
   test("СТАРЫЙ КЛЮЧ настроек почты ИГНОРИРУЕТСЯ: он больше не влияет на выбор ящика", async () => {

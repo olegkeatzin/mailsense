@@ -186,6 +186,19 @@ export function docflowMockModule(): Record<string, unknown> {
     sessionTtlHours: stub(24),
     authStatus: stub({ enabled: true }),
     setDocflowEnabled: jest.fn(async () => undefined),
+    // Личные настройки работника (Р24/T52): по умолчанию выбора нет.
+    EDMS_WORK_ACCOUNT_SETTING: "edms.workAccountId",
+    EDMS_WORK_MAIL_AUDIT_ACTION: "edms.work_mail",
+    getUserSetting: jest.fn(async () => null),
+    // Выдача ящиков «почты для СЭД» (task-56): по умолчанию ничего не выдано.
+    EDMS_ALLOWED_WORK_ACCOUNTS_SETTING: "edms.allowedWorkAccounts",
+    EDMS_WORK_MAIL_ALLOWANCE_AUDIT_ACTION: "edms.work_mail_allowance",
+    getAllowedWorkAccounts: jest.fn(async () => []),
+    setAllowedWorkAccounts: jest.fn(async (_userId: string, accountIds: string[]) => ({
+      accountIds,
+      resetChoice: null
+    })),
+    setUserSetting: jest.fn(async (_userId: string, _key: string, value: string | null) => value),
     // Настройки документооборота: свежая база — строки ещё нет (null).
     getSetting: jest.fn(async () => null),
     setSetting: jest.fn(async () => undefined),

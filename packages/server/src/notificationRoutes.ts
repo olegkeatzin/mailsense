@@ -256,7 +256,7 @@ export function mountNotificationRoutes(app: express.Express, deps: Notification
       };
       assertRuleValid(rule);
 
-      const emails = await unregisteredInbox(str(req.query.folder) ?? "INBOX");
+      const emails = await unregisteredInbox(str(req.query.folder) ?? "INBOX", currentUserId(req));
       const samples: Array<{
         emailId: string;
         subject: string;

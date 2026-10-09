@@ -139,6 +139,26 @@ export const settings = pgTable("settings", {
   value: text("value").notNull()
 });
 
+/**
+ * Личные настройки работника в СЭД (Р24, task-51): пока единственный ключ —
+ * «почта для СЭД» (edms.workAccountId). Настройка ЛИЧНАЯ, но живёт на сервере:
+ * от неё зависит, с какого ящика уходит официальное письмо.
+ */
+export const userSettings = pgTable(
+  "user_settings",
+  {
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    value: text("value").notNull().default(""),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.userId, t.key] })
+  })
+);
+
 /** Журнал входящих документов — графы бумажного журнала. */
 export const documents = pgTable(
   "documents",
@@ -499,7 +519,8 @@ export const docflowSchema = {
   notificationTemplates,
   mailSortRules,
   userActivityStats,
-  userActivityStatsMonthly
+  userActivityStatsMonthly,
+  userSettings
 };
 
 export type DbUsers = typeof users.$inferSelect;
@@ -516,3 +537,4 @@ export type DbResolutionApproval = typeof resolutionApprovals.$inferSelect;
 export type DbNotification = typeof notifications.$inferSelect;
 export type DbNotificationTemplate = typeof notificationTemplates.$inferSelect;
 export type DbMailSortRule = typeof mailSortRules.$inferSelect;
+export type DbUserSetting = typeof userSettings.$inferSelect;

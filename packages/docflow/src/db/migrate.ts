@@ -487,6 +487,25 @@ CREATE TABLE IF NOT EXISTS user_activity_stats_monthly (
   PRIMARY KEY (user_id, period)
 );
 CREATE INDEX IF NOT EXISTS user_activity_stats_monthly_period_idx ON user_activity_stats_monthly(period);`
+  },
+  {
+    // Номер сверен с docflow_migrations ЖИВОЙ (mailsense) и ТЕСТОВОЙ (mailsense_test) баз:
+    // в обеих 1..8, значит свободен 9.
+    version: 9,
+    name: "user_settings",
+    sql: `-- Личные настройки работника в СЭД (Р24, task-51). Первый и пока единственный ключ —
+-- «почта для СЭД» (edms.workAccountId): работник выбирает, с какого ящика уходят
+-- официальные письма по его поручениям.
+--
+-- Настройка личная, но живёт на СЕРВЕРЕ (в отличие от mail_profile в клиенте):
+-- от неё зависит выбор ящика отправки, а это решение предприятия.
+CREATE TABLE IF NOT EXISTS user_settings (
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  key TEXT NOT NULL,
+  value TEXT NOT NULL DEFAULT '',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, key)
+);`
   }
 ];
 

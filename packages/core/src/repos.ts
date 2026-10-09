@@ -500,7 +500,14 @@ export interface EmailListItem extends Email {
 }
 
 export interface EmailListFilter {
+  /** Один ящик (прежний способ). */
   accountId?: string;
+  /**
+   * Список ящиков: так СЭД ограничивает очередь своей почтой (служебные ящики +
+   * личный рабочий), чтобы письма обычных внешних ящиков не попадали аппарату.
+   * ⚠️ Пустой список — это «разрешённой почты нет»: пустая выборка, а НЕ все ящики.
+   */
+  accountIds?: string[];
   folder?: string;
   categories?: Category[];
   minPriority?: number;
@@ -530,7 +537,14 @@ export interface EmailListFilter {
  */
 function emailListConditions(filter: EmailListFilter) {
   const conditions = [];
-  if (filter.accountId) conditions.push(eq(emails.accountId, filter.accountId));
+  if (filter.accountIds) {
+    // Пустые строки в списке отбрасываем: иначе «» превратился бы в условие
+    // «ящик не выбран», а пустой список обязан давать пустую выборку.
+    const ids = filter.accountIds.map((id) => (id ?? "").trim()).filter(Boolean);
+    conditions.push(ids.length ? inArray(emails.accountId, ids) : sql`1 = 0`);
+  } else if (filter.accountId) {
+    conditions.push(eq(emails.accountId, filter.accountId));
+  }
   if (filter.folder) conditions.push(eq(emails.folder, filter.folder));
   if (filter.status) conditions.push(eq(emails.analysisStatus, filter.status));
   if (filter.categories && filter.categories.length > 0) {

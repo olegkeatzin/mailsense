@@ -14,6 +14,7 @@ import {
 } from "@mailsense/core";
 import {
   AppError,
+  EDMS_WORK_ACCOUNT_SETTING,
   approveResolution,
   attachDispatchEmail,
   attachRequestEmail,
@@ -31,6 +32,7 @@ import {
   getResolution,
   getUserRoles,
   getResolutionDetail,
+  getUserSetting,
   listBoard,
   listDocumentResolutions,
   listMyTasks,
@@ -114,25 +116,35 @@ function scheduleStatsRecompute(result: { id?: string; status?: string } | null 
  * ⚠️ Отказ бросается ДО перехода резолюции: иначе поручение осталось бы «отправлено»
  * без письма, а причина была бы видна только в логе почтового сервера.
  */
-async function resolveSendAccount(explicitId: string | null): Promise<SendAccountLike> {
-  // Единственный источник выбора — настройки СЭД. Ключ в настройках ПОЧТЫ
-  // (docflow.serviceAccountId) больше не читается совсем: пока он был запасным,
-  // «снять служебный ящик» не отключало отправку — дефект, пойманный живой проверкой.
-  const state = await getServiceAccountState();
+async function resolveSendAccount(workerId: string | null, explicitId: string | null): Promise<SendAccountLike> {
+  // ⚠️ Р24: в СЭД разрешены РОВНО два ящика — служебный внутренний предприятия и ЛИЧНЫЙ
+  // рабочий ЭТОГО работника (его выбор «почта для СЭД»). «Первый подходящий» запрещён.
+  // Внешняя приёмная в список не входит: с неё уходит только ответ контрагенту (композер).
+  const [state, personalId] = await Promise.all([
+    getServiceAccountState(),
+    workerId ? getUserSetting(workerId, EDMS_WORK_ACCOUNT_SETTING) : Promise.resolve(null)
+  ]);
+  const allowedIds = [personalId, state.accountId].filter((id): id is string => !!id);
+
   const selection = selectSendAccount(listAccounts(), {
     explicitId,
+    personalId,
     configuredId: state.accountId,
     // Выбор снят явно (строка настроек есть, значение пустое) — «первый попавшийся» запрещён.
-    cleared: state.explicit && state.accountId === null
+    cleared: state.explicit && state.accountId === null,
+    allowedIds
   });
 
   if (selection.warning) {
     logger.warn({ source: selection.source, accountId: selection.account?.id ?? null }, selection.warning);
   }
   if (!selection.account || selection.problem) {
+    // Ящик вне разрешённых — это запрет (403), а не «неправильные данные»: работник пытается
+    // отправить официальное письмо не со своего ящика.
+    const status = selection.problemCode === "account_not_allowed" ? 403 : 400;
     throw new AppError(
       selection.problem ?? "Не настроен почтовый ящик для отправки",
-      400,
+      status,
       selection.problemCode === "ok" ? "no_account" : selection.problemCode
     );
   }
@@ -315,7 +327,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       // Служебный задаёт администратор: на предприятии ящиков несколько, и «первый попавшийся»
       // означал бы, что письмо руководителю уходит не от того адреса.
       // Ящик отправки: явно указанный → служебный из настроек → первый готовый (Р12).
-      const account = await resolveSendAccount(b.accountId ? String(b.accountId) : null);
+      const account = await resolveSendAccount(req.user?.id ?? null, b.accountId ? String(b.accountId) : null);
 
       // Письмо-источник: из него берём тему и цепочку, чтобы ответ руководителя
       // нашёлся в том же треде, а не повис отдельно.
@@ -819,7 +831,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       if (!withEmail.length) throw new AppError("У исполнителей не заполнены адреса", 400, "no_emails");
 
       // Тот же помощник, что в /forward: одна логика выбора ящика на оба маршрута.
-      const account = await resolveSendAccount(b.accountId ? String(b.accountId) : null);
+      const account = await resolveSendAccount(req.user?.id ?? null, b.accountId ? String(b.accountId) : null);
 
       // Одно письмо на всех исполнителей — как в бумажном журнале, где в графе 8
       // перечислены все. Разные письма раздули бы переписку и разошлись бы по тредам.

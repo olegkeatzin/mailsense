@@ -32,8 +32,11 @@ export interface SendAccountLike {
   smtpPasswordEncrypted?: string | null;
 }
 
-/** Откуда взят ящик: explicit — из тела запроса, service — из настроек, fallback — «первый готовый». */
-export type SendAccountSource = "explicit" | "service" | "fallback" | "none";
+/**
+ * Откуда взят ящик: explicit — из тела запроса, personal — личный выбор работника («почта для СЭД»),
+ * service — служебный ящик предприятия. «Первый готовый» (fallback) запрещён решением Р24.
+ */
+export type SendAccountSource = "explicit" | "personal" | "service" | "none";
 
 /**
  * Машинный код проблемы — UI выбирает по нему кнопку и НЕ парсит русский текст.
@@ -47,7 +50,9 @@ export type SendAccountProblemCode =
   | "account_missing"
   | "smtp_not_configured"
   | "unknown_account"
-  | "no_account";
+  | "no_account"
+  /** Явно передан ящик, которым в СЭД отправлять нельзя (Р24): белый список — два ящика. */
+  | "account_not_allowed";
 
 export interface SendAccountSelection {
   account: SendAccountLike | null;
@@ -104,29 +109,65 @@ const NO_ACCOUNTS = "Не настроен ни один почтовый ящи
 const NOT_CHOSEN =
   "Служебный ящик не выбран: укажите его в настройках СЭД (Служебный ящик), иначе отправлять нечем.";
 
+/**
+ * Выбор ящика отправки официальных писем (Р12 + Р24, task-51).
+ *
+ * ⚠️ РЕШЕНИЕ Р24: в СЭД разрешены РОВНО ДВА ящика — служебный внутренний предприятия
+ * и личный рабочий ЭТОГО работника. Ни «первый попавшийся», ни «первый готовый» ящик
+ * больше не подставляются: это угадывание уже ловилось живым дефектом (письмо уходило
+ * не от того адреса). Внешняя приёмная в список НЕ входит: с неё уходит только ответ
+ * контрагенту по правилу композера (эта часть Р19 сохраняется).
+ *
+ * Приоритет: явно указанный (обязан быть в разрешённых) → личный рабочий → служебный
+ * внутренний → понятная ошибка. Отказ всегда объясняется словами и машинным кодом.
+ */
 export function selectSendAccount(
   accounts: SendAccountLike[],
   opts: {
     explicitId?: string | null;
+    /** Личный рабочий ящик работника («почта для СЭД», таблица user_settings). */
+    personalId?: string | null;
+    /** Служебный внутренний ящик предприятия (docflow.serviceAccountId). */
     configuredId?: string | null;
     /**
-     * Выбор служебного ящика снят ЯВНО (или его нет, а работать «от первого попавшегося»
-     * запрещено). Иначе снятие настройки не отключало бы отправку, а молча подставляло
-     * чужой ящик — именно это поймала живая проверка на стенде.
+     * Выбор служебного ящика снят ЯВНО (строка настройки есть, значение пустое).
+     * Отличается от «ещё не настраивали» только текстом отказа.
      */
     cleared?: boolean;
+    /**
+     * Белый список ящиков отправки в СЭД: служебный внутренний + личный рабочий работника.
+     * Задан — явно переданный ящик вне списка отклоняется (account_not_allowed).
+     * Не задан — проверка списка не применяется (служебные вызовы без правила Р24).
+     */
+    allowedIds?: string[] | null;
   } = {}
 ): SendAccountSelection {
   const list = Array.isArray(accounts) ? accounts : [];
   const explicitId = String(opts.explicitId ?? "").trim();
+  const personalId = String(opts.personalId ?? "").trim();
   const configuredId = String(opts.configuredId ?? "").trim();
+  const allowed = Array.isArray(opts.allowedIds)
+    ? new Set(opts.allowedIds.map((id) => String(id ?? "").trim()).filter(Boolean))
+    : null;
   const byId = (id: string): SendAccountLike | null => list.find((a) => a.id === id) ?? null;
 
   if (list.length === 0) {
     return { account: null, source: "none", problem: NO_ACCOUNTS, problemCode: "no_account", warning: null };
   }
 
+  // 1) Явно указанный ящик: он ОБЯЗАН быть в разрешённых (Р24).
   if (explicitId) {
+    if (allowed && !allowed.has(explicitId)) {
+      return {
+        account: null,
+        source: "explicit",
+        problem:
+          "С этого ящика отправлять нельзя: в документообороте разрешены служебный ящик предприятия " +
+          "и ваша личная рабочая почта (выбирается в настройках). Обновите список ящиков и повторите.",
+        problemCode: "account_not_allowed",
+        warning: null
+      };
+    }
     const explicit = byId(explicitId);
     // Явно указанный, но несуществующий ящик раньше МОЛЧА игнорировался и брался другой:
     // человек был уверен, что письмо ушло с выбранного ящика. Теперь это отказ.
@@ -151,14 +192,46 @@ export function selectSendAccount(
     return { account: explicit, source: "explicit", problem: null, problemCode: "ok", warning: null };
   }
 
+  // 2) Личный рабочий ящик работника (Р24, решение Lead'а по T58).
+  //    ⚠️ Выбранный работником ящик НЕ подменяем другим НИКОГДА: ни когда у него не настроена
+  //    отправка, ни когда его удалили. Иначе официальное письмо уйдёт не от того адреса,
+  //    который человек выбрал, — ровно та молчаливая подмена, за которую мы уже платили.
+  if (personalId) {
+    const personal = byId(personalId);
+    if (personal && smtpReady(personal)) {
+      return { account: personal, source: "personal", problem: null, problemCode: "ok", warning: null };
+    }
+    if (personal) {
+      // Починить может либо работник (выбрать другой ящик), либо администратор (настроить SMTP).
+      return {
+        account: personal,
+        source: "personal",
+        problem: notReadyProblem(personal),
+        problemCode: "smtp_not_configured",
+        warning: null
+      };
+    }
+    // Ящик выбран, но его больше нет в почте: честно говорим об этом, а не уходим на служебный.
+    return {
+      account: null,
+      source: "personal",
+      problem:
+        "Выбранный ящик для СЭД больше не существует (его удалили из почты) — выберите другой " +
+        "в настройках «Почта для СЭД».",
+      problemCode: "account_missing",
+      warning: null
+    };
+  }
+
+  // 3) Служебный внутренний ящик предприятия.
   if (configuredId) {
     const service = byId(configuredId);
     if (service && smtpReady(service)) {
       return { account: service, source: "service", problem: null, problemCode: "ok", warning: null };
     }
     if (service) {
-      // Служебный выбран осознанно, поэтому НЕ подменяем его чужим ящиком: получатель
-      // увидел бы другого отправителя, а «от чьего имени ушло» — вопрос доверия.
+      // Служебный выбран осознанно — чужим ящиком не подменяем: получатель увидел бы другого
+      // отправителя, а «от чьего имени ушло» — вопрос доверия.
       return {
         account: service,
         source: "service",
@@ -167,61 +240,28 @@ export function selectSendAccount(
         warning: null
       };
     }
-    // Настроенный ящик удалён: работу не блокируем, но говорим об этом вслух.
-    const fallback = list.find((a) => smtpReady(a)) ?? null;
-    const warning =
-      "Служебный ящик из настроек (" + configuredId + ") не найден — задайте служебный ящик заново.";
-    if (!fallback) {
-      return {
-        account: null,
-        source: "none",
-        problem: warning + " Ни у одного ящика нет готовой отправки (SMTP).",
-        problemCode: "account_missing",
-        warning
-      };
-    }
-    return {
-      account: fallback,
-      source: "fallback",
-      problem: null,
-      problemCode: "ok",
-      warning: warning + " Письмо уйдёт с ящика " + fallback.username + "."
-    };
-  }
-
-  if (opts.cleared) {
-    // Снятие выбора — осознанное действие администратора: «первый попавшийся» ящик здесь
-    // означал бы, что официальное письмо ушло не от того адреса.
-    return { account: null, source: "none", problem: NOT_CHOSEN, problemCode: "not_configured", warning: null };
-  }
-
-  // Ящик не выбран: смотрим, сколько ящиков вообще ГОТОВЫ к отправке.
-  const ready = list.filter((a) => smtpReady(a));
-  if (ready.length === 0) {
+    // Настроенный ящик удалён: «первый готовый» подставлять запрещено (Р24).
     return {
       account: null,
       source: "none",
-      problem: "Служебный ящик не выбран, и ни у одного ящика нет готовой отправки (SMTP) — отправлять нечем.",
-      problemCode: "smtp_not_configured",
+      problem: "Служебный ящик из настроек (" + configuredId + ") больше не существует — задайте его заново.",
+      problemCode: "account_missing",
       warning: null
     };
   }
-  if (ready.length > 1) {
-    // Решение Lead'а: несколько подходящих ящиков — выбор НЕОДНОЗНАЧЕН, и «первый готовый»
-    // мог бы оказаться личным ящиком директора. Отказываем, а не угадываем (Р12).
+
+  // 4) Ничего не выбрано (или служебный снят явно).
+  if (opts.cleared) {
     return { account: null, source: "none", problem: NOT_CHOSEN, problemCode: "not_configured", warning: null };
   }
-  const only = ready[0];
-  // Готовый ящик ровно один — выбор однозначен, поэтому отправляем, но говорим об этом вслух.
   return {
-    account: only,
-    source: "fallback",
-    problem: null,
-    problemCode: "ok",
-    warning:
-      "Служебный ящик не задан, но подходящий ящик ровно один (" +
-      only.username +
-      ") — письмо уйдёт с него. Задайте служебный ящик в настройках."
+    account: null,
+    source: "none",
+    problem:
+      "Ящик для отправки не выбран: укажите служебный ящик предприятия в настройках СЭД или выберите " +
+      "личную рабочую почту для документооборота. Подставлять «первый попавшийся» ящик запрещено.",
+    problemCode: "not_configured",
+    warning: null
   };
 }
 

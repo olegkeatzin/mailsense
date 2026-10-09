@@ -78,42 +78,48 @@ describe("приоритет выбора ящика", () => {
     expect(choice.problem).toBeNull();
   });
 
-  test("служебный ящик не задан — берём первый ГОТОВЫЙ, но предупреждаем", () => {
+  test("ничего не выбрано — «первый готовый» НЕ подставляется (Р24)", () => {
     const director = account({ id: "acc-dir", username: "user2@mail.test", smtpHost: null });
     const post = account({ id: "acc-post", username: "post@mail.test" });
 
     const choice = selectSendAccount([director, post], { configuredId: null });
 
-    // Ящик директора пропущен: у него нет SMTP, письмо оттуда не уйдёт.
-    expect(choice.account?.id).toBe("acc-post");
-    expect(choice.source).toBe("fallback");
-    expect(choice.problem).toBeNull();
-    // Не молчим: без служебного ящика выбор — всё ещё угадывание.
-    expect(String(choice.warning)).toContain("служебн");
-    expect(String(choice.warning)).toContain("post@mail.test");
+    // Оба ящика на сервере, но выбор за человеком: угадывать, от чьего имени уйдёт
+    // официальное письмо, запрещено решением Р24.
+    expect(choice.account).toBeNull();
+    expect(choice.problemCode).toBe("not_configured");
   });
 
-  test("ящик с хостом SMTP, но без пароля, при выборе пропускается", () => {
+  test("личный выбран, но отправить с него нечем — ОТКАЗ, а не подмена другим ящиком (T58)", () => {
     const halfConfigured = account({
       id: "acc-half",
       username: "half@mail.test",
       passwordEncrypted: "",
       smtpPasswordEncrypted: null
     });
-    const ready = account({ id: "acc-ready", username: "ready@mail.test" });
+    const service = account({ id: "acc-service", username: "service@mail.test" });
 
-    const choice = selectSendAccount([halfConfigured, ready], {});
-    expect(choice.account?.id).toBe("acc-ready");
+    const choice = selectSendAccount([halfConfigured, service], {
+      personalId: "acc-half",
+      configuredId: "acc-service",
+      allowedIds: ["acc-half", "acc-service"]
+    });
+
+    // Выбранный работником ящик не подменяем: письмо ушло бы не от того адреса, который
+    // человек выбрал. Причина называет ящик, а код объясняет интерфейсу, что делать.
+    expect(choice.problemCode).toBe("smtp_not_configured");
+    expect(choice.source).toBe("personal");
+    expect(String(choice.problem)).toContain("half@mail.test");
   });
 
-  test("служебный ящик задан, но такого ящика больше нет — откат с предупреждением", () => {
+  test("служебный ящик задан, но такого ящика больше нет — отказ, а не подстановка другого", () => {
     const post = account({ id: "acc-post", username: "post@mail.test" });
 
     const choice = selectSendAccount([post], { configuredId: "acc-удалён" });
 
-    expect(choice.account?.id).toBe("acc-post");
-    expect(choice.source).toBe("fallback");
-    expect(String(choice.warning)).toContain("не найден");
+    expect(choice.account).toBeNull();
+    expect(choice.problemCode).toBe("account_missing");
+    expect(String(choice.problem)).toContain("acc-удалён");
   });
 
   test("явно указанный, но несуществующий ящик — отказ, а не молчаливая подмена", () => {
@@ -168,29 +174,31 @@ describe("отказ объясняется словами и машинным �
     expect(choice.account).toBeNull();
     expect(choice.problemCode).toBe("not_configured");
     expect(String(choice.problem)).toContain("не выбран");
-    expect(String(choice.problem)).toContain("Служебный ящик");
+    // Отказ объясняет ОБА законных пути: служебный ящик предприятия или личная рабочая почта.
+    expect(String(choice.problem)).toContain("служебный ящик предприятия");
+    expect(String(choice.problem)).toContain("личную рабочую почту");
   });
 
-  test("ящик НЕ выбран, но подходящий РОВНО ОДИН — выбор однозначен, отправляем", () => {
+  test("ящик НЕ выбран, но подходящий РОВНО ОДИН — всё равно отказ (Р24)", () => {
     const only = account({ id: "only", username: "post@mail.test" });
     const notReady = account({ id: "bad", username: "user2@mail.test", smtpHost: null });
 
+    // Раньше «единственный готовый» считался однозначным выбором. Решение Р24 это отменяет:
+    // выбор делает работник (личная почта) или предприятие (служебный ящик), а не удача.
     const choice = selectSendAccount([notReady, only], {});
 
-    expect(choice.account?.id).toBe("only");
-    expect(choice.problem).toBeNull();
-    expect(choice.problemCode).toBe("ok");
-    expect(String(choice.warning)).toContain("post@mail.test");
+    expect(choice.account).toBeNull();
+    expect(choice.problemCode).toBe("not_configured");
   });
 
-  test("ни у одного ящика нет готовой отправки — понятная ошибка", () => {
+  test("ничего не выбрано и готовых нет — понятная ошибка", () => {
     const choice = selectSendAccount(
       [account({ id: "a", smtpHost: null }), account({ id: "b", passwordEncrypted: "" })],
       {}
     );
 
     expect(choice.account).toBeNull();
-    expect(choice.problemCode).toBe("smtp_not_configured");
+    expect(choice.problemCode).toBe("not_configured");
   });
 
   test("ящиков нет вовсе — понятная ошибка", () => {
@@ -300,5 +308,92 @@ describe("роль «приём» не требует SMTP (найдено пр�
 
     expect(view.problemCode).toBe("smtp_not_configured");
     expect(String(view.problem)).toContain("SMTP");
+  });
+});
+
+describe("Р24: в СЭД разрешены ровно два ящика", () => {
+  const personal = account({ id: "acc-personal", username: "ivanov@mail.test" });
+  const service = account({ id: "acc-service", username: "post@mail.test" });
+  const foreign = account({ id: "acc-foreign", username: "user2@mail.test" });
+  const allowed = ["acc-personal", "acc-service"];
+
+  test("личный рабочий ящик важнее служебного", () => {
+    const choice = selectSendAccount([service, personal], {
+      personalId: "acc-personal",
+      configuredId: "acc-service",
+      allowedIds: allowed
+    });
+
+    expect(choice.account?.id).toBe("acc-personal");
+    expect(choice.source).toBe("personal");
+    expect(choice.problem).toBeNull();
+  });
+
+  test("личного выбора нет — служебный внутренний", () => {
+    const choice = selectSendAccount([service, personal], {
+      configuredId: "acc-service",
+      allowedIds: allowed
+    });
+
+    expect(choice.account?.id).toBe("acc-service");
+    expect(choice.source).toBe("service");
+  });
+
+  test("явно переданный ящик вне разрешённых — отказ account_not_allowed", () => {
+    for (const explicitId of ["acc-foreign", "acc-неизвестный"]) {
+      const choice = selectSendAccount([service, personal, foreign], {
+        explicitId,
+        personalId: "acc-personal",
+        configuredId: "acc-service",
+        allowedIds: allowed
+      });
+
+      expect(choice.account).toBeNull();
+      expect(choice.problemCode).toBe("account_not_allowed");
+      expect(String(choice.problem)).toContain("нельзя");
+    }
+  });
+
+  test("явно переданный ящик из разрешённых — можно, даже если это служебный", () => {
+    const choice = selectSendAccount([service, personal], {
+      explicitId: "acc-service",
+      personalId: "acc-personal",
+      configuredId: "acc-service",
+      allowedIds: allowed
+    });
+
+    expect(choice.account?.id).toBe("acc-service");
+    expect(choice.source).toBe("explicit");
+  });
+
+  test("внешняя приёмная в разрешённые не входит: сама по себе не выбирается", () => {
+    const external = account({ id: "acc-external", username: "manufactory@kaluga.net" });
+
+    const choice = selectSendAccount([external, service], {
+      personalId: null,
+      configuredId: "acc-service",
+      allowedIds: ["acc-service"]
+    });
+
+    expect(choice.account?.id).toBe("acc-service");
+    // А если её передать явно — отказ: с приёмной уходит только ответ контрагенту (композер).
+    expect(
+      selectSendAccount([external, service], { explicitId: "acc-external", allowedIds: ["acc-service"] }).problemCode
+    ).toBe("account_not_allowed");
+  });
+
+  test("личный ящик исчез — отказ account_missing, БЕЗ ухода на служебный (T58)", () => {
+    const choice = selectSendAccount([service], {
+      personalId: "acc-удалён",
+      configuredId: "acc-service",
+      allowedIds: ["acc-удалён", "acc-service"]
+    });
+
+    // Решение Lead'а: выбранный ящик не подменяем даже когда его удалили — работник должен
+    // узнать, что выбор больше не работает, и выбрать другой.
+    expect(choice.problemCode).toBe("account_missing");
+    expect(choice.account).toBeNull();
+    expect(choice.source).toBe("personal");
+    expect(String(choice.problem)).toContain("больше не существует");
   });
 });

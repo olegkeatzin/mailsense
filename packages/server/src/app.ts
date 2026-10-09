@@ -113,6 +113,8 @@ import { mountResolutionRoutes } from "./resolutionRoutes.js";
 import { mountNotificationRoutes } from "./notificationRoutes.js";
 import { mountServiceAccountRoutes } from "./serviceAccountRoutes.js";
 import { mountMailProfileRoutes } from "./mailProfileRoutes.js";
+import { mountEdmsAllowanceRoutes } from "./edmsMailAllowanceRoutes.js";
+import { mountMyEdmsMailRoutes } from "./myEdmsMailRoutes.js";
 import { mountStatsRoutes } from "./statsRoutes.js";
 import { createDocflowProxy } from "./proxy.js";
 import { intParam } from "./params.js";
@@ -1210,6 +1212,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   mountNotificationRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });
   // Служебный ящик отправки (Р12): параметры — аппарату, смена — администратору с аудитом.
   mountServiceAccountRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+  // Личный выбор «почты для СЭД» (Р24): доступен любому вошедшему и только за себя.
+  mountMyEdmsMailRoutes(app, { requireDocflowDb, asyncHandler });
+  // Выдача «почты для СЭД» (task-56) — решение администратора, право settings.manage.
+  mountEdmsAllowanceRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
   // Личный профиль почты (T34/T35): локальный маршрут, в проксирование не входит.
   mountMailProfileRoutes(app, { asyncHandler });
   // Агрегат «профиль исполнителя» (task-18): данные под будущую подсказку, читает только админ.

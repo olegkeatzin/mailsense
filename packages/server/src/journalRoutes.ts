@@ -27,9 +27,13 @@ import {
   archivePeriod,
   documentStatusCounts,
   findDuplicates,
+  EDMS_WORK_ACCOUNT_SETTING,
   getDocument,
   getDocumentByEmail,
+  getExternalAccountId,
   getNumberingState,
+  getServiceAccountId,
+  getUserSetting,
   listArchivedPeriods,
   listCases,
   listCorrespondents,
@@ -112,15 +116,39 @@ function str(v: unknown): string | undefined {
 }
 
 /**
+ * Ящики, письма которых участвуют в СЭД: служебные (внутренний отправки + внешняя приёмная)
+ * и ЛИЧНЫЙ рабочий ящик работника («почта для СЭД», ключ edms.workAccountId — настройка
+ * личная, поэтому берём её у того, кто смотрит очередь).
+ *
+ * ⚠️ Пустой результат — это «почты для СЭД нет вовсе», и очередь тогда ПУСТАЯ, а не «все
+ * ящики системы»: иначе обычные внешние ящики (Яндекс по IMAP и т.п.) попадут аппарату
+ * в очередь регистрации, хотя к документообороту отношения не имеют.
+ */
+export async function edmsAccountScope(userId?: string | null): Promise<string[]> {
+  const [service, external, work] = await Promise.all([
+    getServiceAccountId(),
+    getExternalAccountId(),
+    // Без работника личную настройку не подставляем: чужой ящик в чужой очереди — утечка.
+    userId ? getUserSetting(String(userId), EDMS_WORK_ACCOUNT_SETTING) : Promise.resolve(null)
+  ]);
+  const ids = [service, external, work]
+    .map((value) => (typeof value === "string" ? value.trim() : ""))
+    .filter((value) => value !== "");
+  return [...new Set(ids)];
+}
+
+/**
  * Письма ящика, ещё не ставшие документом.
  *
  * ⚠️ Одно место для «Входящих на регистрацию» и предпросмотра правил сортировки:
  * два списка с одинаковым смыслом разошлись бы, и правило в предпросмотре
- * «ловило» бы не те письма, что видит аппарат.
+ * «ловило» бы не те письма, что видит аппарат. Здесь же — и фильтр по почте СЭД:
+ * второй реализации состава ящиков быть не должно.
  */
-export async function unregisteredInbox(folder = "INBOX"): Promise<EmailListItem[]> {
+export async function unregisteredInbox(folder = "INBOX", userId?: string | null): Promise<EmailListItem[]> {
   const registered = new Set(await listRegisteredEmailIds());
-  return listEmailsWithAnalysis({ folder }).filter((e) => !registered.has(e.id));
+  const accountIds = await edmsAccountScope(userId);
+  return listEmailsWithAnalysis({ folder, accountIds }).filter((e) => !registered.has(e.id));
 }
 
 /** Человек как строка для матчинга: имя и адрес — правило ищет подстроку в обоих. */
@@ -530,7 +558,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       // А6: пагинации нет, список ограничен limit — total отдаём честно по фильтру.
       const rulesOnly = req.query.rulesOnly === "1";
       const sort = req.query.sort === "rules" ? "rules" : "date";
-      const emails = await unregisteredInbox(folder);
+      const emails = await unregisteredInbox(folder, actorOf(req).id);
       // Правила применяет matchSortRules из core (§6): второй реализации матчинга быть
       // не должно — иначе предпросмотр правила и живой список разойдутся.
       const rules = (await listSortRules()) as MailSortRule[];

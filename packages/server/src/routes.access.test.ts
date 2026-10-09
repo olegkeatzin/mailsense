@@ -491,6 +491,10 @@ afterAll(async () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Р24: в СЭД отправляем ТОЛЬКО со служебного ящика предприятия или с личной рабочей почты.
+  // «Первый подходящий» больше не подставляется, поэтому служебный ящик должен быть настроен —
+  // иначе маршрут отправки честно откажет, и тест проверял бы не то.
+  mockedDocflow.getServiceAccountState.mockResolvedValue({ explicit: true, accountId: "acc-1" });
 });
 
 describe("матрица «маршрут × роль»", () => {
@@ -1202,10 +1206,17 @@ const DOCFLOW_PREFIXES = [
 ];
 
 /**
- * Осознанное исключение: статус каталога нужен любому вошедшему — от него зависит,
- * показывать ли автодополнение адресов. Данных предприятия маршрут не раскрывает.
+ * Осознанные исключения — маршруты, доступные ЛЮБОМУ вошедшему:
+ *   • статус каталога нужен любому: от него зависит автодополнение адресов;
+ *   • «почта для СЭД» (Р24) — личный выбор работника, и только за СЕГОДНЯ. Он не даёт ни
+ *     прав, ни данных предприятия: работник видит служебный ящик в списке разрешённых
+ *     и свой собственный выбор. Права проверять тут нечего — их нет.
  */
-const OPEN_TO_ANY_AUTHENTICATED = new Set(["GET /api/directory/status"]);
+const OPEN_TO_ANY_AUTHENTICATED = new Set([
+  "GET /api/directory/status",
+  "GET /api/docflow/my-edms-mail",
+  "PUT /api/docflow/my-edms-mail"
+]);
 
 function routesOf(appInstance: express.Express): Array<{ method: string; path: string }> {
   const stack =
