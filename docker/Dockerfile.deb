@@ -42,8 +42,16 @@ RUN pnpm --filter @mailsense/core build \
  && pnpm --filter @mailsense/web build \
  && pnpm --filter mailsense-electron build
 
-# Сама упаковка: .deb для amd64.
-RUN cd apps/electron && npx electron-builder --linux deb
+# Адрес сервера можно вшить прямо в пакет (решение Р21): он попадёт в server.json рядом
+# с бинарником, и работник увидит «адрес задан администратором — изменить нельзя»:
+#   docker build --build-arg SERVER_URL=http://mail.enterprise.local:8123 -f docker/Dockerfile.deb ...
+# Без аргумента файла в пакете нет — приложение спросит адрес при первом запуске.
+ARG SERVER_URL=""
+ENV SERVER_URL=${SERVER_URL}
+
+# Сама упаковка: .deb для amd64. Скрипт сам скажет, вшиваем адрес или нет.
+RUN node apps/electron/scripts/make-server-json.mjs \
+ && cd apps/electron && npx electron-builder --linux deb
 
 # Отдаём только артефакт.
 FROM scratch

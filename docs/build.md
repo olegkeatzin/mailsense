@@ -107,8 +107,16 @@ docker build --network=host -f docker/Dockerfile.deb --output type=local,dest=de
 - сборка идёт с нуля (`pnpm install` внутри Linux), поэтому нативные модули (`better-sqlite3`,
   `@napi-rs/canvas`) получаются именно под Linux — переносить `node_modules` с Windows нельзя;
 - `--output type=local` копирует уже готовый `.deb` на хост (в образе-результате ничего лишнего);
-- адрес сервера можно вшить заранее: `node apps/electron/scripts/make-server-json.mjs <url>` до сборки
-  (файл `build-extra/server.json` уходит в пакет как `extraFiles`);
+- адрес сервера вшивается сборочным аргументом (файл `build-extra/server.json` уходит в пакет
+  как `extraFiles`, то есть ложится рядом с бинарником — в `.deb` это `/opt/MailSense/server.json`):
+
+  ```bash
+  docker build --network=host --build-arg SERVER_URL=http://mail.enterprise.local:8123 \
+    -f docker/Dockerfile.deb --output type=local,dest=deb-out .
+  ```
+
+  Без аргумента адреса в пакете нет — приложение спросит его при первом запуске. Тот же файл можно
+  подготовить заранее вручную: `node apps/electron/scripts/make-server-json.mjs <url>`;
 - если канал медленный, установка в контейнере уже идёт с поднятыми таймаутами pnpm
   (`ARG PNPM_INSTALL_FLAGS` в обоих Dockerfile), их можно переопределить сборочным аргументом.
 

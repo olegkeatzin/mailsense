@@ -226,8 +226,17 @@ curl -X PUT http://127.0.0.1:8123/api/docflow/settings \
    ```
 
    Клиент для Linux собирается **только в контейнере** (на Windows electron-builder не умеет .deb —
-   нет `fpm`): `docker build -f docker/Dockerfile.deb --output type=local,dest=deb-out .`,
-   результат — `deb-out/mailsense-electron_<версия>_amd64.deb`. Рецепт и проверка пакета — `docs/build.md`.
+   нет `fpm`):
+
+   ```bash
+   docker build --network=host --build-arg SERVER_URL=http://mail.enterprise.local:8123 \
+     -f docker/Dockerfile.deb --output type=local,dest=deb-out .
+   ```
+
+   Результат — `deb-out/mailsense-electron_<версия>_amd64.deb`. Адрес сервера ложится в пакет
+   рядом с бинарником (`/opt/MailSense/server.json`); без `--build-arg SERVER_URL` приложение спросит
+   адрес при первом запуске. Если адрес нужно поменять после установки: `/opt/MailSense/server.json`
+   (для всех, нужен root) или `~/.config/MailSense/server.json` (лично). Рецепт — `docs/build.md`.
 2. Раздать комплект сотрудникам. При запуске адрес подхватывается автоматически и в настройках
    показан как «Адрес задан администратором — изменить нельзя».
 3. Сотрудник входит своей доменной учётной записью. Аппарат работает со служебными ящиками,
