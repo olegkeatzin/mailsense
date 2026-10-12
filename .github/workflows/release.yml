@@ -51,6 +51,10 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
+          # Тег вида v0.1.4-rc1 / v0.1.4-preview публикуется как ПРЕДВАРИТЕЛЬНЫЙ релиз,
+          # чтобы он не становился «Latest» и его нельзя было спутать с финальной сборкой.
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-preview') || contains(github.ref_name, '-beta') }}
+          name: MailSense ${{ github.ref_name }}
           files: |
             apps/electron/release/*.deb
             apps/electron/release/*-win.zip
