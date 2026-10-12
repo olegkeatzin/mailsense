@@ -91,13 +91,15 @@ curl -s http://127.0.0.1:8123/api/health
 
 ```bash
 make package-win SERVER_URL=http://mail.enterprise.local:8123   # Windows-комплект (zip)
+make package-deb SERVER_URL=http://mail.enterprise.local:8123   # Linux .deb (он же package-linux)
 ```
 
-Адрес сервера можно вшить в комплект (`server.json` рядом с исполняемым файлом) или положить туда
-позже руками. Если адрес не задан, приложение работает автономно и спросит адрес при настройке.
+На обеих платформах адрес вшивается одинаково: `SERVER_URL` кладёт `server.json` рядом с исполняемым
+файлом (`/opt/MailSense/server.json` в `.deb`), и работник не может его изменить. Если адрес не задан,
+приложение работает автономно и спросит адрес при первом запуске; положить файл можно и потом —
+рядом с бинарником или в `~/.config/MailSense/server.json`.
 
-**Linux (.deb) собирается только в контейнере** — electron-builder для `.deb` требует `fpm` (Ruby),
-которого на Windows нет:
+**`.deb` на Windows не собрать** — electron-builder требует `fpm` (Ruby), которого там нет:
 
 ```bash
 docker build --network=host -f docker/Dockerfile.deb --output type=local,dest=deb-out .

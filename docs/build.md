@@ -85,9 +85,19 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 - **Linux: `.deb`** — `chrome-sandbox` получает setuid через postinst, песочница работает без флагов.
 - Артефакты: `apps/electron/release/` → `*.deb` (Linux), `*-win.zip` (Windows).
 
-### ⚠️ `.deb` на Windows не собирается — только в контейнере
+### `.deb`: на Linux — как на Windows, через `make`; контейнер — если собираете с Windows
 
-`make package-linux` на Windows падает на упаковке:
+На Linux адрес сервера вшивается ровно так же, как в Windows-комплект:
+
+```bash
+make package-deb SERVER_URL=http://mail.enterprise.local:8123   # он же make package-linux
+# результат: apps/electron/release/mailsense-electron_0.1.4_amd64.deb
+```
+
+`make package-linux` и `make package-deb` — **синонимы** (одна реализация): оба кладут `server.json`
+рядом с бинарником (`/opt/MailSense/server.json`). Без `SERVER_URL` файла в пакете нет.
+
+На **Windows** этот путь не работает — electron-builder требует `fpm` (Ruby):
 
 ```
 ⨯ cannot execute  cause=exec: "fpm": executable file not found in %PATH%

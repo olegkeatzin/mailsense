@@ -16,8 +16,8 @@ help: ## Список команд
 	@echo "  make run            запустить headless-сервер http://127.0.0.1:8123"
 	@echo "  make dev-server     dev-сервер API (tsx watch, порт 8123)"
 	@echo "  make dev-web        dev-сервер SPA (Vite, порт 5173)"
-	@echo "  make package-linux  собрать .deb (apps/electron/release/)"
-	@echo "  make package-deb    собрать .deb (Linux)"
+	@echo "  make package-linux  .deb, адрес: SERVER_URL=http://… (то же, что package-deb)"
+	@echo "  make package-deb    .deb, адрес: SERVER_URL=http://… (синоним)"
 	@echo "  make package-win    собрать Windows zip (apps/electron/release/)"
 	@echo "  make package        собрать оба пакета"
 	@echo "  make clean          удалить dist/ и release/"
@@ -61,8 +61,12 @@ dev-web: ## Dev-сервер SPA (Vite, проксирует /api на 8123)
 typecheck: ## Проверка типов SPA
 	$(PNPM) --filter @mailsense/web typecheck
 
-package-linux: build ## Собрать .deb (Linux)
-	cd apps/electron && $(PNPM) dist:linux
+# Оба таргета делают одно и то же, и оба вшивают адрес сервера — ровно как make package-win.
+#   make package-linux SERVER_URL=http://mail.enterprise.local:8123
+#   make package-deb   SERVER_URL=http://mail.enterprise.local:8123
+# Синонимы, а не две реализации: раньше package-linux молча игнорировал SERVER_URL, и один и тот же
+# по смыслу таргет давал разные пакеты.
+package-linux: package-deb ## Собрать .deb (Linux); адрес сервера: make package-linux SERVER_URL=http://…
 
 package-deb: build ## Собрать .deb (Linux); адрес сервера: make package-deb SERVER_URL=http://…
 	cd apps/electron && node scripts/make-server-json.mjs "$(SERVER_URL)"

@@ -123,8 +123,11 @@
    оказывается по пути `server.json` (в `.deb` — рядом с бинарником в каталоге установки).
    Без `SERVER_URL` файл не добавляется: пакет остаётся автономным.
 
-   ⚠️ **`.deb` на Windows не собирается** — electron-builder требует `fpm` (Ruby), которого там нет.
-   Linux-пакет собирается в контейнере, и адрес вшивается сборочным аргументом:
+   На Linux это работает так же, как на Windows: `make package-deb SERVER_URL=…` (он же
+   `make package-linux`) вшивает адрес тем же шагом `make-server-json`.
+
+   ⚠️ **Не работает только сборка `.deb` с Windows** — electron-builder требует `fpm` (Ruby),
+   которого там нет. Тогда пакет собирается в контейнере, адрес задаётся сборочным аргументом:
 
    ```bash
    docker build --network=host --build-arg SERVER_URL=http://mail.enterprise.local:8123 \
