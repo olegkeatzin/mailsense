@@ -1,0 +1,50 @@
+# Сборка .deb (Linux-клиент MailSense) В КОНТЕЙНЕРЕ.
+#
+# ⚠️ Почему так: `electron-builder --linux deb` требует `fpm` (Ruby), которого на Windows
+# нет — попытка собрать .deb на хосте падает с `exec: "fpm": executable file not found`.
+# Здесь ставим ruby+fpm и нативные зависимости под Linux, поэтому .deb получается настоящий,
+# а не «упакованный на удачу».
+#
+# Запуск (из корня репозитория):
+#   docker build -f docker/Dockerfile.deb --output type=local,dest=deb-out .
+# Результат: deb-out/mailsense-electron_<версия>_amd64.deb
+#
+# Адрес сервера можно вшить заранее: сначала `node apps/electron/scripts/make-server-json.mjs <url>`
+# (файл build-extra/server.json попадёт в пакет как extraFiles).
+
+FROM node:22-bookworm AS build
+ENV CI=true \
+    DEBIAN_FRONTEND=noninteractive
+RUN corepack enable \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends ruby ruby-dev build-essential python3 ca-certificates \
+ && gem install --no-document fpm \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+
+# Манифесты отдельным слоем — зависимости переиспользуются между сборками.
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY packages/core/package.json packages/core/
+COPY packages/docflow/package.json packages/docflow/
+COPY packages/server/package.json packages/server/
+COPY packages/web/package.json packages/web/
+COPY apps/electron/package.json apps/electron/
+# Таймауты подняты: на медленном канале штатный лимит pnpm обрывает загрузку (см. docker/Dockerfile).
+ARG PNPM_INSTALL_FLAGS="--fetch-timeout=900000 --fetch-retries=5 --fetch-retry-maxtimeout=120000 --network-concurrency=4"
+RUN pnpm install --frozen-lockfile $PNPM_INSTALL_FLAGS
+
+COPY tsconfig.base.json ./
+COPY packages ./packages
+COPY apps/electron ./apps/electron
+RUN pnpm --filter @mailsense/core build \
+ && pnpm --filter @mailsense/docflow build \
+ && pnpm --filter @mailsense/server build \
+ && pnpm --filter @mailsense/web build \
+ && pnpm --filter mailsense-electron build
+
+# Сама упаковка: .deb для amd64.
+RUN cd apps/electron && npx electron-builder --linux deb
+
+# Отдаём только артефакт.
+FROM scratch
+COPY --from=build /app/apps/electron/release/*.deb /

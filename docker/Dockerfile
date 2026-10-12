@@ -26,7 +26,13 @@ COPY apps/electron/package.json apps/electron/
 # Electron для серверного образа не нужен: ставим только нужные пакеты.
 # Порядок важен: сначала манифесты и зависимости, потом исходники. Если .dockerignore начнёт
 # пропускать packages/*/node_modules, COPY перетрёт установленное и сборка упадёт на tsup.
-RUN pnpm install --frozen-lockfile --filter @mailsense/core --filter @mailsense/docflow --filter @mailsense/server --filter @mailsense/web
+#
+# ⚠️ Таймауты и повторы подняты осознанно: на медленном канале штатный лимит pnpm (~60 с)
+# обрывал загрузку на середине («TimeoutError: The operation was aborted due to timeout»),
+# и сборка образа падала без вины кода. Значения можно переопределить сборочным аргументом:
+#   docker build --build-arg PNPM_INSTALL_FLAGS="--fetch-timeout=900000" ...
+ARG PNPM_INSTALL_FLAGS="--fetch-timeout=900000 --fetch-retries=5 --fetch-retry-maxtimeout=120000 --network-concurrency=4"
+RUN pnpm install --frozen-lockfile $PNPM_INSTALL_FLAGS --filter @mailsense/core --filter @mailsense/docflow --filter @mailsense/server --filter @mailsense/web
 
 COPY packages ./packages
 COPY tsconfig.base.json ./

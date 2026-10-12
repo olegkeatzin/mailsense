@@ -85,6 +85,33 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 - **Linux: `.deb`** — `chrome-sandbox` получает setuid через postinst, песочница работает без флагов.
 - Артефакты: `apps/electron/release/` → `*.deb` (Linux), `*-win.zip` (Windows).
 
+### ⚠️ `.deb` на Windows не собирается — только в контейнере
+
+`make package-linux` на Windows падает на упаковке:
+
+```
+⨯ cannot execute  cause=exec: "fpm": executable file not found in %PATH%
+```
+
+Причина не в проекте: electron-builder для `.deb` требует `fpm` (Ruby), а его под Windows нет.
+Упаковка идёт **в Linux-контейнере** (`docker/Dockerfile.deb`), где ставится ruby+fpm и нативные
+зависимости под Linux:
+
+```bash
+# из корня репозитория, только с доступным Docker
+docker build --network=host -f docker/Dockerfile.deb --output type=local,dest=deb-out .
+# результат: deb-out/mailsense-electron_0.1.4_amd64.deb
+```
+
+Что важно знать про этот путь:
+- сборка идёт с нуля (`pnpm install` внутри Linux), поэтому нативные модули (`better-sqlite3`,
+  `@napi-rs/canvas`) получаются именно под Linux — переносить `node_modules` с Windows нельзя;
+- `--output type=local` копирует уже готовый `.deb` на хост (в образе-результате ничего лишнего);
+- адрес сервера можно вшить заранее: `node apps/electron/scripts/make-server-json.mjs <url>` до сборки
+  (файл `build-extra/server.json` уходит в пакет как `extraFiles`);
+- если канал медленный, установка в контейнере уже идёт с поднятыми таймаутами pnpm
+  (`ARG PNPM_INSTALL_FLAGS` в обоих Dockerfile), их можно переопределить сборочным аргументом.
+
 ## TLS и self-signed
 
 `rejectUnauthorized` по умолчанию **false** — принимаем self-signed, как на проде MDaemon.
