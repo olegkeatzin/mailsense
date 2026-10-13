@@ -13,6 +13,9 @@ describe("классификация отказов Active Directory", () => {
     ["80090308: LdapErr: DSID-0C0903A9, comment: AcceptSecurityContext error, data 701, v1db1", "account_expired"],
     ["80090308: LdapErr: DSID-0C0903A9, comment: AcceptSecurityContext error, data 775, v1db1", "account_locked"],
     ["Invalid credentials (49)", "invalid_credentials"],
+    // Контроллер требует защищённого соединения: простой bind по ldap:// отклонён.
+    ["80090308: LdapErr: DSID-0C0903A9, comment: AcceptSecurityContext error, data 8, v1db1", "strong_auth"],
+    ["Strong(er) authentication required", "strong_auth"],
     ["connect ECONNREFUSED 127.0.0.1:636", "network"]
   ];
 
@@ -24,9 +27,13 @@ describe("классификация отказов Active Directory", () => {
     expect(ldapFailureMessage("invalid_credentials")).toBe("Неверный логин или пароль");
     expect(ldapFailureMessage("account_locked")).toMatch(/заблокирована/);
     // Наружу не должны попадать коды AD и имена DSID.
-    for (const kind of ["invalid_credentials", "password_expired", "account_disabled", "account_locked", "account_expired", "config", "not_found", "network"] as const) {
+    for (const kind of ["invalid_credentials", "password_expired", "account_disabled", "account_locked", "account_expired", "strong_auth", "config", "not_found", "network", "unknown"] as const) {
       expect(ldapFailureMessage(kind)).not.toMatch(/data\s|DSID|0x[0-9a-f]+|\b52e\b/i);
     }
+    // Неизвестную ошибку больше НЕ выдаём за неверный пароль: это сбивало с толку на приёмке.
+    expect(ldapFailureMessage("unknown")).toContain("журнал сервера");
+    expect(classifyAdError("unwilling to perform")).toBe("unknown");
+    expect(ldapFailureMessage("strong_auth")).toMatch(/ldaps|636/);
   });
 });
 

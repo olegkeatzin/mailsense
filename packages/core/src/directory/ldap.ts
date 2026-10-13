@@ -44,9 +44,11 @@ export type LdapFailure =
   | "account_disabled"
   | "account_locked"
   | "account_expired"
+  | "strong_auth"
   | "config"
   | "not_found"
-  | "network";
+  | "network"
+  | "unknown";
 
 export class LdapError extends Error {
   readonly kind: LdapFailure;
@@ -69,6 +71,12 @@ export class LdapError extends Error {
  *   701       — срок действия учётной записи истёк
  *   773       — требуется смена пароля
  *   775       — учётная запись заблокирована
+ *   8         — требуется защищённое соединение (простой bind по ldap:// отклонён)
+ *
+ * ⚠️ Раньше ЛЮБАЯ нераспознанная ошибка объявлялась неверным паролем. На приёмке это стоило
+ * времени: администратор видел «Неверный логин или пароль» при заведомо верном пароле, потому
+ * что контроллер отвечал кодом, которого классификатор не знал. Теперь неизвестное — это
+ * `unknown` с честным текстом и кодом AD в журнале сервера.
  */
 export function classifyAdError(message: string): LdapFailure {
   if (/data\s+52e|data\s+525/i.test(message)) return "invalid_credentials";
@@ -76,10 +84,16 @@ export function classifyAdError(message: string): LdapFailure {
   if (/data\s+533/i.test(message)) return "account_disabled";
   if (/data\s+701/i.test(message)) return "account_expired";
   if (/data\s+775/i.test(message)) return "account_locked";
+  // Код 8: контроллер требует подписанного/шифрованного соединения.
+  // AD отвечает по-разному: «Strong(er) authentication required», «stronger authentication required»,
+  // либо кодом: data 8 / (8) / 0x8.
+  if (/strong(?:er)?\s*(?:\(er\))?\s*authentication required|confidentiality required|data\s+8\b|\(8\)|code:\s*0x8\b/i.test(message)) {
+    return "strong_auth";
+  }
   // Обобщённый LDAP-код 49 (0x31) — invalidCredentials.
   if (/invalid credentials|\bdata\s+52e\b|\(49\)|code:\s*0x31/i.test(message)) return "invalid_credentials";
   if (/econnrefused|etimedout|enotfound|socket|connect/i.test(message)) return "network";
-  return "invalid_credentials";
+  return "unknown";
 }
 
 /** Человекочитаемый текст для причины отказа. */
@@ -99,8 +113,12 @@ export function ldapFailureMessage(kind: LdapFailure): string {
       return "Каталог настроен неверно — проверьте URL и Base DN";
     case "not_found":
       return "Учётная запись не найдена в каталоге (проверьте Base DN и фильтр)";
+    case "strong_auth":
+      return "Каталог требует защищённого соединения — включите ldaps:// (порт 636): простой вход по ldap:// контроллер отклонил";
     case "network":
       return "Не удалось подключиться к каталогу — проверьте доступность контроллера домена";
+    case "unknown":
+      return "Каталог отклонил вход — точная причина (код AD) записана в журнал сервера";
   }
 }
 

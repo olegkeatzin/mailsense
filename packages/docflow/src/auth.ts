@@ -353,7 +353,10 @@ export async function login(input: LoginInput): Promise<LoginResult> {
     } catch (err) {
       if (err instanceof LdapError) {
         const text = ldapFailureMessage(err.kind);
-        logger.warn({ login: loginName, kind: err.kind }, "Отказ входа в каталоге");
+        // Пишем и сырой ответ каталога: наружу он не уходит (там только код AD), но без него
+        // разбирать отказ невозможно — на приёмке «неверный логин или пароль» при верном пароле
+        // не оставлял следов. Пароля в этом тексте нет: его AD не возвращает.
+        logger.warn({ login: loginName, kind: err.kind, reason: err.message }, "Отказ входа в каталоге");
         // Считаем только отказы по учётным данным. Недоступность контроллера домена
         // и «каталог настроен неверно» — не перебор, за них блокировать нельзя.
         if (err.kind === "invalid_credentials" || err.kind === "not_found") {
