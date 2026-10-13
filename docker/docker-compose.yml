@@ -117,16 +117,6 @@ services:
       timeout: 5s
       retries: 5
 
-# Сеть приложения. MTU задаётся переменной: если сервер стоит за VPN/шлюзом (в том числе
-# Tailscale, «Континент TLS»), путь до контроллера домена или почтового сервера может не пропускать
-# пакеты размера 1500 — соединение поднимается и тут же рвётся («read ECONNRESET» в журнале,
-# при этом с хоста всё работает). Лечится уменьшением MTU, чаще всего до 1280:
-#   MAILSENSE_DOCKER_MTU=1280 в .env
-networks:
-  default:
-    driver_opts:
-      com.docker.network.driver.mtu: ${MAILSENSE_DOCKER_MTU:-1500}
-
 volumes:
   mailsense-data:
     name: mailsense-data
