@@ -127,6 +127,31 @@ export function ldapFailureMessage(kind: LdapFailure): string {
   }
 }
 
+/**
+ * Похоже ли, что соединение оборвано (а не отказ каталога по учётным данным).
+ *
+ * Дамп трафика на развёртывании показал: контроллер отвечает на unbind не FIN, а RST, и такое же
+ * RST изредка прилетает на первый запрос. Тогда операция падает с ECONNRESET, хотя данные верны.
+ */
+function isConnectionReset(err: unknown): boolean {
+  const msg = String((err as Error)?.message ?? err);
+  return /econnreset|econnaborted|epipe|socket hang up/i.test(msg);
+}
+
+/**
+ * Повторяет операцию ОДИН раз, если соединение оборвалось. Новый вызов создаёт новое соединение
+ * (`clientOf`), поэтому повтор имеет смысл. Прочие ошибки не повторяются: отказ по паролю или
+ * политике должен дойти до пользователя сразу, без второй попытки.
+ */
+async function withConnectionRetry<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (!isConnectionReset(err)) throw err;
+    return await run();
+  }
+}
+
 /** Собирает строку bind из логина по выбранному формату (UPN/sAM/domain/DN). */
 export function buildBindIdentifier(login: string, s: LdapSettings): string {
   const l = (login ?? "").trim();
@@ -152,12 +177,14 @@ function clientOf(s: LdapSettings): Client {
 
 /** Проверка логина/пароля простым bind'ом. */
 export async function verifyLdapCredentials(s: LdapSettings, login: string, password: string): Promise<void> {
-  const c = clientOf(s);
-  try {
-    await c.bind(buildBindIdentifier(login, s), password);
-  } finally {
-    await c.unbind().catch(() => undefined);
-  }
+  await withConnectionRetry(async () => {
+    const c = clientOf(s);
+    try {
+      await c.bind(buildBindIdentifier(login, s), password);
+    } finally {
+      await c.unbind().catch(() => undefined);
+    }
+  });
 }
 
 /** Экранирование значения для LDAP-фильтра (RFC 4515). */
@@ -191,6 +218,17 @@ export async function ldapSearchContacts(
   password: string,
   query: string,
   limit = 25
+): Promise<DirectoryContact[]> {
+  // Тот же повтор при обрыве: поиск в каталоге тоже падал с read ECONNRESET.
+  return await withConnectionRetry(() => ldapSearchContactsOnce(s, login, password, query, limit));
+}
+
+async function ldapSearchContactsOnce(
+  s: LdapSettings,
+  login: string,
+  password: string,
+  query: string,
+  limit: number
 ): Promise<DirectoryContact[]> {
   const c = clientOf(s);
   try {
@@ -342,6 +380,13 @@ export async function ldapAuthenticate(s: LdapSettings, login: string, password:
   if (!l) throw new Error("Укажите логин");
   if (!password) throw new Error("Укажите пароль");
 
+  // Обрыв соединения лечим одной повторной попыткой на НОВОМ соединении: на развёртывании AD
+  // отвечает RST в ответ на unbind, и такое же RST изредка прилетает на первый запрос — при этом
+  // логин и пароль верны. Повторяем только обрыв, отказ по учётным данным уходит пользователю сразу.
+  return await withConnectionRetry(() => ldapAuthenticateOnce(s, l, password));
+}
+
+async function ldapAuthenticateOnce(s: LdapSettings, l: string, password: string): Promise<LdapProfile> {
   const c = clientOf(s);
   try {
     try {
