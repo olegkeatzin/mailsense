@@ -167,7 +167,7 @@
 | Что проверено | Результат |
 |---|---|
 | LDAPS `ldaps://127.0.0.1:636` | **работает**, bind `test@stand.test` / `<пароль стенда>` проходит |
-| LDAP `ldap://127.0.0.1:389` | **не работает** (соединение рвётся на TLS) → используем 636 |
+| LDAP `ldap://127.0.0.1:389` | «соединение рвётся на TLS» — это был **баг клиента**, а не свойство каталога: `clientOf` передавал `tlsOptions` всегда, а ldapts 9.x включает TLS при любом определённом `tlsOptions`, поэтому на 389 уходил TLS ClientHello. Починено (`tlsOptions` — только для `ldaps://`); перепроверить входом и `ldapsearch` |
 | Поиск `OU=KNIITMU,DC=stand,DC=test` | 9 учёток, у всех заполнен `mail` (латиница), `cn`/`displayName` (у Иванова/Петровой — кириллица) |
 | `userAccountControl` | 66048 = NORMAL_ACCOUNT + DONT_EXPIRE_PASSWORD → признак «уволен» = бит `0x2` (ACCOUNTDISABLE) |
 | bind администратора AD | работает (`Administrator@stand.test`) → могу дополнить атрибуты стенда через LDAP |

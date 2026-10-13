@@ -239,6 +239,49 @@ describe("проверка учётных данных", () => {
   });
 });
 
+/**
+ * ldapts 9.x включает TLS при ЛЮБОМ определённом `tlsOptions`, даже если схема `ldap://`
+ * (`secure = isSecureProtocol || hasTlsOptions`). На боевом контуре это выглядело так:
+ * `ldapsearch -H ldap://192.168.1.40:389` с той же учёткой работает, а вход в приложение
+ * падает с `read ECONNRESET` — клиент слал TLS ClientHello на открытый порт 389,
+ * и контроллер рвал соединение. Три коммита с повторами при обрыве лечили симптом.
+ */
+describe("TLS только для ldaps://", () => {
+  test("на ldap:// tlsOptions не передаётся — иначе TLS уходит на открытый порт", async () => {
+    await verifyLdapCredentials(settings({ url: "ldap://192.168.1.40:389" }), "ivanov", "п");
+    const opts = mockClientCtor.mock.calls[0][0];
+    expect(opts.url).toBe("ldap://192.168.1.40:389");
+    expect(opts.tlsOptions).toBeUndefined();
+  });
+
+  test("на ldaps:// tlsOptions передаётся вместе с настройкой проверки сертификата", async () => {
+    await verifyLdapCredentials(settings({ url: "ldaps://192.168.1.40:636" }), "ivanov", "п");
+    expect(mockClientCtor.mock.calls[0][0].tlsOptions).toEqual({ rejectUnauthorized: false });
+
+    await verifyLdapCredentials(
+      settings({ url: "ldaps://192.168.1.40:636", rejectUnauthorized: true }),
+      "ivanov",
+      "п"
+    );
+    expect(mockClientCtor.mock.calls[1][0].tlsOptions).toEqual({ rejectUnauthorized: true });
+  });
+
+  test("решение о TLS не зависит от регистра схемы", async () => {
+    await verifyLdapCredentials(settings({ url: "LDAPS://192.168.1.40:636" }), "ivanov", "п");
+    expect(mockClientCtor.mock.calls[0][0].tlsOptions).toEqual({ rejectUnauthorized: false });
+  });
+
+  test("все обращения к каталогу идут через одно правило", async () => {
+    const plain = settings({ url: "ldap://192.168.1.40:389" });
+    // Вход (bind), поиск контактов и полная выгрузка профилей — один и тот же clientOf().
+    await verifyLdapCredentials(plain, "ivanov", "п");
+    await ldapSearchContacts(plain, "ivanov", "п", "иван");
+    await ldapListProfiles(plain, "ivanov", "п");
+    expect(mockClientCtor).toHaveBeenCalledTimes(3);
+    for (const call of mockClientCtor.mock.calls) expect(call[0].tlsOptions).toBeUndefined();
+  });
+});
+
 describe("поиск контактов", () => {
   function entry(over: Record<string, unknown> = {}) {
     return {

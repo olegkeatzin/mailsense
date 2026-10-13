@@ -141,12 +141,25 @@ export function buildBindIdentifier(login: string, s: LdapSettings): string {
   return l + (suffix.startsWith("@") || !suffix ? suffix : "@" + suffix);
 }
 
+/**
+ * Клиент каталога.
+ *
+ * ⚠️ `tlsOptions` передаём ТОЛЬКО для `ldaps://`. В ldapts 9.x TLS включается самим фактом
+ * наличия определённого `tlsOptions` — независимо от схемы
+ * (`this.secure = isSecureProtocol || hasTlsOptions`). Из-за этого на `ldap://…:389` уходил
+ * TLS ClientHello: контроллер не мог разобрать его как LDAP и рвал соединение, вход падал
+ * с `read ECONNRESET` (в стеке — `TLSWrap.onStreamRead`), хотя `ldapsearch -H ldap://…:389`
+ * с той же учёткой работал. `rejectUnauthorized: false` — это тоже значение, поэтому
+ * «просто передать настройку» нельзя.
+ */
 function clientOf(s: LdapSettings): Client {
+  const url = s.url && s.url.trim() ? s.url.trim() : "ldap://127.0.0.1:389";
+  const secure = /^ldaps:\/\//i.test(url);
   return new Client({
-    url: s.url && s.url.trim() ? s.url.trim() : "ldap://127.0.0.1:389",
+    url,
     connectTimeout: 10000,
     timeout: 25000,
-    tlsOptions: { rejectUnauthorized: s.rejectUnauthorized === true }
+    ...(secure ? { tlsOptions: { rejectUnauthorized: s.rejectUnauthorized === true } } : {})
   });
 }
 

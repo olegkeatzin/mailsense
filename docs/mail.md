@@ -230,8 +230,12 @@ Message-ID родителя (`buildReferences`), строка атрибуции
 `GET /api/contacts/search` (кэш таблицы `contacts` + онлайн-дополнение).
 
 ⚠️ `upnSuffix` может содержать ведущий `@` — не удваивать (`buildBindIdentifier`).
-⚠️ **Только LDAPS**: на стенде `ldap://…:389` рвёт соединение на TLS, нужен `ldaps://127.0.0.1:636`
-с `rejectUnauthorized: false`. И не искать от корня домена — AD отвечает referrals.
+⚠️ **`tlsOptions` — только для `ldaps://`.** В ldapts 9.x TLS включается самим фактом наличия
+любого определённого `tlsOptions`, независимо от схемы (`secure = isSecureProtocol || hasTlsOptions`).
+Пока `clientOf()` передавал `tlsOptions` всегда, на `ldap://…:389` уходил TLS ClientHello:
+контроллер рвал соединение (`read ECONNRESET`, в стеке `TLSWrap.onStreamRead`), и «`ldap://` не работает»
+выглядело свойством каталога — на стенде тоже. Порты при этом открыты, ломал клиент. Отсюда правило:
+передавать `tlsOptions` только для `ldaps://`. И не искать от корня домена — AD отвечает referrals.
 ⚠️ `ldapts` объявлен в `dependencies` и у `@mailsense/core`, и у `apps/electron` (external для tsup) —
 иначе electron-builder не положит его в asar.
 
