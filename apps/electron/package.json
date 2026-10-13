@@ -12,11 +12,12 @@
     "start": "electron .",
     "dist": "electron-builder",
     "server-json": "node scripts/make-server-json.mjs",
-    "dist:linux": "electron-builder --linux",
-    "dist:deb": "electron-builder --linux deb",
-    "dist:win": "electron-builder --win",
-    "dist:win-nsis": "electron-builder --win nsis",
-    "dist:win-portable": "electron-builder --win portable"
+    "check-deps": "node scripts/check-deps.mjs",
+    "dist:linux": "node scripts/check-deps.mjs && electron-builder --linux --publish never",
+    "dist:deb": "node scripts/check-deps.mjs && electron-builder --linux deb --publish never",
+    "dist:win": "node scripts/check-deps.mjs && electron-builder --win --publish never",
+    "dist:win-nsis": "node scripts/check-deps.mjs && electron-builder --win nsis --publish never",
+    "dist:win-portable": "node scripts/check-deps.mjs && electron-builder --win portable --publish never"
   },
   "dependencies": {
     "@kenjiuno/msgreader": "^1.28.0",
@@ -34,6 +35,7 @@
     "openai": "^4.79.1",
     "p-queue": "^8.0.1",
     "pdfjs-dist": "^4.10.38",
+    "pg": "^8.13.1",
     "pino": "^9.6.0",
     "xlsx": "^0.18.5",
     "zod": "^3.24.1"

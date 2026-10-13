@@ -78,6 +78,32 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
   `Dynamic require of "..." is not supported`. Пример: `@kenjiuno/msgreader` (тянет `iconv-lite` → `safer-buffer`).
   Такие пакеты добавляй в `dependencies` у `apps/electron/package.json` (останутся external), а не только
   в `@mailsense/core`.
+- ⚠️ **В пакет попадают ТОЛЬКО зависимости `apps/electron`.** Если код рабочей области тянет пакет,
+  которого там нет, приложение упадёт уже у пользователя. Так и случилось: `pg` был у `packages/docflow`,
+  но не у `apps/electron` — релизный zip падал при запуске с
+  `Cannot find package 'pg' imported from ... driver.js` (драйвер PostgreSQL нужен, даже когда СЭД
+  выключена: код импортируется при старте).
+
+  **Правило:** новая зависимость `core`/`docflow`/`server` — это ещё и зависимость `apps/electron`
+  (либо она сознательно переводится в бандл). Следят за этим двое:
+
+  1. `node apps/electron/scripts/check-deps.mjs` — запускается автоматически перед каждой упаковкой
+     (в скриптах `dist:win`, `dist:deb`, `dist:linux`), падает с перечнем пропущенного;
+  2. тест `packages/server/src/packagingDeps.test.ts` — тот же инвариант в общем прогоне тестов.
+
+  ⚠️ **Проверять надо и собранный пакет, а не только манифест.** Минимум — запустить приложение
+  из `release/win-unpacked` (или `linux-unpacked`). Без графики годится такая проверка: распаковать
+  `app.asar` и загрузить зависимости тем же Electron в режиме Node:
+
+  ```bash
+  # Windows: asar-утилита лежит в node_modules, бинарник — в собранном пакете
+  node node_modules/.pnpm/@electron+asar@*/node_modules/@electron/asar/bin/asar.js \
+    extract apps/electron/release/win-unpacked/resources/app.asar /tmp/asar
+  # затем из /tmp/asar: ELECTRON_RUN_AS_NODE=1 <...>/MailSense.exe check-load.cjs
+  #   где check-load.cjs по очереди require(...) каждую рантайм-зависимость и печатает пропущенные
+  ```
+
+  Проверено на исправленном пакете: «ВСЕ 20 ЗАВИСИМОСТЕЙ ЗАГРУЖАЮТСЯ ИЗ ПАКЕТА».
 - `electron-builder` конфиг — в `apps/electron/package.json` (поле `build`): `asarUnpack: ["**/*.node"]`,
   `npmRebuild: false` (N-API не требует пересборки), web-дист через `extraResources`.
 - **Windows NSIS-инсталлятор требует wine** (недоступен без sudo). Поэтому `win.target: ["zip"]` +

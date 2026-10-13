@@ -50,8 +50,10 @@ ARG SERVER_URL=""
 ENV SERVER_URL=${SERVER_URL}
 
 # Сама упаковка: .deb для amd64. Скрипт сам скажет, вшиваем адрес или нет.
+# --publish never: без него electron-builder пытается собрать файлы автообновления и падает на
+# пустом конфиге публикации («Cannot read properties of null (reading 'channel')»), когда CI не задан.
 RUN node apps/electron/scripts/make-server-json.mjs \
- && cd apps/electron && npx electron-builder --linux deb
+ && cd apps/electron && npx electron-builder --linux deb --publish never
 
 # Отдаём только артефакт.
 FROM scratch
