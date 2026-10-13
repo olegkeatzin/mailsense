@@ -130,6 +130,29 @@ docker build --network=host -f docker/Dockerfile.deb --output type=local,dest=de
 - если канал медленный, установка в контейнере уже идёт с поднятыми таймаутами pnpm
   (`ARG PNPM_INSTALL_FLAGS` в обоих Dockerfile), их можно переопределить сборочным аргументом.
 
+## Что каким Dockerfile'ам нужно из сети
+
+| Сборка | База | apt / зеркала Debian | npm |
+|---|---|---|---|
+| Серверный образ (`docker/Dockerfile`) | `node:22-bookworm-slim` | **не нужен** | да (`pnpm install`) |
+| `.deb` в контейнере (`docker/Dockerfile.deb`) | `node:22-bookworm` | **нужен** (ruby+fpm) | да |
+
+⚠️ **Серверный образ не ставит ничего через apt — и это осознанно.** В `node:22-bookworm-slim` нет
+системного хранилища сертификатов (каталога `/etc/ssl/certs` вообще нет), но Node проверяет TLS
+**своим встроенным** хранилищем — проверено на этом образе: 119 корневых сертификатов, HTTPS
+к публичному хосту проходит без apt. Прежняя установка `ca-certificates` была лишней, а в сетях без
+доступа к зеркалам Debian она роняла сборку целиком:
+
+```
+E: Package 'ca-certificates' has no installation candidate
+```
+
+Если целевая сеть закрыта, а собирать нужно: собирайте образ там, где есть npm-реестр, и переносите
+файлом — `docker save mailsense:latest -o mailsense-image.tar` → на месте `docker load -i …`.
+
+Сборка `.deb` в контейнере, наоборот, требует apt (ruby, ruby-dev, build-essential) и rubygems.
+В закрытой сети используйте `make package-deb` на Linux-машине, где `fpm` уже есть.
+
 ## TLS и self-signed
 
 `rejectUnauthorized` по умолчанию **false** — принимаем self-signed, как на проде MDaemon.

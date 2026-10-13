@@ -49,9 +49,17 @@ ENV NODE_ENV=production \
     MAILSENSE_PORT=8123
 WORKDIR /app
 
-RUN corepack enable && apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates \
- && rm -rf /var/lib/apt/lists/*
+# ⚠️ apt здесь НЕ нужен.
+#
+# В node:22-bookworm-slim системного хранилища сертификатов нет (каталога /etc/ssl/certs вообще нет),
+# но Node проверяет TLS СВОИМ встроенным хранилищем — проверено на этом образе:
+#   встроенных корневых сертификатов: 119; HTTPS к публичному хосту: 200.
+# Поэтому прежняя установка ca-certificates была лишней, а в сетях без доступа к зеркалам Debian
+# она роняла сборку целиком:
+#   E: Package 'ca-certificates' has no installation candidate
+# Системное хранилище понадобится только если появится внешний инструмент, не умеющий брать корни
+# из Node; тогда пакет надо ставить на машине, где deb.debian.org доступен, а образ — переносить.
+RUN corepack enable
 
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
