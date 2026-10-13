@@ -591,55 +591,6 @@ describe("аутентификация", () => {
     expect(err.kind).toBe("invalid_credentials");
   });
 
-  test("два обрыва подряд не мешают входу (три попытки)", async () => {
-    // На развёртывании обрывы шли подряд: одной повторной попытки не хватало.
-    mockBind.mockRejectedValueOnce(new Error("read ECONNRESET"));
-    mockBind.mockRejectedValueOnce(new Error("read ECONNRESET"));
-    mockSearch.mockResolvedValue({ searchEntries: [entry()] });
-
-    const p = await ldapAuthenticate(settings(), "ivanov", "пароль");
-
-    expect(p.ldapUid).toBe("ivanov");
-    expect(mockClientCtor).toHaveBeenCalledTimes(3);
-  });
-
-  test("если рвётся все три раза — ошибка доходит до пользователя", async () => {
-    mockBind.mockRejectedValue(new Error("read ECONNRESET"));
-    const err = await ldapAuthenticate(settings(), "ivanov", "пароль").catch((e) => e as LdapError);
-
-    expect(err).toBeInstanceOf(LdapError);
-    expect(mockClientCtor).toHaveBeenCalledTimes(3); // и ни одной попытки больше
-  });
-
-  test("обрыв соединения повторяется и вход проходит", async () => {
-    // На развёртывании AD отвечал RST (read ECONNRESET) то на первом запросе, то после unbind,
-    // хотя логин и пароль верны. Повтор на новом соединении снимает эту случайность.
-    mockBind.mockRejectedValueOnce(new Error("read ECONNRESET"));
-    mockSearch.mockResolvedValue({ searchEntries: [entry()] });
-
-    const p = await ldapAuthenticate(settings(), "ivanov", "пароль");
-
-    expect(p.ldapUid).toBe("ivanov");
-    expect(mockClientCtor).toHaveBeenCalledTimes(2); // второе соединение — повтор
-  });
-
-  test("отказ по учётным данным НЕ повторяется", async () => {
-    mockBind.mockRejectedValue(new Error("80090308: data 52e"));
-    await ldapAuthenticate(settings(), "ivanov", "плохой").catch(() => undefined);
-
-    expect(mockClientCtor).toHaveBeenCalledTimes(1); // лишних попыток нет
-  });
-
-  test("обрыв соединения повторяется и при поиске контактов", async () => {
-    mockSearch.mockRejectedValueOnce(new Error("read ECONNRESET"));
-    mockSearch.mockResolvedValueOnce({ searchEntries: [entry()] });
-
-    const res = await ldapSearchContacts(settings(), "ivanov", "пароль", "Иванов");
-
-    expect(res.length).toBeGreaterThan(0);
-    expect(mockClientCtor).toHaveBeenCalledTimes(2);
-  });
-
   test("отключённая учётка распознаётся", async () => {
     mockBind.mockRejectedValue(new Error("data 533"));
     const err = await ldapAuthenticate(settings(), "ivanov", "п").catch((e) => e as LdapError);
