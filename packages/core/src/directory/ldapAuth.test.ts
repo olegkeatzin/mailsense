@@ -16,7 +16,10 @@ describe("классификация отказов Active Directory", () => {
     // Контроллер требует защищённого соединения: простой bind по ldap:// отклонён.
     ["80090308: LdapErr: DSID-0C0903A9, comment: AcceptSecurityContext error, data 8, v1db1", "strong_auth"],
     ["Strong(er) authentication required", "strong_auth"],
-    ["connect ECONNREFUSED 127.0.0.1:636", "network"]
+    ["connect ECONNREFUSED 127.0.0.1:636", "network"],
+    // Обрыв соединения — это недоступность каталога, а не «неверный пароль».
+    ["read ECONNRESET", "network"],
+    ["connect ETIMEDOUT 192.168.1.40:389", "network"]
   ];
 
   test.each(cases)("%s -> %s", (message, expected) => {

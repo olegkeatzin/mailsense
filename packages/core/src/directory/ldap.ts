@@ -92,7 +92,12 @@ export function classifyAdError(message: string): LdapFailure {
   }
   // Обобщённый LDAP-код 49 (0x31) — invalidCredentials.
   if (/invalid credentials|\bdata\s+52e\b|\(49\)|code:\s*0x31/i.test(message)) return "invalid_credentials";
-  if (/econnrefused|etimedout|enotfound|socket|connect/i.test(message)) return "network";
+  // Обрыв соединения — тоже недоступность каталога, а не «неизвестная причина»:
+  // на развёртывании AD отвечал именно `read ECONNRESET`, и пользователь видел
+  // «Неверный логин или пароль» вместо «проверьте доступность контроллера».
+  if (/econnrefused|econnreset|econnaborted|epipe|etimedout|enotfound|ehostunreach|enetunreach|socket|connect|network/i.test(message)) {
+    return "network";
+  }
   return "unknown";
 }
 
