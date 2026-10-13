@@ -57,14 +57,20 @@ git clone <адрес репозитория> && cd mailsense/docker
 cp .env.example .env
 nano .env            # POSTGRES_PASSWORD обязательно; TZ; при необходимости пути данных
 
-# 3. Собрать и запустить
+# 3. ⚠️ Создать папки данных ЗАРАНЕЕ, от своего пользователя.
+#    Если этого не сделать, Docker создаст их от root, а приложение в контейнере работает
+#    от пользователя node (UID 1000) и не сможет открыть базу:
+#    «SqliteError: unable to open database file (SQLITE_CANTOPEN)».
+mkdir -p data pgdata
+
+# 4. Собрать и запустить
 docker compose -f docker-compose.yml up -d --build
 
-# 4. Проверить, что поднялось (оба сервиса healthy)
+# 5. Проверить, что поднялось (оба сервиса healthy)
 docker compose -f docker-compose.yml ps
 curl -s http://127.0.0.1:8123/api/health
 
-# 5. Войти администратором
+# 6. Войти администратором
 #    Открыть http://<сервер>:8123 и войти логином из MAILSENSE_ADMIN_LOGINS
 #    Если каталог AD ещё не настроен (или контроллер недоступен) — войти аварийным
 #    локальным администратором: MAILSENSE_ADMIN_LOGIN / MAILSENSE_ADMIN_PASSWORD.
@@ -146,6 +152,17 @@ MAILSENSE_EXTERNAL_MAILBOX=info@mail.test
 Пути меняются в `.env` (`MAILSENSE_DATA_PATH`, `POSTGRES_DATA_PATH`), отсчёт — от каталога `docker/`.
 Если хочется отдельный диск под данные, укажите абсолютные пути, например
 `MAILSENSE_DATA_PATH=/srv/mailsense/data`.
+
+⚠️ **Права на папки.** Приложение в контейнере работает от непривилегированного пользователя
+`node` (UID 1000), поэтому папка данных должна быть ему доступна на запись. Создавайте папки
+**заранее и от своего пользователя** (`mkdir -p data pgdata`): если папки не было до первого
+запуска, Docker создаёт её от `root`, и приложение падает при старте. Лечится так:
+
+```bash
+ls -ld data pgdata                       # владелец root?
+sudo chown -R 1000:1000 data             # отдать пользователю контейнера
+docker compose -f docker-compose.yml up -d
+```
 
 Проверить логи приложения: `docker/data/logs/mailsense.log` (внутри контейнера — `/data/logs`).
 Логи самого контейнера ограничены (10 МБ × 5 файлов), чтобы диск не забивался.
@@ -379,6 +396,7 @@ curl -s http://127.0.0.1:8123/api/health
 | `pull access denied for mailsense, repository does not exist` | **Само по себе это не ошибка.** Образа `mailsense` в Docker Hub нет и не будет — он собирается на месте. Compose сначала пробует скачать, печатает это сообщение и **затем собирает** образ. Проверено: `up` без `--build` на чистой машине даёт эту строку, после неё «Building → Built → Started» и рабочий контейнер. Если после сообщения сборка прошла — игнорируйте. Если команда всё-таки упала, причина **ниже** по выводу: `docker compose build mailsense` покажет её отдельно |
 | Сборка образа падает на `COPY … not found` | Собран не весь репозиторий. Контекст сборки — корень репозитория (`context: ..`), одной папки `docker/` недостаточно: нужен полный `git clone` |
 | Контейнер перезапускается | `docker compose logs mailsense` — чаще всего неверный пароль в `DOCFLOW_DATABASE_URL` или база ещё не готова |
+| `SqliteError: unable to open database file` (SQLITE_CANTOPEN), контейнер перезапускается по кругу | Папка `data` на хосте недоступна на запись пользователю контейнера `node` (UID 1000): обычно Docker создал её от root, потому что её не было до первого запуска. `sudo chown -R 1000:1000 data`, затем `docker compose up -d` |
 | `/api/health` не отвечает | Порт занят другим процессом; смотреть `docker compose ps` и логи |
 | Вошёл, но настроек нет | Логин не указан в `MAILSENSE_ADMIN_LOGINS`; роль выдаётся при первом входе |
 | Почта не приходит | Настройки ящика (IMAP/POP3, пароль); скан запускает аппарат; смотреть журнал приложения |

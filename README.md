@@ -51,6 +51,8 @@ git clone https://github.com/olegkeatzin/mailsense.git
 cd mailsense/docker
 cp .env.example .env
 nano .env                      # обязательно: POSTGRES_PASSWORD, TZ, вход администратора
+mkdir -p data pgdata           # ⚠️ заранее: иначе Docker создаст их от root, и приложение
+                               #    (работает от node, UID 1000) не сможет открыть базу
 docker compose up -d --build
 docker compose ps              # оба сервиса должны быть healthy
 curl -s http://127.0.0.1:8123/api/health
