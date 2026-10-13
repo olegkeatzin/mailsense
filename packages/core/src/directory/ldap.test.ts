@@ -591,7 +591,27 @@ describe("аутентификация", () => {
     expect(err.kind).toBe("invalid_credentials");
   });
 
-  test("обрыв соединения повторяется один раз и вход проходит", async () => {
+  test("два обрыва подряд не мешают входу (три попытки)", async () => {
+    // На развёртывании обрывы шли подряд: одной повторной попытки не хватало.
+    mockBind.mockRejectedValueOnce(new Error("read ECONNRESET"));
+    mockBind.mockRejectedValueOnce(new Error("read ECONNRESET"));
+    mockSearch.mockResolvedValue({ searchEntries: [entry()] });
+
+    const p = await ldapAuthenticate(settings(), "ivanov", "пароль");
+
+    expect(p.ldapUid).toBe("ivanov");
+    expect(mockClientCtor).toHaveBeenCalledTimes(3);
+  });
+
+  test("если рвётся все три раза — ошибка доходит до пользователя", async () => {
+    mockBind.mockRejectedValue(new Error("read ECONNRESET"));
+    const err = await ldapAuthenticate(settings(), "ivanov", "пароль").catch((e) => e as LdapError);
+
+    expect(err).toBeInstanceOf(LdapError);
+    expect(mockClientCtor).toHaveBeenCalledTimes(3); // и ни одной попытки больше
+  });
+
+  test("обрыв соединения повторяется и вход проходит", async () => {
     // На развёртывании AD отвечал RST (read ECONNRESET) то на первом запросе, то после unbind,
     // хотя логин и пароль верны. Повтор на новом соединении снимает эту случайность.
     mockBind.mockRejectedValueOnce(new Error("read ECONNRESET"));

@@ -138,18 +138,34 @@ function isConnectionReset(err: unknown): boolean {
   return /econnreset|econnaborted|epipe|socket hang up/i.test(msg);
 }
 
+/** Сколько всего попыток при обрыве соединения (первая + повторы). */
+export const LDAP_ATTEMPTS = 3;
+/** Пауза между попытками: даём защите контроллера «остыть». */
+const RETRY_PAUSE_MS = 300;
+
 /**
- * Повторяет операцию ОДИН раз, если соединение оборвалось. Новый вызов создаёт новое соединение
- * (`clientOf`), поэтому повтор имеет смысл. Прочие ошибки не повторяются: отказ по паролю или
- * политике должен дойти до пользователя сразу, без второй попытки.
+ * Повторяет операцию при обрыве соединения: до трёх попыток с короткой паузой.
+ *
+ * Проверено на развёртывании: путь до контроллера сбрасывает соединения непостоянно — одна и та же
+ * команда с верным паролем отвечает то `ок`, то `read ECONNRESET`. Одной повторной попытки мало:
+ * подряд идут два обрыва. Каждая попытка создаёт НОВОЕ соединение (`clientOf`), иначе повтор
+ * бессмысленен — сокет уже мёртв.
+ *
+ * Прочие ошибки не повторяются: отказ по паролю или политике должен дойти до пользователя сразу,
+ * без лишних попыток (иначе серия неудач усугубляет блокировку учётки в AD).
  */
 async function withConnectionRetry<T>(run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (err) {
-    if (!isConnectionReset(err)) throw err;
-    return await run();
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= LDAP_ATTEMPTS; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      lastError = err;
+      if (!isConnectionReset(err) || attempt === LDAP_ATTEMPTS) throw err;
+      await new Promise((resolve) => setTimeout(resolve, RETRY_PAUSE_MS));
+    }
   }
+  throw lastError;
 }
 
 /** Собирает строку bind из логина по выбранному формату (UPN/sAM/domain/DN). */
