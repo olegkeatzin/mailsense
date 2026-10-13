@@ -53,6 +53,7 @@
   "build": {
     "appId": "ru.mailsense.app",
     "productName": "MailSense",
+    "publish": null,
     "directories": {
       "output": "release"
     },

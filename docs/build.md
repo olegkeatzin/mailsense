@@ -111,6 +111,32 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
 - **Linux: `.deb`** — `chrome-sandbox` получает setuid через postinst, песочница работает без флагов.
 - Артефакты: `apps/electron/release/` → `*.deb` (Linux), `*-win.zip` (Windows).
 
+### ⚠️ Локальная сборка `.deb` падает с `reading 'channel'` — токен публикации в окружении
+
+Симптом (сборка проекта проходит, падает только упаковка):
+
+```
+• adding autoupdate files for: deb. (Beta feature)
+⨯ Cannot read properties of null (reading 'channel')
+   at computeChannelNames (updateInfoBuilder.ts:47)
+```
+
+Причина (разобрана по исходнику `app-builder-lib`): если в окружении есть токен публикации
+(`GH_TOKEN`, `GITHUB_TOKEN`, `KEYGEN_TOKEN`, `BITBUCKET_TOKEN`), а репозиторий не определяется
+(нет `.git/config` — например, проект скопирован папкой), electron-builder решает, что публикуем
+в GitHub, не может определить владельца и кладёт `null` в список провайдеров. Дальше
+`computeChannelNames` читает у этого `null` поле `channel` — падение.
+
+Исправлено в проекте: в `build` (apps/electron/package.json) стоит **`"publish": null`** — публикация
+отключена явно, и токен в окружении ни на что не влияет. Проверено воспроизведением в контейнере:
+с токеном и без `publish: null` — exit 1, с `publish: null` — exit 0 и собранный `.deb`.
+
+Разово (если править проект нельзя) помогает убрать токен из окружения:
+
+```bash
+env -u GH_TOKEN -u GITHUB_TOKEN make package-deb SERVER_URL=http://…
+```
+
 ### `.deb`: на Linux — как на Windows, через `make`; контейнер — если собираете с Windows
 
 На Linux адрес сервера вшивается ровно так же, как в Windows-комплект:
