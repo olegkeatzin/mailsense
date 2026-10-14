@@ -1,5 +1,11 @@
 import { getAccountByUsername, getContext, type Account } from "@mailsense/core";
 import {
+  MAIL_DEFAULTS_ENV,
+  MAIL_DEFAULTS_SETTING,
+  hasMailDefaults,
+  parseMailDefaults
+} from "./mailDefaults.js";
+import {
   EXTERNAL_ACCOUNT_SETTING,
   SERVICE_ACCOUNT_SETTING,
   getSetting,
@@ -117,6 +123,47 @@ export interface MailboxSeedResult {
   warnings: string[];
 }
 
+export interface MailDefaultsSeedResult {
+  written: boolean;
+  skipped: boolean;
+  warnings: string[];
+}
+
+/**
+ * Умолчания почтового сервера из окружения (пункт 5 заказчика).
+ *
+ * Работник тогда вводит только адрес ящика и пароль: хост, порты, шифрование и способ входа
+ * приходят из `MAILSENSE_MAIL_DEFAULTS` (JSON с ключами imap/pop3/smtp).
+ * ⚠️ Правило то же, что у каталога: значение в базе важнее переменной окружения.
+ */
+export async function seedMailDefaultsFromEnv(deps: {
+  env: NodeJS.ProcessEnv;
+  readSetting: (key: string) => Promise<string | null>;
+  writeSetting: (key: string, value: string) => Promise<void>;
+}): Promise<MailDefaultsSeedResult | null> {
+  const raw = envValue(deps.env, MAIL_DEFAULTS_ENV);
+  if (raw === null) return null;
+
+  const result: MailDefaultsSeedResult = { written: false, skipped: false, warnings: [] };
+  const current = await deps.readSetting(MAIL_DEFAULTS_SETTING);
+  if (current !== null && current.trim() !== "") {
+    result.skipped = true;
+    return result;
+  }
+  const parsed = parseMailDefaults(raw);
+  if (parsed.error) {
+    result.warnings.push(parsed.error);
+    return result;
+  }
+  if (!hasMailDefaults(parsed.defaults)) {
+    result.warnings.push("умолчания почты пусты: записывать нечего");
+    return result;
+  }
+  await deps.writeSetting(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
+  result.written = true;
+  return result;
+}
+
 export interface MailboxSeedDeps {
   env: NodeJS.ProcessEnv;
   readSetting: (key: string) => Promise<string | null>;
@@ -193,9 +240,17 @@ export interface MailboxSeedReport {
 export function describeSeedSummary(
   ldap: LdapSeedResult | null,
   mailboxes: MailboxSeedResult | null,
-  mailboxSeed?: MailboxSeedReport | null
+  mailboxSeed?: MailboxSeedReport | null,
+  mailDefaults?: MailDefaultsSeedResult | null
 ): string {
   const parts: string[] = [];
+  if (mailDefaults) {
+    parts.push(
+      "умолчания почты: " +
+        (mailDefaults.written ? "записаны" : mailDefaults.skipped ? "уже настроены" : "не записаны")
+    );
+    for (const w of mailDefaults.warnings) parts.push("умолчания почты: " + w);
+  }
   if (mailboxSeed) {
     parts.push(
       "ящики ядра: создано " + mailboxSeed.created + ", пропущено " + mailboxSeed.skipped + ", ошибок " + mailboxSeed.failed
@@ -229,6 +284,7 @@ export interface EnvSeedDeps {
 export interface EnvSeedOutcome {
   ldap: LdapSeedResult | null;
   mailboxes: MailboxSeedResult | null;
+  mailDefaults: MailDefaultsSeedResult | null;
   /** Одна строка для журнала: что настроено, что пропущено, что не удалось. */
   summary: string;
   /** Сбой засева не роняет старт: причина попадает сюда и в журнал. */
@@ -249,6 +305,7 @@ export async function seedFromEnvironment(deps: EnvSeedDeps): Promise<EnvSeedOut
 
   let ldap: LdapSeedResult | null = null;
   let mailboxes: MailboxSeedResult | null = null;
+  let mailDefaults: MailDefaultsSeedResult | null = null;
   const problems: string[] = [];
 
   try {
@@ -256,6 +313,12 @@ export async function seedFromEnvironment(deps: EnvSeedDeps): Promise<EnvSeedOut
   } catch (err) {
     ldap = null;
     problems.push("каталог: " + (err as Error).message);
+  }
+  try {
+    mailDefaults = await seedMailDefaultsFromEnv({ env: deps.env, readSetting, writeSetting });
+  } catch (err) {
+    mailDefaults = null;
+    problems.push("умолчания почты: " + (err as Error).message);
   }
   try {
     mailboxes = await seedServiceMailboxesFromEnv({
@@ -270,7 +333,13 @@ export async function seedFromEnvironment(deps: EnvSeedDeps): Promise<EnvSeedOut
   }
 
   const summary =
-    describeSeedSummary(ldap, mailboxes, deps.mailboxSeed) +
+    describeSeedSummary(ldap, mailboxes, deps.mailboxSeed, mailDefaults) +
     (problems.length ? "; НЕ УДАЛОСЬ — " + problems.join("; ") : "");
-  return { ldap, mailboxes, summary, ...(problems.length ? { error: problems.join("; ") } : {}) };
+  return {
+    ldap,
+    mailboxes,
+    mailDefaults,
+    summary,
+    ...(problems.length ? { error: problems.join("; ") } : {})
+  };
 }

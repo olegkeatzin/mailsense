@@ -33,7 +33,7 @@ import { ServiceAccountAdmin } from "./ServiceAccountAdmin";
 import { MailProfileTab } from "./MailProfileTab";
 import { ServerAddressCard } from "./ServerAddressCard";
 import { NotificationsTab } from "./sorting/NotificationsTab";
-import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, Template } from "../types";
+import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, MailDefaults, Template } from "../types";
 import { humanError } from "../utils/humanError";
 
 const PROTOCOL_OPTIONS = [
@@ -59,6 +59,18 @@ function AccountTab() {
   const [testingSmtp, setTestingSmtp] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
+  /**
+   * Умолчания почтового сервера предприятия (пункт 5): адрес, порты, шифрование и способ входа
+   * задаются на сервере, поэтому работник вводит только адрес ящика и пароль.
+   */
+  const [serverDefaults, setServerDefaults] = useState<MailDefaults>({});
+
+  useEffect(() => {
+    void api.mailDefaults().then(
+      (value) => setServerDefaults(value ?? {}),
+      () => setServerDefaults({})
+    );
+  }, []);
 
   const editingAccount = accounts.find((a) => a.id === editingId) ?? null;
 
@@ -101,14 +113,21 @@ function AccountTab() {
   const openAdd = () => {
     setEditingId(null);
     form.resetFields();
+    // Протокол по умолчанию — тот, для которого предприятие задало умолчания: обычно это POP3,
+    // и работнику не нужно выбирать его вручную.
+    const protocol: "imap" | "pop3" = serverDefaults.pop3 && !serverDefaults.imap ? "pop3" : "imap";
+    const incoming = serverDefaults[protocol] ?? {};
+    const smtp = serverDefaults.smtp ?? {};
     form.setFieldsValue({
-      protocol: "imap",
-      port: 993,
-      tls: "ssl",
-      authType: "login",
-      smtpPort: 587,
-      smtpTls: "starttls",
-      smtpAuthType: "login",
+      protocol,
+      host: incoming.host ?? "",
+      port: incoming.port ?? (protocol === "pop3" ? 995 : 993),
+      tls: incoming.tls ?? "ssl",
+      authType: incoming.authType ?? "login",
+      smtpHost: smtp.host ?? "",
+      smtpPort: smtp.port ?? 587,
+      smtpTls: smtp.tls ?? "starttls",
+      smtpAuthType: smtp.authType ?? "login",
       displayName: "",
       signature: "",
       signatureHtml: "",

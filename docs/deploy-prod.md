@@ -52,6 +52,10 @@ MAILSENSE_LDAP_LOGIN=<служебная доменная учётка>
 MAILSENSE_LDAP_PASSWORD=<её доменный пароль>
 MAILSENSE_LDAP_REJECT_UNAUTHORIZED=false        # сертификат self-signed И просрочен
 
+# Умолчания почтового сервера: работник вводит только адрес ящика и пароль.
+# Задаются один раз на предприятие (или в интерфейсе: Настройки → Почта).
+MAILSENSE_MAIL_DEFAULTS={"pop3":{"host":"192.168.1.10","port":995,"tls":"ssl","authType":"login"},"imap":{"host":"192.168.1.10","port":993,"tls":"ssl","authType":"login"},"smtp":{"host":"192.168.1.10","port":465,"tls":"ssl","authType":"login"}}
+
 # Ящики MDaemon. Логин — ПОЛНЫЙ АДРЕС латиницей, пароль — ПОЧТОВЫЙ (не доменный).
 MAILSENSE_MAILBOXES=[{"username":"lisenko_od@kniitmu.ru","password":"…","protocol":"pop3","host":"192.168.1.10","port":995,"tls":"ssl","authType":"login","smtpHost":"192.168.1.10","smtpPort":465,"smtpTls":"ssl","smtpUsername":"lisenko_od@kniitmu.ru","smtpPassword":"…"}]
 

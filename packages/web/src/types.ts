@@ -81,6 +81,23 @@ export interface EdmsMailAccountRef {
   smtpReady: boolean;
 }
 
+/**
+ * Умолчания почтового сервера предприятия (пункт 5): адрес, порты, шифрование и способ входа.
+ * Их задаёт предприятие, работник вводит только адрес ящика и пароль.
+ */
+export interface MailServerDefaults {
+  host?: string;
+  port?: number;
+  tls?: string;
+  authType?: string;
+}
+
+export interface MailDefaults {
+  imap?: MailServerDefaults;
+  pop3?: MailServerDefaults;
+  smtp?: MailServerDefaults;
+}
+
 /** Выдача ящиков работнику администратором (T57). */
 export interface EdmsMailAllowance {
   userId: string;

@@ -118,6 +118,12 @@ import { mountResolutionRoutes } from "./resolutionRoutes.js";
 import { mountNotificationRoutes } from "./notificationRoutes.js";
 import { mountServiceAccountRoutes } from "./serviceAccountRoutes.js";
 import { mountMailProfileRoutes } from "./mailProfileRoutes.js";
+import {
+  MAIL_DEFAULTS_SETTING,
+  mergeAccountDefaults,
+  parseMailDefaults,
+  type MailDefaults
+} from "./mailDefaults.js";
 import { mountEdmsAllowanceRoutes } from "./edmsMailAllowanceRoutes.js";
 import { mountMyEdmsMailRoutes } from "./myEdmsMailRoutes.js";
 import { mountStatsRoutes } from "./statsRoutes.js";
@@ -456,9 +462,22 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json(visibleAccounts(req).map(accountDto));
   });
 
+  /**
+   * Умолчания почтового сервера предприятия: адрес, порты, шифрование и способ входа.
+   * Работник вводит только адрес ящика и пароль (пункт 5 заказчика). Секретов тут нет.
+   */
+  function mailDefaults(): MailDefaults {
+    return parseMailDefaults(getSettingValue(MAIL_DEFAULTS_SETTING)).defaults;
+  }
+
+  app.get("/api/mail-defaults", (_req, res) => {
+    res.json(mailDefaults());
+  });
+
   app.post("/api/accounts", (req, res) => {
     // Свой ящик заводит сам работник: это его личные данные, а не настройка предприятия.
-    const input = req.body as AccountInput;
+    // Незаполненные поля закрываем умолчаниями предприятия: заполненное человеком не трогаем.
+    const input = mergeAccountDefaults(req.body as AccountInput, mailDefaults());
     const account = createAccount(input, accountOwnerKey(req) || null);
     res.status(201).json(accountDto(account));
   });

@@ -37,6 +37,7 @@ import type {
   Role,
   ServiceAccountPatch,
   ServiceAccountState,
+  MailDefaults,
   SortPreview,
   Template,
   ThreadGroup,
@@ -130,6 +131,8 @@ export const api = {
   health: () => request<{ ok: boolean }>("/api/health"),
 
   accounts: () => request<Account[]>("/api/accounts"),
+  /** Умолчания почтового сервера: форма ящика подставляет их, работник вводит логин и пароль. */
+  mailDefaults: () => request<MailDefaults>("/api/mail-defaults"),
   createAccount: (input: AccountInput) =>
     request<Account>("/api/accounts", { method: "POST", body: JSON.stringify(input) }),
   updateAccount: (id: string, input: AccountInput) =>
