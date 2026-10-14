@@ -417,9 +417,17 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     return [...mine, ...orphan];
   }
 
-  /** Свой ящик по id; чужой для работника не существует (null → 404 на маршруте). */
+  /**
+   * Ящик, доступный работнику: свой. Чужой для него не существует (null → 404).
+   *
+   * ⚠️ Проверяем ТЕМ ЖЕ правилом, что и список (visibleAccounts): иначе бесхозный ящик
+   * администратор видел бы, но ни открыть, ни удалить не смог — ровно так выглядел бы
+   * «пропавший» ящик после обновления.
+   */
   function ownAccount(req: express.Request, id: string): Account | null {
-    return getAccountForUser(id, accountOwnerKey(req));
+    const account = getAccountById(id);
+    if (!account) return null;
+    return visibleAccounts(req).some((a) => a.id === id) ? account : null;
   }
 
   /**

@@ -117,6 +117,11 @@ export function coreMockModule(): Record<string, unknown> {
       const acc = all.find((a) => a.id === id);
       return acc && (acc.ownerUserId ?? "") === ownerKey ? acc : null;
     }),
+    // Ящик по id: тем же списком, что и listAccounts, — иначе доступ к своему ящику
+    // в тестах упирался бы в «не найдено».
+    getAccountById: jest.fn((id: string) =>
+      ((module.listAccounts as unknown as () => Array<{ id: string }>)() ?? []).find((a) => a.id === id) ?? null
+    ),
     listAttachments: jest.fn(() => []),
     // Поиск ящика по адресу (T50): в ядре сравнение в JS, регистр и пробелы не важны.
     getAccountByUsername: jest.fn(() => null),
