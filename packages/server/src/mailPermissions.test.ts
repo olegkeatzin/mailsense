@@ -98,13 +98,14 @@ const call = (method: string, path: string, token?: string) =>
     ...(method === "GET" || method === "DELETE" ? {} : { body: {} })
   });
 
-describe("почта предприятия закрыта для чужих (D-4)", () => {
-  it.each(ALL_ROUTES)("исполнитель без mail.view: %s %s → 403", async (method, path) => {
+/** Управление настройками и ИИ — права предприятия, а не личные данные. */
+describe("права предприятия закрыты для чужих (D-4)", () => {
+  it.each(MANAGE_ROUTES)("исполнитель без прав: %s %s → 403", async (method, path) => {
     const res = await call(method, path, TOKENS.executor);
     expect(res.status).toBe(403);
   });
 
-  it.each(ALL_ROUTES)("внешний партнёр (без ролей): %s %s → 403", async (method, path) => {
+  it.each(MANAGE_ROUTES)("внешний партнёр (без ролей): %s %s → 403", async (method, path) => {
     const res = await call(method, path, TOKENS.partner);
     expect(res.status).toBe(403);
   });
@@ -112,6 +113,35 @@ describe("почта предприятия закрыта для чужих (D-
   it.each(ALL_ROUTES)("без сессии: %s %s → 401", async (method, path) => {
     const res = await call(method, path);
     expect(res.status).toBe(401);
+  });
+});
+
+/**
+ * Личная почта — не право роли, а собственные данные: граница проходит по владельцу
+ * (docs/design/mail-ownership.md). Отказ по правам здесь был бы регрессией: человек
+ * без ролей обязан пользоваться своим ящиком. Пакетный анализ почты остаётся правом.
+ */
+describe("личная почта доступна любому вошедшему, пакетный анализ — по праву", () => {
+  const GATED_PATHS = [
+    "/api/analysis/progress",
+    "/api/emails/analyze-all",
+    "/api/emails/analyze-range",
+    "/api/emails/analyze-stop"
+  ];
+  const MAIL_ROUTES = [...READ_ROUTES, ...SEND_ROUTES];
+  const OPEN = MAIL_ROUTES.filter(([, path]) => !GATED_PATHS.includes(path));
+  const ANALYZE = MAIL_ROUTES.filter(([, path]) => GATED_PATHS.includes(path));
+
+  it.each(OPEN)("без ролей не отбивается по правам: %s %s", async (method, path) => {
+    for (const t of [TOKENS.executor, TOKENS.partner]) {
+      const res = await call(method, path, t);
+      expect([401, 403]).not.toContain(res.status);
+    }
+  });
+
+  it.each(ANALYZE)("пакетный анализ остаётся правом роли: %s %s → 403", async (method, path) => {
+    const res = await call(method, path, TOKENS.executor);
+    expect(res.status).toBe(403);
   });
 });
 

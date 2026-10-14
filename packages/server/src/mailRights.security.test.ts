@@ -78,12 +78,8 @@ const READ_CASES: Case[] = [
   { what: "GET /api/emails/:id/attachments/:attId/preview — рендер вложения", method: "GET", path: "/api/emails/" + FOREIGN_EMAIL + "/attachments/" + FOREIGN_ATT + "/preview", allow: MAIL_ROLES },
   { what: "GET /api/threads — переписки", method: "GET", path: "/api/threads", allow: MAIL_ROLES },
   { what: "POST /api/threads/rebuild — пересборка переписок", method: "POST", path: "/api/threads/rebuild", body: {}, allow: MAIL_ROLES },
-  { what: "GET /api/analysis/progress — состояние анализа", method: "GET", path: "/api/analysis/progress", allow: MAIL_ROLES },
   { what: "PATCH /api/analysis/:emailId — правка сводки/категории", method: "PATCH", path: "/api/analysis/" + FOREIGN_EMAIL, body: { category: "spam" }, allow: MAIL_ROLES },
   { what: "POST /api/emails/:id/analyze — запуск анализа", method: "POST", path: "/api/emails/" + FOREIGN_EMAIL + "/analyze", body: {}, allow: MAIL_ROLES },
-  { what: "POST /api/emails/analyze-all — пакетный анализ", method: "POST", path: "/api/emails/analyze-all", body: {}, allow: MAIL_ROLES },
-  { what: "POST /api/emails/analyze-range — анализ диапазона", method: "POST", path: "/api/emails/analyze-range", body: {}, allow: MAIL_ROLES },
-  { what: "POST /api/emails/analyze-stop — остановка анализа", method: "POST", path: "/api/emails/analyze-stop", body: {}, allow: MAIL_ROLES },
   { what: "POST /api/emails/bulk/analyze — пакетный анализ по id", method: "POST", path: "/api/emails/bulk/analyze", body: { ids: [FOREIGN_EMAIL] }, allow: MAIL_ROLES },
   { what: "POST /api/emails/bulk/folder — массовое перекладывание", method: "POST", path: "/api/emails/bulk/folder", body: { ids: [FOREIGN_EMAIL], folder: "TRASH" }, allow: MAIL_ROLES },
   { what: "POST /api/emails/bulk/delete — массовое УДАЛЕНИЕ писем", method: "POST", path: "/api/emails/bulk/delete", body: { ids: [FOREIGN_EMAIL] }, allow: MAIL_ROLES },
@@ -110,20 +106,16 @@ const MANAGE_CASES: Case[] = [
   { what: "POST /api/ai/test — проверка модели", method: "POST", path: "/api/ai/test", body: {}, allow: ["admin"] }
 ];
 
-describe("D-4 · чтение почты: чужая роль отбита на КАЖДОМ маршруте", () => {
+describe("D-4 · почта работника: доступна любому вошедшему, граница — владелец", () => {
   for (const c of READ_CASES) {
     it(c.what, async () => {
       const failures: string[] = [];
       for (const role of ROLES) {
         const res = await call(c.method, c.path, role, c.body);
-        if (c.allow.includes(role)) {
-          // Для разрешённой роли проверяем именно ПРАВО: guard обязан пропустить.
-          // Что вернёт обработчик (200/400/404 на пустых данных мока) — уже не про доступ.
-          if (res.status === 401 || res.status === 403) {
-            failures.push(role + ": guard НЕ пропустил — " + res.status + " " + res.text.slice(0, 100));
-          }
-        } else if (res.status !== 403) {
-          failures.push(role + ": ждали 403, получили " + res.status + " — " + res.text.slice(0, 100));
+        // Права роли на СВОЮ почту больше не нужны: 403 означал бы, что человек без ролей
+        // не может пользоваться своим же ящиком. Чужие данные — 404, это в блоке ниже.
+        if (res.status === 401 || res.status === 403) {
+          failures.push(role + ": отбит по правам — " + res.status + " " + res.text.slice(0, 100));
         }
       }
       const anon = await call(c.method, c.path, undefined, c.body);
@@ -132,16 +124,62 @@ describe("D-4 · чтение почты: чужая роль отбита на 
     });
   }
 
-  it("обходной путь «чужой id в теле/параметре»: обработчик не вызывается вообще", async () => {
-    for (const role of ["executor", "manager", "signer"]) {
+  it("обходной путь «чужой id в параметре»: 404 и к ядру не обращаемся", async () => {
+    for (const role of ROLES) {
       const res = await call("GET", "/api/emails?accountId=" + FOREIGN_ACC, role);
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(404);
     }
-    // Решающее доказательство: при отказе к ядру почты не обращались.
-    expect(mockedCore.getEmailView).not.toHaveBeenCalled();
     expect(mockedCore.listEmailsWithAnalysis).not.toHaveBeenCalled();
-    expect(mockedCore.listThreadsGrouped).not.toHaveBeenCalled();
   });
+});
+
+describe("D-4 · чужие данные не отдаются: 404 вместо чужого содержимого", () => {
+  it("карточка, календарь, вложения, правки, анализ и шаблон по чужому письму", async () => {
+    for (const role of ROLES) {
+      expect((await call("GET", "/api/emails/" + FOREIGN_EMAIL, role)).status).toBe(404);
+      expect((await call("GET", "/api/emails/" + FOREIGN_EMAIL + "/ics", role)).status).toBe(404);
+      expect((await call("GET", "/api/emails/" + FOREIGN_EMAIL + "/attachments/" + FOREIGN_ATT + "/file", role)).status).toBe(404);
+      expect((await call("GET", "/api/emails/" + FOREIGN_EMAIL + "/attachments/" + FOREIGN_ATT + "/preview", role)).status).toBe(404);
+      expect((await call("PATCH", "/api/emails/" + FOREIGN_EMAIL + "/folder", role, { folder: "TRASH" })).status).toBe(404);
+      expect((await call("PATCH", "/api/emails/" + FOREIGN_EMAIL + "/external-number", role, { externalNumber: "X" })).status).toBe(404);
+      expect((await call("PATCH", "/api/emails/" + FOREIGN_EMAIL + "/send-date", role, { sendDate: "2026-01-01" })).status).toBe(404);
+      expect((await call("PATCH", "/api/analysis/" + FOREIGN_EMAIL, role, { category: "spam" })).status).toBe(404);
+      expect((await call("POST", "/api/emails/" + FOREIGN_EMAIL + "/analyze", role, {})).status).toBe(404);
+      expect((await call("GET", "/api/compose-template?accountId=" + FOREIGN_ACC + "&mode=new", role)).status).toBe(404);
+      expect((await call("POST", "/api/emails/send", role, { accountId: FOREIGN_ACC })).status).toBe(404);
+      expect((await call("POST", "/api/import", role, { accountId: FOREIGN_ACC, files: [{ filename: "a.txt", data: "AA==" }] })).status).toBe(404);
+      expect((await call("POST", "/api/threads/rebuild", role, { accountId: FOREIGN_ACC })).status).toBe(404);
+    }
+  });
+
+  it("массовые операции с чужими id не трогают чужое: ядру уходит пустой список", async () => {
+    const res = await call("POST", "/api/emails/bulk/delete", "executor", { ids: [FOREIGN_EMAIL] });
+    expect(res.status).toBe(200);
+    expect(mockedCore.deleteEmails).toHaveBeenLastCalledWith([]);
+  });
+});
+
+describe("D-4 · пакетный анализ остаётся правом предприятия (mail.view)", () => {
+  const GATED: Case[] = [
+  { what: "GET /api/analysis/progress — состояние анализа", method: "GET", path: "/api/analysis/progress", allow: MAIL_ROLES },
+  { what: "POST /api/emails/analyze-all — пакетный анализ", method: "POST", path: "/api/emails/analyze-all", body: {}, allow: MAIL_ROLES },
+  { what: "POST /api/emails/analyze-range — анализ диапазона", method: "POST", path: "/api/emails/analyze-range", body: {}, allow: MAIL_ROLES },
+  { what: "POST /api/emails/analyze-stop — остановка анализа", method: "POST", path: "/api/emails/analyze-stop", body: {}, allow: MAIL_ROLES },
+  ];
+  for (const c of GATED) {
+    it(c.what, async () => {
+      const failures: string[] = [];
+      for (const role of ROLES) {
+        const res = await call(c.method, c.path, role, c.body);
+        if (c.allow.includes(role)) {
+          if (res.status === 401 || res.status === 403) failures.push(role + ": guard НЕ пропустил — " + res.status);
+        } else if (res.status !== 403) {
+          failures.push(role + ": ждали 403, получили " + res.status);
+        }
+      }
+      expect(failures).toEqual([]);
+    });
+  }
 });
 
 describe("D-4 · аппарат и администратор реально читают почту (200, а не «пропустили и упало»)", () => {
@@ -157,19 +195,14 @@ describe("D-4 · аппарат и администратор реально ч�
   });
 });
 
-describe("D-4 · отправка и импорт: только mail.send", () => {
+describe("D-4 · отправка и импорт: нужен свой ящик, права роли не нужны", () => {
   for (const c of SEND_CASES) {
     it(c.what, async () => {
       const failures: string[] = [];
       for (const role of ROLES) {
         const res = await call(c.method, c.path, role, c.body);
-        if (c.allow.includes(role)) {
-          if (res.status === 401 || res.status === 403) {
-            failures.push(role + ": guard НЕ пропустил — " + res.status + " " + res.text.slice(0, 100));
-          }
-        } else if (res.status !== 403) {
-          failures.push(role + ": ждали 403, получили " + res.status + " — " + res.text.slice(0, 100));
-        }
+        // Пустой или чужой ящик — 404; отказа по правам быть не должно.
+        if (res.status === 401 || res.status === 403) failures.push(role + ": отбит по правам — " + res.status);
       }
       const anon = await call(c.method, c.path, undefined, c.body);
       if (anon.status !== 401) failures.push("без сессии: ждали 401, получили " + anon.status);
@@ -177,7 +210,7 @@ describe("D-4 · отправка и импорт: только mail.send", () =
     });
   }
 
-  it("отправка без права не доходит до почтового ядра", async () => {
+  it("отправка с чужим ящиком не доходит до почтового ядра", async () => {
     await call("POST", "/api/emails/send", "executor", { accountId: FOREIGN_ACC, to: ["a@b.c"], subject: "x", bodyText: "y" });
     await call("POST", "/api/emails/send", "manager", { accountId: FOREIGN_ACC });
     expect(mockedCore.sendEmail).not.toHaveBeenCalled();

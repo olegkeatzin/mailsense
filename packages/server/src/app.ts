@@ -506,7 +506,6 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post(
     "/api/import",
-    requirePermission("mail.send"),
     asyncHandler(async (req, res) => {
       const accountId = (req.body?.accountId as string) || "";
       const folder = (req.body?.folder as string) || "INBOX";
@@ -527,7 +526,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   );
 
   // -------- emails --------
-  app.get("/api/emails", requirePermission("mail.view"), (req, res) => {
+  app.get("/api/emails", (req, res) => {
     const filter = parseEmailFilter(req.query);
     const mine = myAccountIds(req);
     // Явно запрошенный чужой ящик — 404; иначе выборка ограничена своими ящиками.
@@ -542,13 +541,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     );
   });
 
-  app.post("/api/emails/bulk/analyze", requirePermission("mail.view"), (req, res) => {
+  app.post("/api/emails/bulk/analyze", (req, res) => {
     const n = analyzeEmails(ownedEmailIds(req, (req.body?.ids as string[]) ?? []));
     res.json({ queued: n });
   });
 
   // Шаблон письма для ответа/пересылки/нового: получатели, тема, цитата, подпись.
-  app.get("/api/compose-template", requirePermission("mail.view"), (req, res) => {
+  app.get("/api/compose-template", (req, res) => {
     const accountId = (req.query.accountId as string) || "";
     if (!accountId) return res.status(400).json({ error: "Укажите accountId" });
     const modeRaw = (req.query.mode as string) || "new";
@@ -582,34 +581,34 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     );
   });
 
-  app.get("/api/emails/:id", requirePermission("mail.view"), (req, res) => {
+  app.get("/api/emails/:id", (req, res) => {
     const view = ownEmail(req, req.params.id);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     res.json(view);
   });
 
-  app.patch("/api/emails/:id/folder", requirePermission("mail.view"), (req, res) => {
+  app.patch("/api/emails/:id/folder", (req, res) => {
     if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     const folder = (req.body?.folder as string) ?? "INBOX";
     setEmailFolder(req.params.id, folder);
     res.json({ ok: true });
   });
 
-  app.patch("/api/emails/:id/external-number", requirePermission("mail.view"), (req, res) => {
+  app.patch("/api/emails/:id/external-number", (req, res) => {
     if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     const value = typeof req.body?.externalNumber === "string" ? req.body.externalNumber.trim() || null : null;
     setExternalNumber(req.params.id, value);
     res.json({ ok: true, externalNumber: value });
   });
 
-  app.patch("/api/emails/:id/send-date", requirePermission("mail.view"), (req, res) => {
+  app.patch("/api/emails/:id/send-date", (req, res) => {
     if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     const value = typeof req.body?.sendDate === "string" ? req.body.sendDate.trim() || null : null;
     setSendDate(req.params.id, value);
     res.json({ ok: true, sendDate: value });
   });
 
-  app.get("/api/emails/:id/ics", requirePermission("mail.view"), (req, res) => {
+  app.get("/api/emails/:id/ics", (req, res) => {
     const view = ownEmail(req, req.params.id);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     const eventDate = view.analysis?.eventDate ?? null;
@@ -653,7 +652,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.send(ics);
   });
 
-  app.post("/api/emails/:id/analyze", requirePermission("mail.view"), (req, res) => {
+  app.post("/api/emails/:id/analyze", (req, res) => {
     if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     analyzeEmail(req.params.id);
     res.json({ ok: true });
@@ -681,7 +680,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json({ cleared });
   });
 
-  app.post("/api/emails/bulk/folder", requirePermission("mail.view"), (req, res) => {
+  app.post("/api/emails/bulk/folder", (req, res) => {
     const ids = ownedEmailIds(req, (req.body?.ids as string[]) ?? []);
     const folder = (req.body?.folder as string) ?? "INBOX";
     setEmailsFolder(ids, folder);
@@ -690,7 +689,6 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post(
     "/api/emails/bulk/delete",
-    requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
       const ids = ownedEmailIds(req, (req.body?.ids as string[]) ?? []);
       cancelAnalysis(ids);
@@ -712,8 +710,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     })
   );
 
-  app.patch("/api/analysis/:emailId", requirePermission("mail.view"), (req, res) => {
-    const view = getEmailView(req.params.emailId);
+  app.patch("/api/analysis/:emailId", (req, res) => {
+    const view = ownEmail(req, req.params.emailId);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     const body = req.body ?? {};
     const current = view.analysis;
@@ -737,26 +735,40 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json(result);
   });
 
-  app.get("/api/threads", requirePermission("mail.view"), (req, res) => {
+  app.get("/api/threads", (req, res) => {
     // Тот же фильтр, что и у списка писем: поиск/категории/даты работают и в переписке.
-    res.json(listThreadsGrouped(parseEmailFilter(req.query)));
+    // Выборка ограничена своими ящиками — как и в списке писем.
+    const filter = parseEmailFilter(req.query);
+    const mine = myAccountIds(req);
+    if (filter.accountId && !mine.includes(filter.accountId)) {
+      return res.status(404).json({ error: "Ящик не найден" });
+    }
+    res.json(listThreadsGrouped({ ...filter, accountIds: filter.accountId ? [filter.accountId] : mine }));
   });
 
   // Полная пересборка переписок (на случай, если данные были собраны старой версией).
-  app.post("/api/threads/rebuild", requirePermission("mail.view"), (req, res) => {
+  app.post("/api/threads/rebuild", (req, res) => {
     const accountId = (req.body?.accountId as string) || undefined;
-    res.json({ rethreaded: rebuildThreads(accountId) });
+    const mine = myAccountIds(req);
+    if (accountId && !mine.includes(accountId)) return res.status(404).json({ error: "Ящик не найден" });
+    // Без accountId пересобираем все СВОИ ящики: чужие не трогаем.
+    let rethreaded = 0;
+    for (const id of accountId ? [accountId] : mine) rethreaded += rebuildThreads(id);
+    res.json({ rethreaded });
   });
 
   // -------- отправка / черновики --------
   app.post(
     "/api/emails/send",
-    requirePermission("mail.send"),
     asyncHandler(async (req, res) => {
       // Тело запроса и есть `ComposeInput`: поля `fromName` и `replyTo` (Р19) проходят
       // в ядро КАК ЕСТЬ — маршрут их не чистит и не подставляет. Адрес отправителя берётся
       // из ящика (`accountId`), из тела его подменить нельзя — это правило ядра.
       const compose = (req.body ?? {}) as ComposeInput;
+      // Отправлять можно только со СВОЕГО ящика: чужой accountId не принимаем.
+      if (!compose.accountId || !ownAccount(req, compose.accountId)) {
+        return res.status(404).json({ error: "Ящик не найден" });
+      }
       const bad = attachmentsError(compose.attachments, true);
       if (bad) return res.status(400).json({ error: bad });
       // Ссылку на файл черновика проверяем ДО отправки: письмо не должно уйти без
@@ -974,8 +986,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   // -------- attachments --------
   app.get(
     "/api/emails/:id/attachments/:attId/file",
-    requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
+      // Вложения чужого письма не отдаём: проверка владельца ДО чтения файла.
+      if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
       const atts = listAttachments(req.params.id);
       const att = atts.find((a) => a.id === req.params.attId);
       if (!att || !att.storagePath || !fs.existsSync(att.storagePath)) {
@@ -1007,8 +1020,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.get(
     "/api/emails/:id/attachments/:attId/preview",
-    requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
+      // Вложения чужого письма не отдаём: проверка владельца ДО чтения файла.
+      if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
       const atts = listAttachments(req.params.id);
       const att = atts.find((a) => a.id === req.params.attId);
       if (!att || !att.storagePath || !fs.existsSync(att.storagePath)) {

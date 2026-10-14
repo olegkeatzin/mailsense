@@ -51,6 +51,9 @@ afterAll(async () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  // Письмо e-1 лежит в ящике стенда (acc-1), а он принадлежит администратору сессии:
+  // маршрут вложений проверяет владельца ДО чтения файла (docs/design/mail-ownership.md).
+  coreMocks.getEmailView.mockReturnValue({ id: "e-1", accountId: "acc-1" });
 });
 
 describe("скачивание вложения", () => {
