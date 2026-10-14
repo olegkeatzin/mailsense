@@ -72,6 +72,7 @@ export function mapAccount(row: typeof accounts.$inferSelect): Account {
     port: row.port,
     tls: row.tls as Account["tls"],
     username: row.username,
+    ownerUserId: row.ownerUserId ?? null,
     passwordEncrypted: row.passwordEncrypted,
     authType: row.authType as Account["authType"],
     settings: jparse<Account["settings"]>(row.settings, {}),
@@ -88,6 +89,32 @@ export function mapAccount(row: typeof accounts.$inferSelect): Account {
 
 export function listAccounts(): Account[] {
   return getDb().select().from(accounts).all().map(mapAccount);
+}
+
+/**
+ * Ящики работника: только свои.
+ *
+ * ⚠️ Раньше маршруты показывали `listAccounts()` — всю таблицу. В серверном режиме это
+ * означало, что любой с правом mail.view видит чужие ящики, а по accountId читает чужую
+ * почту и удаляет чужие ящики (settings.manage). Разбор — docs/design/mail-ownership.md.
+ */
+export function listAccountsForUser(ownerKey: string): Account[] {
+  const key = (ownerKey ?? "").trim();
+  if (!key) return [];
+  return getDb()
+    .select()
+    .from(accounts)
+    .all()
+    .filter((r) => (r.ownerUserId ?? "").trim() === key)
+    .map(mapAccount);
+}
+
+/** Чужой ящик для работника не существует: возвращаем null, а не сам ящик. */
+export function getAccountForUser(id: string, ownerKey: string): Account | null {
+  const account = getAccount(id);
+  if (!account) return null;
+  const owner = (account.ownerUserId ?? "").trim();
+  return owner && owner === (ownerKey ?? "").trim() ? account : null;
 }
 
 export function getAccount(id: string): Account | null {
@@ -121,7 +148,9 @@ export function countAccounts(): number {
 export function insertAccount(
   input: AccountInput,
   passwordEncrypted: string,
-  smtpPasswordEncrypted: string | null = null
+  smtpPasswordEncrypted: string | null = null,
+  /** Владелец ящика (LDAP-логин работника). Ставит сервер из подтверждённой сессии. */
+  ownerUserId: string | null = null
 ): Account {
   const db = getDb();
   const id = randomUUID();
@@ -135,6 +164,7 @@ export function insertAccount(
       tls: input.tls,
       username: input.username,
       passwordEncrypted,
+      ownerUserId: ownerUserId && ownerUserId.trim() ? ownerUserId.trim() : null,
       authType: input.authType,
       settings: JSON.stringify(input.settings ?? {}),
       smtpHost: input.smtpHost ?? null,

@@ -170,7 +170,9 @@ beforeAll(async () => {
     smtpPort: smtp.port,
     smtpTls: "none",
     settings: { signatureEnabled: false }
-  });
+    // Владелец ящика — сессия теста (u-admin): доступ идёт по владельцу
+    // (docs/design/mail-ownership.md), а не по праву роли.
+  }, "u-admin");
   accountId = account.id;
 
   const email = core.insertEmail({

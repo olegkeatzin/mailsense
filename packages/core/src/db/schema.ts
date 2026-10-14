@@ -18,6 +18,11 @@ export const accounts = sqliteTable(
     tls: text("tls").notNull(),
     username: text("username").notNull(),
     passwordEncrypted: text("password_encrypted").notNull(),
+    /**
+     * Владелец ящика — учётная запись работника (LDAP-логин). NULL = ничей: записи,
+     * созданные до появления владельца, видит только администратор настроек.
+     */
+    ownerUserId: text("owner_user_id"),
     authType: text("auth_type").notNull().default("login"),
     settings: text("settings").notNull().default("{}"),
     smtpHost: text("smtp_host"),

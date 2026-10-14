@@ -58,6 +58,11 @@ export interface Account {
   smtpAuthType: AuthType | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Владелец ящика — учётная запись работника (LDAP-логин). Поле необязательное: старые
+   * фикстуры тестов его не знают, но mapAccount заполняет его всегда (null = ничей).
+   */
+  ownerUserId?: string | null;
 }
 
 /** Поля, которые задаёт пользователь (пароль передаётся открытым — шифруется на сервере). */

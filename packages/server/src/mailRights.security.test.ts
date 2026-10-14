@@ -87,12 +87,10 @@ const READ_CASES: Case[] = [
   { what: "POST /api/emails/bulk/analyze — пакетный анализ по id", method: "POST", path: "/api/emails/bulk/analyze", body: { ids: [FOREIGN_EMAIL] }, allow: MAIL_ROLES },
   { what: "POST /api/emails/bulk/folder — массовое перекладывание", method: "POST", path: "/api/emails/bulk/folder", body: { ids: [FOREIGN_EMAIL], folder: "TRASH" }, allow: MAIL_ROLES },
   { what: "POST /api/emails/bulk/delete — массовое УДАЛЕНИЕ писем", method: "POST", path: "/api/emails/bulk/delete", body: { ids: [FOREIGN_EMAIL] }, allow: MAIL_ROLES },
-  { what: "GET /api/accounts — список ящиков (нужен композеру)", method: "GET", path: "/api/accounts", allow: MAIL_ROLES },
   { what: "GET /api/compose-template — шаблон ответа по чужому письму", method: "GET", path: "/api/compose-template?accountId=" + FOREIGN_ACC + "&emailId=" + FOREIGN_EMAIL, allow: MAIL_ROLES },
-  // ⚠️ Ручной скан ящика — ПОЧТОВАЯ операция (забрать новые письма), поэтому право mail.view,
-  // а не settings.manage: сначала стояло админское право, и аппарат терял скан (находка F-4,
-  // регрессию ловил тест T30 и живой пайплайн-скрипт под секретарём).
-  { what: "POST /api/accounts/:id/fetch — ручной скан чужого ящика", method: "POST", path: "/api/accounts/" + FOREIGN_ACC + "/fetch", body: {}, allow: MAIL_ROLES }
+  // ⚠️ Ящики в этот список НЕ входят: с 13.10.2026 граница проходит по владельцу, а не по праву
+  // (docs/design/mail-ownership.md). Чужой ящик не виден никому, свой доступен без роли —
+  // проверки в отдельном describe ниже.
 ];
 
 /** Отправка и импорт — mail.send. */
@@ -103,10 +101,6 @@ const SEND_CASES: Case[] = [
 
 /** Управление ящиками и настройками предприятия — settings.manage. */
 const MANAGE_CASES: Case[] = [
-  { what: "POST /api/accounts — создание ящика", method: "POST", path: "/api/accounts", body: {}, allow: ["admin"] },
-  { what: "PUT /api/accounts/:id — правка чужого ящика", method: "PUT", path: "/api/accounts/" + FOREIGN_ACC, body: {}, allow: ["admin"] },
-  { what: "DELETE /api/accounts/:id — удаление чужого ящика", method: "DELETE", path: "/api/accounts/" + FOREIGN_ACC, allow: ["admin"] },
-  { what: "POST /api/accounts/test — проверка соединения", method: "POST", path: "/api/accounts/test", body: {}, allow: ["admin"] },
   // ⚠️ T39 закрыл и ЧТЕНИЕ настроек правом settings.manage (раньше GET был открыт любому
   // вошедшему с вырезанными секретами). Проверяем фактическое поведение, а не старый комментарий.
   { what: "GET /api/settings — чтение настроек предприятия", method: "GET", path: "/api/settings", allow: ["admin"] },
@@ -209,6 +203,40 @@ describe("D-4 · управление ящиками и настройками: 
       expect(failures).toEqual([]);
     });
   }
+});
+
+describe("D-4 · ящики: граница по владельцу, а не по праву", () => {
+  it("чужой ящик не виден в списке ни одной роли", async () => {
+    for (const role of ROLES) {
+      const res = await call("GET", "/api/accounts", role);
+      expect(res.status).toBe(200);
+      const ids = (res.body as Array<{ id: string }>).map((a) => a.id);
+      expect(ids).not.toContain(FOREIGN_ACC);
+    }
+  });
+
+  it("свой ящик заводит любой вошедший: роли guard не отбивает", async () => {
+    for (const role of ROLES) {
+      const res = await call("POST", "/api/accounts", role, {});
+      expect([401, 403]).not.toContain(res.status);
+    }
+    expect((await call("POST", "/api/accounts", undefined, {})).status).toBe(401);
+  });
+
+  it("правка, удаление и скан ЧУЖОГО ящика — 404 у всех, включая администратора", async () => {
+    for (const role of ROLES) {
+      expect((await call("PUT", "/api/accounts/" + FOREIGN_ACC, role, {})).status).toBe(404);
+      expect((await call("DELETE", "/api/accounts/" + FOREIGN_ACC, role)).status).toBe(404);
+      expect((await call("POST", "/api/accounts/" + FOREIGN_ACC + "/fetch", role, {})).status).toBe(404);
+    }
+  });
+
+  it("проверка соединения доступна любому вошедшему", async () => {
+    for (const role of ROLES) {
+      const res = await call("POST", "/api/accounts/test", role, {});
+      expect([401, 403]).not.toContain(res.status);
+    }
+  });
 });
 
 describe("D-4 · личные маршруты остаются доступны любому вошедшему", () => {

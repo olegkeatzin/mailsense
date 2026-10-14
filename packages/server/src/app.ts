@@ -25,6 +25,8 @@ import {
   getTemplate,
   getAccounts,
   listAccounts,
+  listAccountsForUser,
+  getAccountForUser,
   getAiConfig,
   getEmailView,
   getProgress,
@@ -65,12 +67,14 @@ import {
   upsertAnalysis,
   getAllSettings,
   DraftAttachmentError,
+  type Account,
   type AccountInput,
   type AnalysisStatus,
   type Category,
   type ComposeInput,
   type EmailListFilter,
   type ComposeMode,
+  type EmailView,
   buildComposeTemplate
 } from "@mailsense/core";
 import { logger } from "@mailsense/core";
@@ -96,7 +100,8 @@ import {
   syncDirectoryUsers,
   updateManualUser,
   type AuthUser,
-  type UserWithRoles
+  type UserWithRoles,
+  hasPermission
 } from "@mailsense/docflow";
 import {
   attachUser,
@@ -387,31 +392,87 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   });
 
   // -------- accounts --------
-  app.get("/api/accounts", requirePermission("mail.view"), (_req, res) => {
-    res.json(getAccounts().map(accountDto));
+  /**
+   * Ключ работника для владения ящиками — как у личного профиля почты (Р18): LDAP-логин,
+   * а у локального администратора — его id.
+   */
+  function accountOwnerKey(req: express.Request): string {
+    const user = req.user as unknown as { id?: string; ldapUid?: string | null } | null;
+    const login = String(user?.ldapUid ?? "").trim();
+    return login || String(user?.id ?? "").trim();
+  }
+
+  /**
+   * Ящики, видимые работнику: только свои.
+   *
+   * ⚠️ Раньше отдавалась вся таблица `accounts` — в серверном режиме чужую почту можно было
+   * читать по accountId, а чужой ящик удалить. Разбор — docs/design/mail-ownership.md.
+   * Строки без владельца (созданные до появления владельца) видит администратор настроек:
+   * иначе они остались бы бесхозными навсегда.
+   */
+  function visibleAccounts(req: express.Request): Account[] {
+    const mine = listAccountsForUser(accountOwnerKey(req));
+    if (!hasPermission(req.user, "settings.manage")) return mine;
+    const orphan = listAccounts().filter((a) => !(a.ownerUserId ?? "").trim());
+    return [...mine, ...orphan];
+  }
+
+  /** Свой ящик по id; чужой для работника не существует (null → 404 на маршруте). */
+  function ownAccount(req: express.Request, id: string): Account | null {
+    return getAccountForUser(id, accountOwnerKey(req));
+  }
+
+  /**
+   * Идентификаторы ящиков работника — для фильтра выборки писем.
+   * ⚠️ Пустой список в ядре значит «разрешённой почты нет» (пустая выборка), а не «все ящики»:
+   * поэтому работник без ящиков не увидит ничего.
+   */
+  function myAccountIds(req: express.Request): string[] {
+    return visibleAccounts(req).map((a) => a.id);
+  }
+
+  /** Письмо, доступное работнику: чужое для него не существует (null → 404). */
+  function ownEmail(req: express.Request, id: string): EmailView | null {
+    const view = getEmailView(id);
+    if (!view) return null;
+    const mine = new Set(myAccountIds(req));
+    return mine.has(view.accountId) ? view : null;
+  }
+
+  /** Из присланных идентификаторов оставляем только письма своих ящиков. */
+  function ownedEmailIds(req: express.Request, ids: string[]): string[] {
+    return ids.filter((id) => ownEmail(req, id) !== null);
+  }
+
+  app.get("/api/accounts", (req, res) => {
+    res.json(visibleAccounts(req).map(accountDto));
   });
 
-  app.post("/api/accounts", requirePermission("settings.manage"), (req, res) => {
+  app.post("/api/accounts", (req, res) => {
+    // Свой ящик заводит сам работник: это его личные данные, а не настройка предприятия.
     const input = req.body as AccountInput;
-    const account = createAccount(input);
+    const account = createAccount(input, accountOwnerKey(req) || null);
     res.status(201).json(accountDto(account));
   });
 
-  app.put("/api/accounts/:id", requirePermission("settings.manage"), (req, res) => {
+  app.put("/api/accounts/:id", (req, res) => {
+    if (!ownAccount(req, req.params.id)) return res.status(404).json({ error: "Ящик не найден" });
     const input = req.body as AccountInput;
     const updated = updateAccountById(req.params.id, input);
-    if (!updated) return res.status(404).json({ error: "Аккаунт не найден" });
+    if (!updated) return res.status(404).json({ error: "Ящик не найден" });
     res.json(accountDto(updated));
   });
 
-  app.delete("/api/accounts/:id", requirePermission("settings.manage"), (req, res) => {
+  app.delete("/api/accounts/:id", (req, res) => {
+    // Удалить можно только свой ящик: чужой не удаляется даже администратором — за общим
+    // ящиком сидят разные люди, и «пропавший ящик» оказался бы чужой потерей.
+    if (!ownAccount(req, req.params.id)) return res.status(404).json({ error: "Ящик не найден" });
     removeAccount(req.params.id);
     res.json({ ok: true });
   });
 
   app.post(
     "/api/accounts/test",
-    requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
       const result = await testConnection(req.body as AccountInput);
       res.json(result);
@@ -420,10 +481,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post(
     "/api/accounts/:id/fetch",
-    // Забрать новые письма — ПОЧТОВАЯ операция, а не администрирование: у аппарата нет
-    // settings.manage, но есть mail.view. Иначе секретариат терял бы ручной скан (регрессия T39).
-    requirePermission("mail.view"),
+    // Забрать новые письма из СВОЕГО ящика — почтовая операция, а не администрирование:
+    // права роли тут не нужны, граница проходит по владельцу (регрессия T39 сохранена).
     asyncHandler(async (req, res) => {
+      if (!ownAccount(req, req.params.id)) return res.status(404).json({ error: "Ящик не найден" });
       // Ручной скан пользователя: удалённые письма можно скачать заново
       // (авто-скан по-прежнему уважает надгробия — см. scheduler.ts).
       const result = await fetchEmails(req.params.id, {
@@ -445,6 +506,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
       if (!accountId || rawFiles.length === 0) {
         return res.status(400).json({ error: "Укажите accountId и файлы" });
       }
+      if (!ownAccount(req, accountId)) return res.status(404).json({ error: "Ящик не найден" });
       const files = rawFiles
         .filter((f) => f && typeof (f as Record<string, unknown>).filename === "string" && typeof (f as Record<string, unknown>).data === "string")
         .map((f) => {
@@ -458,11 +520,22 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   // -------- emails --------
   app.get("/api/emails", requirePermission("mail.view"), (req, res) => {
-    res.json(listEmailsWithAnalysis(parseEmailFilter(req.query)));
+    const filter = parseEmailFilter(req.query);
+    const mine = myAccountIds(req);
+    // Явно запрошенный чужой ящик — 404; иначе выборка ограничена своими ящиками.
+    if (filter.accountId && !mine.includes(filter.accountId)) {
+      return res.status(404).json({ error: "Ящик не найден" });
+    }
+    res.json(
+      listEmailsWithAnalysis({
+        ...filter,
+        accountIds: filter.accountId ? [filter.accountId] : mine
+      })
+    );
   });
 
   app.post("/api/emails/bulk/analyze", requirePermission("mail.view"), (req, res) => {
-    const n = analyzeEmails((req.body?.ids as string[]) ?? []);
+    const n = analyzeEmails(ownedEmailIds(req, (req.body?.ids as string[]) ?? []));
     res.json({ queued: n });
   });
 
@@ -479,7 +552,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     // ⚠️ F-5: данные проверяем ДО вызова ядра. Ядро бросает обычное исключение на неизвестный
     // ящик или письмо, а обработчик здесь синхронный — наружу уходил 500 «Внутренняя ошибка»
     // вместо понятного отказа. 500 остаётся только для настоящих сбоев.
-    if (!listAccounts().some((a) => a.id === accountId)) {
+    if (!ownAccount(req, accountId)) {
       return res.status(404).json({ error: "Ящик не найден" });
     }
     if (mode !== "new") {
@@ -502,31 +575,34 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   });
 
   app.get("/api/emails/:id", requirePermission("mail.view"), (req, res) => {
-    const view = getEmailView(req.params.id);
+    const view = ownEmail(req, req.params.id);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     res.json(view);
   });
 
   app.patch("/api/emails/:id/folder", requirePermission("mail.view"), (req, res) => {
+    if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     const folder = (req.body?.folder as string) ?? "INBOX";
     setEmailFolder(req.params.id, folder);
     res.json({ ok: true });
   });
 
   app.patch("/api/emails/:id/external-number", requirePermission("mail.view"), (req, res) => {
+    if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     const value = typeof req.body?.externalNumber === "string" ? req.body.externalNumber.trim() || null : null;
     setExternalNumber(req.params.id, value);
     res.json({ ok: true, externalNumber: value });
   });
 
   app.patch("/api/emails/:id/send-date", requirePermission("mail.view"), (req, res) => {
+    if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     const value = typeof req.body?.sendDate === "string" ? req.body.sendDate.trim() || null : null;
     setSendDate(req.params.id, value);
     res.json({ ok: true, sendDate: value });
   });
 
   app.get("/api/emails/:id/ics", requirePermission("mail.view"), (req, res) => {
-    const view = getEmailView(req.params.id);
+    const view = ownEmail(req, req.params.id);
     if (!view) return res.status(404).json({ error: "Письмо не найдено" });
     const eventDate = view.analysis?.eventDate ?? null;
     if (!eventDate || !/^\d{4}-\d{2}-\d{2}$/.test(eventDate)) {
@@ -570,6 +646,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   });
 
   app.post("/api/emails/:id/analyze", requirePermission("mail.view"), (req, res) => {
+    if (!ownEmail(req, req.params.id)) return res.status(404).json({ error: "Письмо не найдено" });
     analyzeEmail(req.params.id);
     res.json({ ok: true });
   });
@@ -580,10 +657,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   });
 
   app.post("/api/emails/analyze-range", requirePermission("mail.view"), (req, res) => {
+    // Диапазон тоже ограничен своими ящиками: чужой id в запросе не учитываем.
+    const allowed = myAccountIds(req);
+    const asked = (req.body?.accountIds as string[]) || undefined;
     const n = analyzeRange(
       (req.body?.since as string) || undefined,
       (req.body?.until as string) || undefined,
-      (req.body?.accountIds as string[]) || undefined
+      asked ? asked.filter((id) => allowed.includes(id)) : allowed
     );
     res.json({ queued: n });
   });
@@ -594,7 +674,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   });
 
   app.post("/api/emails/bulk/folder", requirePermission("mail.view"), (req, res) => {
-    const ids = (req.body?.ids as string[]) ?? [];
+    const ids = ownedEmailIds(req, (req.body?.ids as string[]) ?? []);
     const folder = (req.body?.folder as string) ?? "INBOX";
     setEmailsFolder(ids, folder);
     res.json({ ok: true });
@@ -604,7 +684,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     "/api/emails/bulk/delete",
     requirePermission("mail.view"),
     asyncHandler(async (req, res) => {
-      const ids = (req.body?.ids as string[]) ?? [];
+      const ids = ownedEmailIds(req, (req.body?.ids as string[]) ?? []);
       cancelAnalysis(ids);
       const files: string[] = [];
       for (const id of ids) {
@@ -699,6 +779,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     "/api/accounts/:id/test-smtp",
     requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
+      if (!ownAccount(req, req.params.id)) return res.status(404).json({ error: "Ящик не найден" });
       const result = await testSmtpConnection(req.params.id);
       res.json(result);
     })

@@ -326,6 +326,18 @@ CREATE TABLE IF NOT EXISTS mail_profile (
   updated_at TEXT NOT NULL
 );
 `
+  },
+  {
+    // ⚠️ Номер 16 — следующий свободный (в списке выше максимум 15; 11 и 13 заняты историей).
+    version: 16,
+    name: "accounts_owner",
+    sql: `
+-- Ящик принадлежит человеку. В серверном режиме таблица accounts общая: без владельца список
+-- ящиков и почта по accountId были доступны любому с правом mail.view (утечка между людьми).
+-- Старые записи остаются без владельца (NULL) — их видит только администратор настроек.
+ALTER TABLE accounts ADD COLUMN owner_user_id TEXT;
+CREATE INDEX IF NOT EXISTS accounts_owner_idx ON accounts(owner_user_id);
+`
   }
 ];
 

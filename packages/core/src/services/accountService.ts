@@ -19,13 +19,19 @@ export function getAccountById(id: string): Account | null {
   return getAccount(id);
 }
 
-export function createAccount(input: AccountInput): Account {
+/**
+ * Создаёт ящик. Владельца ставит СЕРВЕР из подтверждённой сессии — клиент не может
+ * назначить ящик на другого человека (иначе вернулась бы утечка между работниками).
+ * Разбор — docs/design/mail-ownership.md.
+ */
+export function createAccount(input: AccountInput, ownerUserId: string | null = null): Account {
   const secrets = getContext().secrets;
   if (!input.password) throw new Error("Не указан пароль");
   return insertAccount(
     input,
     secrets.encrypt(input.password),
-    input.smtpPassword ? secrets.encrypt(input.smtpPassword) : null
+    input.smtpPassword ? secrets.encrypt(input.smtpPassword) : null,
+    ownerUserId
   );
 }
 

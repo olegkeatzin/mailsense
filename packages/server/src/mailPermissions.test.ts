@@ -41,7 +41,6 @@ const READ_ROUTES: Array<[string, string]> = [
   ["GET", "/api/emails/e-1/attachments/a-1/preview"],
   ["GET", "/api/threads"],
   ["GET", "/api/analysis/progress"],
-  ["GET", "/api/accounts"],
   ["GET", "/api/compose-template?accountId=acc-1&mode=new"],
   ["PATCH", "/api/emails/e-1/folder"],
   ["PATCH", "/api/emails/e-1/external-number"],
@@ -55,8 +54,6 @@ const READ_ROUTES: Array<[string, string]> = [
   ["POST", "/api/emails/bulk/folder"],
   ["POST", "/api/emails/bulk/delete"],
   ["POST", "/api/threads/rebuild"],
-  // Ручной скан ящика — почтовая операция (аппарат должен забирать новые письма).
-  ["POST", "/api/accounts/acc-1/fetch"]
 ];
 
 const SEND_ROUTES: Array<[string, string]> = [
@@ -72,10 +69,6 @@ const MANAGE_ROUTES: Array<[string, string]> = [
   ["GET", "/api/ai/prompt"],
   ["PUT", "/api/ai/prompt"],
   ["POST", "/api/ai/test"],
-  ["POST", "/api/accounts"],
-  ["PUT", "/api/accounts/acc-1"],
-  ["DELETE", "/api/accounts/acc-1"],
-  ["POST", "/api/accounts/test"],
   ["POST", "/api/accounts/acc-1/test-smtp"]
 ];
 
@@ -119,6 +112,40 @@ describe("почта предприятия закрыта для чужих (D-
   it.each(ALL_ROUTES)("без сессии: %s %s → 401", async (method, path) => {
     const res = await call(method, path);
     expect(res.status).toBe(401);
+  });
+});
+
+describe("ящики: граница по владельцу, а не по праву (docs/design/mail-ownership.md)", () => {
+  it("чужой ящик не виден в списке: исполнителю и партнёру — пусто", async () => {
+    for (const t of [TOKENS.executor, TOKENS.partner]) {
+      const res = await call("GET", "/api/accounts", t);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([]);
+    }
+  });
+
+  it("владелец видит свой ящик", async () => {
+    const res = await call("GET", "/api/accounts", TOKENS.admin);
+    expect(res.status).toBe(200);
+    expect((res.body as Array<{ id: string }>).map((a) => a.id)).toEqual(["acc-1"]);
+  });
+
+  it("чужой ящик не правится, не удаляется и не сканируется — 404", async () => {
+    for (const t of [TOKENS.secretary, TOKENS.executor, TOKENS.partner]) {
+      expect((await call("PUT", "/api/accounts/acc-1", t)).status).toBe(404);
+      expect((await call("DELETE", "/api/accounts/acc-1", t)).status).toBe(404);
+      expect((await call("POST", "/api/accounts/acc-1/fetch", t)).status).toBe(404);
+    }
+    // Ящик стенда принадлежит u-admin: для него это свой ящик, и отказа по правам быть не должно.
+    expect((await call("PUT", "/api/accounts/acc-1", TOKENS.admin)).status).not.toBe(403);
+  });
+
+  it("свой ящик заводит любой вошедший, без сессии — 401", async () => {
+    for (const t of [TOKENS.executor, TOKENS.partner]) {
+      const res = await call("POST", "/api/accounts", t);
+      expect([401, 403]).not.toContain(res.status);
+    }
+    expect((await call("POST", "/api/accounts")).status).toBe(401);
   });
 });
 

@@ -63,6 +63,31 @@ export function EMPTY_MAIL_PROFILE(): Record<string, string | boolean | null> {
 /** Отказ ядра по данным профиля: маршрут обязан отдать 400 с его текстом, а не 500. */
 export class MailProfileInputError extends Error {}
 
+/**
+ * Ящик стенда. Владелец — параметр: доступ к ящику идёт по владельцу
+ * (docs/design/mail-ownership.md), поэтому тест вправе сказать, чей это ящик.
+ */
+export function standAccount(ownerUserId = "u-admin"): Record<string, unknown> {
+  return {
+    id: "acc-1",
+    protocol: "imap",
+    host: "mail.test",
+    port: 993,
+    tls: "ssl",
+    username: "stand@mail.test",
+    ownerUserId,
+    passwordEncrypted: "ШИФР-ПАРОЛЬ",
+    authType: "password",
+    settings: {},
+    smtpHost: "mail.test",
+    smtpPort: 465,
+    smtpTls: "ssl",
+    smtpUsername: "stand@mail.test",
+    smtpPasswordEncrypted: null,
+    smtpAuthType: "password"
+  };
+}
+
 export function coreMockModule(): Record<string, unknown> {
   const module: Record<string, unknown> = {
     logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
@@ -80,25 +105,18 @@ export function coreMockModule(): Record<string, unknown> {
     getProgress: jest.fn(() => ({ emailId: null, stage: "idle", queueLength: 0 })),
     // Ящик стенда — с НАСТРОЕННОЙ отправкой: иначе выбор ящика (Р12) останавливал бы
     // отправку, и падал бы не тот тест, который проверяет.
-    listAccounts: jest.fn(() => [
-      {
-        id: "acc-1",
-        protocol: "imap",
-        host: "mail.test",
-        port: 993,
-        tls: "ssl",
-        username: "stand@mail.test",
-        passwordEncrypted: "ШИФР-ПАРОЛЬ",
-        authType: "password",
-        settings: {},
-        smtpHost: "mail.test",
-        smtpPort: 465,
-        smtpTls: "ssl",
-        smtpUsername: "stand@mail.test",
-        smtpPasswordEncrypted: null,
-        smtpAuthType: "password"
-      }
-    ]),
+    listAccounts: jest.fn(() => [standAccount()]),
+    // Выборки по владельцу: те же правила, что в ядре, — чужой ящик не виден и не выдаётся.
+    listAccountsForUser: jest.fn((ownerKey: string) =>
+      ((module.listAccounts as unknown as () => Array<{ ownerUserId?: string | null }>)() ?? []).filter(
+        (a) => (a.ownerUserId ?? "") === ownerKey
+      )
+    ),
+    getAccountForUser: jest.fn((id: string, ownerKey: string) => {
+      const all = (module.listAccounts as unknown as () => Array<{ id: string; ownerUserId?: string | null }>)() ?? [];
+      const acc = all.find((a) => a.id === id);
+      return acc && (acc.ownerUserId ?? "") === ownerKey ? acc : null;
+    }),
     listAttachments: jest.fn(() => []),
     // Поиск ящика по адресу (T50): в ядре сравнение в JS, регистр и пробелы не важны.
     getAccountByUsername: jest.fn(() => null),

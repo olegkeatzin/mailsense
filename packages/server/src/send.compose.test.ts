@@ -2,7 +2,7 @@ import { createApp } from "./app.js";
 import * as core from "@mailsense/core";
 import * as docflow from "@mailsense/docflow";
 import { listen, request, type RunningApp } from "./testing/harness.js";
-import { testUser } from "./testing/mocks.js";
+import { standAccount, testUser } from "./testing/mocks.js";
 
 jest.mock("@mailsense/core", () => require("./testing/mocks.js").coreMockModule());
 // Документооборот здесь не проверяем, но без мока его исходники тянут @mailsense/core/directory,
@@ -28,6 +28,8 @@ let app: RunningApp;
 
 beforeAll(async () => {
   mockedDocflow.__sessions.set(TOKEN, testUser("u-secretary", ["secretary"]));
+  // Ящик стенда принадлежит секретарю: доступ идёт по владельцу, а не по праву.
+  coreMocks.listAccounts.mockReturnValue([standAccount("u-secretary")]);
   app = await listen(await createApp({}));
 });
 
