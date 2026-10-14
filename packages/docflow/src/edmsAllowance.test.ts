@@ -12,7 +12,7 @@ import {
   EDMS_WORK_MAIL_ALLOWANCE_AUDIT_ACTION,
   getAllowedWorkAccounts,
   getUserSetting,
-  parseAccountIdList,
+  parseWorkAddressList,
   setAllowedWorkAccounts,
   setUserSetting
 } from "./userSettings.js";
@@ -87,37 +87,46 @@ beforeEach(async () => {
 });
 
 describe("разбор списка выданных ящиков", () => {
-  test("пусто, пробелы и дубликаты — чисто", () => {
-    expect(parseAccountIdList(null)).toEqual([]);
-    expect(parseAccountIdList("  ")).toEqual([]);
-    expect(parseAccountIdList("acc-1, ,acc-2")).toEqual(["acc-1", "acc-2"]);
-    expect(parseAccountIdList(" acc-1 , acc-1 ,acc-2")).toEqual(["acc-1", "acc-2"]);
+  test("пусто, пробелы, дубликаты и регистр — чисто", () => {
+    expect(parseWorkAddressList(null)).toEqual([]);
+    expect(parseWorkAddressList("  ")).toEqual([]);
+    expect(parseWorkAddressList("Ivanov@mail.test, ,petrova@mail.test")).toEqual([
+      "ivanov@mail.test",
+      "petrova@mail.test"
+    ]);
+    expect(parseWorkAddressList(" Ivanov@mail.test , IVANOV@mail.test ,petrova@mail.test")).toEqual([
+      "ivanov@mail.test",
+      "petrova@mail.test"
+    ]);
   });
 });
 
 describe("выдача ящиков администратором", () => {
   test("выдача сохраняется и читается", async () => {
-    const result = await setAllowedWorkAccounts(userId, ["acc-1", "acc-2"], actor);
+    const result = await setAllowedWorkAccounts(userId, ["Ivanov@mail.test", "petrova@mail.test"], actor);
 
-    expect(result).toEqual({ accountIds: ["acc-1", "acc-2"], resetChoice: null });
-    expect(await getAllowedWorkAccounts(userId)).toEqual(["acc-1", "acc-2"]);
+    // Храним и отдаём АДРЕСА в нижнем регистре: администратор назначает адрес, не ящик.
+    expect(result).toEqual({ addresses: ["ivanov@mail.test", "petrova@mail.test"], resetChoice: null });
+    expect(await getAllowedWorkAccounts(userId)).toEqual(["ivanov@mail.test", "petrova@mail.test"]);
   });
 
   test("дубликаты схлопываются, след аудита пишется в той же транзакции", async () => {
-    await setAllowedWorkAccounts(userId, ["acc-1", " acc-1 ", "acc-2"], actor);
+    await setAllowedWorkAccounts(userId, ["Ivanov@mail.test", " ivanov@MAIL.test ", "petrova@mail.test"], actor);
 
-    expect(await getAllowedWorkAccounts(userId)).toEqual(["acc-1", "acc-2"]);
+    expect(await getAllowedWorkAccounts(userId)).toEqual(["ivanov@mail.test", "petrova@mail.test"]);
     const rows = await getDocflowPool().query<{ action: string; entity_id: string; old_value: string; new_value: string }>(
       "SELECT action, entity_id, old_value, new_value FROM audit_log WHERE action = $1",
       [EDMS_WORK_MAIL_ALLOWANCE_AUDIT_ACTION]
     );
     expect(rows.rows[0].entity_id).toBe(userId);
     expect(JSON.parse(rows.rows[0].old_value)).toEqual({ [EDMS_ALLOWED_WORK_ACCOUNTS_SETTING]: [] });
-    expect(JSON.parse(rows.rows[0].new_value)).toEqual({ [EDMS_ALLOWED_WORK_ACCOUNTS_SETTING]: ["acc-1", "acc-2"] });
+    expect(JSON.parse(rows.rows[0].new_value)).toEqual({
+      [EDMS_ALLOWED_WORK_ACCOUNTS_SETTING]: ["ivanov@mail.test", "petrova@mail.test"]
+    });
   });
 
   test("пустая выдача убирает строку настройки", async () => {
-    await setAllowedWorkAccounts(userId, ["acc-1"], actor);
+    await setAllowedWorkAccounts(userId, ["ivanov@mail.test"], actor);
     await setAllowedWorkAccounts(userId, [], actor);
 
     expect(await getAllowedWorkAccounts(userId)).toEqual([]);
@@ -129,10 +138,13 @@ describe("выдача ящиков администратором", () => {
 
 describe("отзыв ящика сбрасывает выбор работника", () => {
   test("выбранный ящик отозван — выбор сброшен и есть след", async () => {
-    await setAllowedWorkAccounts(userId, ["acc-1", "acc-2"], actor);
+    await setAllowedWorkAccounts(userId, ["ivanov@mail.test", "petrova@mail.test"], actor);
     await setUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING, "acc-1", actor, "edms.work_mail");
 
-    const result = await setAllowedWorkAccounts(userId, ["acc-2"], actor);
+    // Выбор хранит идентификатор ящика, выдача — адрес: адрес выбранного ящика передаёт сервер.
+    const result = await setAllowedWorkAccounts(userId, ["petrova@mail.test"], actor, {
+      chosenWorkAddress: "ivanov@mail.test"
+    });
 
     expect(result.resetChoice).toBe("acc-1");
     // Право отправлять с запрещённого ящика не осталось.
@@ -145,10 +157,12 @@ describe("отзыв ящика сбрасывает выбор работник
   });
 
   test("выбранный ящик остался в списке — выбор не трогаем", async () => {
-    await setAllowedWorkAccounts(userId, ["acc-1", "acc-2"], actor);
+    await setAllowedWorkAccounts(userId, ["ivanov@mail.test", "petrova@mail.test"], actor);
     await setUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING, "acc-1", actor, "edms.work_mail");
 
-    const result = await setAllowedWorkAccounts(userId, ["acc-1"], actor);
+    const result = await setAllowedWorkAccounts(userId, ["ivanov@mail.test"], actor, {
+      chosenWorkAddress: "ivanov@mail.test"
+    });
 
     expect(result.resetChoice).toBeNull();
     expect(await getUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING)).toBe("acc-1");
@@ -160,9 +174,17 @@ describe("отзыв ящика сбрасывает выбор работник
       [SERVICE_ACCOUNT_SETTING, "acc-service"]
     );
     await setUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING, "acc-service", actor, "edms.work_mail");
-    await setAllowedWorkAccounts(userId, ["acc-1"], actor);
+    // Служебный выбор разрешён и в этой выдаче: адрес служебного ящика передаём и здесь.
+    await setAllowedWorkAccounts(userId, ["ivanov@mail.test"], actor, {
+      chosenWorkAddress: "post@mail.test",
+      serviceAddress: "post@mail.test"
+    });
 
-    const result = await setAllowedWorkAccounts(userId, [], actor);
+    // Служебный ящик разрешён всегда: его адрес приходит из сервисной настройки.
+    const result = await setAllowedWorkAccounts(userId, [], actor, {
+      chosenWorkAddress: "post@mail.test",
+      serviceAddress: "post@mail.test"
+    });
 
     expect(result.resetChoice).toBeNull();
     expect(await getUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING)).toBe("acc-service");
@@ -170,12 +192,14 @@ describe("отзыв ящика сбрасывает выбор работник
   });
 
   test("сбой аудита откатывает И выдачу, И сброс выбора", async () => {
-    await setAllowedWorkAccounts(userId, ["acc-1", "acc-2"], actor);
+    await setAllowedWorkAccounts(userId, ["ivanov@mail.test", "petrova@mail.test"], actor);
     await setUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING, "acc-1", actor, "edms.work_mail");
     await blockAudit();
     try {
-      await expect(setAllowedWorkAccounts(userId, ["acc-2"], actor)).rejects.toThrow();
-      expect(await getAllowedWorkAccounts(userId)).toEqual(["acc-1", "acc-2"]);
+      await expect(
+        setAllowedWorkAccounts(userId, ["petrova@mail.test"], actor, { chosenWorkAddress: "ivanov@mail.test" })
+      ).rejects.toThrow();
+      expect(await getAllowedWorkAccounts(userId)).toEqual(["ivanov@mail.test", "petrova@mail.test"]);
       expect(await getUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING)).toBe("acc-1");
     } finally {
       await unblockAudit();

@@ -1,5 +1,5 @@
 import type express from "express";
-import { listAccounts } from "@mailsense/core";
+import { listAccountsForUser } from "@mailsense/core";
 import {
   AppError,
   EDMS_WORK_ACCOUNT_SETTING,
@@ -68,21 +68,40 @@ function workerLogins(req: express.Request): string[] {
   return [user?.email ?? null, user?.ldapUid ?? null].filter((v): v is string => !!v);
 }
 
+/**
+ * Владелец ящиков работника — его LDAP-логин (у локального администратора — id).
+ * Ящики берём только СВОИ: отправлять с чужого нельзя (docs/design/mail-ownership.md).
+ */
+function workerOwnerKey(req: express.Request): string {
+  const user = req.user as { id?: string; ldapUid?: string | null } | null;
+  const login = String(user?.ldapUid ?? "").trim();
+  return login || String(user?.id ?? "").trim();
+}
+
+interface Worker {
+  id: string;
+  logins: string[];
+  ownerKey: string;
+}
+
 export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps): void {
   const { requireDocflowDb, asyncHandler } = deps;
 
-  async function allowedFor(worker: { id: string; logins: string[] }): Promise<AllowedMailbox[]> {
-    const [state, grantedIds] = await Promise.all([getServiceAccountState(), getAllowedWorkAccounts(worker.id)]);
+  async function allowedFor(worker: Worker): Promise<AllowedMailbox[]> {
+    const [state, grantedAddresses] = await Promise.all([
+      getServiceAccountState(),
+      getAllowedWorkAccounts(worker.id)
+    ]);
     return allowedMailboxes({
-      accounts: listAccounts() as SendAccountLike[],
+      accounts: listAccountsForUser(worker.ownerKey) as SendAccountLike[],
       serviceId: state.accountId,
-      grantedIds,
+      grantedAddresses,
       workerLogins: worker.logins
     });
   }
 
-  async function payloadFor(worker: { id: string; logins: string[] }): Promise<MyEdmsMailPayload> {
-    const accounts = listAccounts() as SendAccountLike[];
+  async function payloadFor(worker: Worker): Promise<MyEdmsMailPayload> {
+    const accounts = listAccountsForUser(worker.ownerKey) as SendAccountLike[];
     const [state, personalId, allowed] = await Promise.all([
       getServiceAccountState(),
       getUserSetting(worker.id, EDMS_WORK_ACCOUNT_SETTING),
@@ -110,7 +129,7 @@ export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps
     "/api/docflow/my-edms-mail",
     requireDocflowDb,
     asyncHandler(async (req, res) => {
-      const worker = { id: workerIdOf(req), logins: workerLogins(req) };
+      const worker: Worker = { id: workerIdOf(req), logins: workerLogins(req), ownerKey: workerOwnerKey(req) };
       res.json(await payloadFor(worker));
     })
   );
@@ -119,7 +138,7 @@ export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps
     "/api/docflow/my-edms-mail",
     requireDocflowDb,
     asyncHandler(async (req, res) => {
-      const worker = { id: workerIdOf(req), logins: workerLogins(req) };
+      const worker: Worker = { id: workerIdOf(req), logins: workerLogins(req), ownerKey: workerOwnerKey(req) };
       const body = (req.body ?? {}) as Record<string, unknown>;
       const raw = body.accountId;
       if (raw !== null && raw !== undefined && typeof raw !== "string") {

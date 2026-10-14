@@ -548,10 +548,12 @@ export const resolutionApi = {
       "/api/docflow/users/" + encodeURIComponent(userId) + "/edms-mail-allowance"
     );
   },
-  saveUserEdmsMailAllowance(userId: string, accountIds: string[]) {
+  saveUserEdmsMailAllowance(userId: string, addresses: string[]) {
     return request<EdmsMailAllowance>(
       "/api/docflow/users/" + encodeURIComponent(userId) + "/edms-mail-allowance",
-      { method: "PUT", body: JSON.stringify({ accountIds }) }
+      // Выдаём АДРЕСА: администратор не знает ящиков работника и пароля не вводит
+      // (docs/design/mail-ownership.md).
+      { method: "PUT", body: JSON.stringify({ addresses }) }
     );
   },
 

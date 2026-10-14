@@ -22,8 +22,8 @@ export interface AllowedMailboxesInput {
   accounts: SendAccountLike[];
   /** Служебный внутренний ящик предприятия (docflow.serviceAccountId). */
   serviceId: string | null;
-  /** Ящики, выданные работнику администратором. */
-  grantedIds: string[];
+  /** АДРЕСА ящиков, выданные работнику администратором (идентификаторов админ не знает). */
+  grantedAddresses: string[];
   /** Логины работника из каталога (email и логин) — для автодополнения. */
   workerLogins: Array<string | null | undefined>;
 }
@@ -48,6 +48,7 @@ export function allowedMailboxes(input: AllowedMailboxesInput): AllowedMailbox[]
   const accounts = Array.isArray(input.accounts) ? input.accounts : [];
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const logins = new Set(input.workerLogins.map(normalizeLogin).filter(Boolean));
+  const granted = new Set((Array.isArray(input.grantedAddresses) ? input.grantedAddresses : []).map(normalizeLogin).filter(Boolean));
   const out: AllowedMailbox[] = [];
   const seen = new Set<string>();
 
@@ -65,24 +66,15 @@ export function allowedMailboxes(input: AllowedMailboxesInput): AllowedMailbox[]
     seen.add(service.id);
   }
 
-  const personalIds: string[] = [];
-  for (const id of input.grantedIds) {
-    const trimmed = String(id ?? "").trim();
-    if (trimmed && !personalIds.includes(trimmed)) personalIds.push(trimmed);
-  }
-  // Автодополнение: свой ящик разрешён и без выдачи.
+  // Личный вариант — ящик САМОГО работника: его адрес выдан администратором или совпал
+  // с логином из каталога. Чужие ящики в список не попадают: отправлять с них нельзя.
   for (const account of accounts) {
-    if (logins.has(normalizeLogin(account.username)) && !personalIds.includes(account.id)) {
-      personalIds.push(account.id);
+    if (seen.has(account.id)) continue;
+    const address = normalizeLogin(account.username);
+    if (granted.has(address) || logins.has(address)) {
+      out.push(view(account, "personal"));
+      seen.add(account.id);
     }
-  }
-
-  for (const id of personalIds) {
-    if (seen.has(id)) continue;
-    const account = byId.get(id);
-    if (!account) continue;
-    out.push(view(account, "personal"));
-    seen.add(id);
   }
   return out;
 }

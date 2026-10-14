@@ -39,7 +39,7 @@ describe("выданные ящики видны работнику всегда
     const allowed = allowedMailboxes({
       accounts: [account({ id: "acc-service", username: "post@mail.test" }), granted],
       serviceId: "acc-service",
-      grantedIds: ["acc-granted"],
+      grantedAddresses: ["petrova_ma@mail.test"],
       workerLogins: []
     });
 
@@ -55,7 +55,7 @@ describe("выданные ящики видны работнику всегда
     const allowed = allowedMailboxes({
       accounts: [account({ id: "acc-granted", username: "petrova_ma@mail.test" })],
       serviceId: null,
-      grantedIds: ["acc-granted"],
+      grantedAddresses: ["petrova_ma@mail.test"],
       workerLogins: []
     });
 
@@ -66,7 +66,7 @@ describe("выданные ящики видны работнику всегда
     const allowed = allowedMailboxes({
       accounts: [noSmtp({ id: "acc-service", username: "post@mail.test" })],
       serviceId: "acc-service",
-      grantedIds: [],
+      grantedAddresses: [],
       workerLogins: []
     });
 
@@ -79,7 +79,7 @@ describe("выданные ящики видны работнику всегда
     const allowed = allowedMailboxes({
       accounts: [noSmtp({ id: "acc-own", username: "ivanov@mail.test" })],
       serviceId: null,
-      grantedIds: [],
+      grantedAddresses: [],
       workerLogins: ["ivanov@mail.test"]
     });
 
@@ -92,7 +92,7 @@ describe("список без дублей и без призраков", () => 
     const allowed = allowedMailboxes({
       accounts: [account({ id: "acc-service" })],
       serviceId: "acc-service",
-      grantedIds: ["acc-service"],
+      grantedAddresses: ["post@mail.test"],
       workerLogins: ["test@mail.test"]
     });
 
@@ -104,7 +104,7 @@ describe("список без дублей и без призраков", () => 
     const allowed = allowedMailboxes({
       accounts: [account({ id: "acc-1", username: "ivanov@mail.test" })],
       serviceId: null,
-      grantedIds: ["acc-1", "acc-1"],
+      grantedAddresses: ["ivanov@mail.test", "ivanov@mail.test"],
       workerLogins: ["ivanov@mail.test", "  IVANOV@MAIL.TEST "]
     });
 
@@ -116,7 +116,7 @@ describe("список без дублей и без призраков", () => 
     const allowed = allowedMailboxes({
       accounts: [account({ id: "acc-service" })],
       serviceId: "acc-service",
-      grantedIds: ["acc-исчез"],
+      grantedAddresses: ["ghost@mail.test"],
       workerLogins: []
     });
 

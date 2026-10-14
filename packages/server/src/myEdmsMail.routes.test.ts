@@ -19,6 +19,8 @@ const mockedDocflow = docflow as unknown as Record<string, jest.Mock> & { __sess
 const READY = {
   id: "acc-personal",
   username: "ivanov@mail.test",
+  // Работник сессии — u-ivanov (ldapUid «ivanov»): ящики берутся только его.
+  ownerUserId: "ivanov",
   host: "mail.test",
   protocol: "imap",
   port: 993,
@@ -32,8 +34,8 @@ const READY = {
   smtpPasswordEncrypted: "ШИФР"
 };
 const SERVICE = { ...READY, id: "acc-service", username: "post@mail.test" };
-/** Готовый к отправке, но НЕ выданный ящик: например, директора или коллеги. */
-const FOREIGN = { ...READY, id: "acc-foreign", username: "director@mail.test" };
+/** Готовый к отправке, но ЧУЖОЙ ящик: например, директора или коллеги. */
+const FOREIGN = { ...READY, id: "acc-foreign", username: "director@mail.test", ownerUserId: "director" };
 /** Выданный ящик БЕЗ SMTP: почта только входящая (ровно случай Петровой на стенде, дефект T58). */
 const NO_SMTP = {
   ...READY,
@@ -93,7 +95,7 @@ describe("GET /api/docflow/my-edms-mail", () => {
   });
 
   test("выданный ящик разрешён: он в списке и выбирается по умолчанию", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-personal"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["ivanov@mail.test"]);
     mockedDocflow.getUserSetting.mockResolvedValue("acc-personal");
 
     const res = await request(app.baseUrl, "GET", "/api/docflow/my-edms-mail", { token: TOKEN });
@@ -120,7 +122,7 @@ describe("GET /api/docflow/my-edms-mail", () => {
   });
 
   test("выданный ящик БЕЗ SMTP виден работнику с честным флагом (дефект T58)", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-nosmtp"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["petrova_ma@mail.test"]);
 
     const res = await request(app.baseUrl, "GET", "/api/docflow/my-edms-mail", { token: TOKEN });
 
@@ -134,7 +136,7 @@ describe("GET /api/docflow/my-edms-mail", () => {
   });
 
   test("выданный ящик БЕЗ SMTP можно выбрать — отказ будет на отправке", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-nosmtp"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["petrova_ma@mail.test"]);
 
     const res = await request(app.baseUrl, "PUT", "/api/docflow/my-edms-mail", {
       token: TOKEN,
@@ -164,6 +166,8 @@ describe("GET /api/docflow/my-edms-mail", () => {
   });
 
   test("свой ящик разрешён без выдачи: адрес из каталога совпал с адресом ящика", async () => {
+    // Ящики работника — только ЕГО (docs/design/mail-ownership.md): у этой сессии владелец «self».
+    mockedCore.listAccounts.mockReturnValue([{ ...SERVICE, ownerUserId: "self" }, { ...READY, ownerUserId: "self" }]);
     const res = await request(app.baseUrl, "GET", "/api/docflow/my-edms-mail", { token: TOKEN_SELF });
 
     expect(res.status).toBe(200);
@@ -182,7 +186,7 @@ describe("GET /api/docflow/my-edms-mail", () => {
 
 describe("PUT /api/docflow/my-edms-mail", () => {
   test("выбор сохраняется и возвращается тем же shape, что GET", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-personal"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["ivanov@mail.test"]);
     const res = await request(app.baseUrl, "PUT", "/api/docflow/my-edms-mail", {
       token: TOKEN,
       body: { accountId: "acc-personal" }
@@ -230,7 +234,7 @@ describe("PUT /api/docflow/my-edms-mail", () => {
   });
 
   test("выданный ящик выбрать можно — 200", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-personal"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["ivanov@mail.test"]);
 
     const res = await request(app.baseUrl, "PUT", "/api/docflow/my-edms-mail", {
       token: TOKEN,
@@ -248,7 +252,7 @@ describe("PUT /api/docflow/my-edms-mail", () => {
   });
 
   test("чужой выбор не подменить: идентификатор работника берётся из сессии", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-personal"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["ivanov@mail.test"]);
     const res = await request(app.baseUrl, "PUT", "/api/docflow/my-edms-mail", {
       token: TOKEN,
       // Попытка указать чужого работника в теле игнорируется.

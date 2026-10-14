@@ -151,6 +151,10 @@ export function edmsAllowanceErrorText(error: unknown): string {
       return "Такого ящика нет: возможно, его отключил администратор. Обновите список ящиков и попробуйте снова";
     case "bad_accounts":
       return "Список ящиков передан неверно. Обновите страницу и повторите";
+    case "bad_addresses":
+      return "Список адресов передан неверно. Обновите страницу и повторите";
+    case "bad_address":
+      return "Это не похоже на адрес ящика. Пример: ivanov@kniitmu.ru";
     case "user_not_found":
       return "Работник не найден: возможно, запись удалили. Обновите список пользователей";
     default:

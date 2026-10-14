@@ -1,10 +1,13 @@
 import type express from "express";
-import { listAccounts } from "@mailsense/core";
+import { getAccountById, listAccounts, listAccountsForUser } from "@mailsense/core";
 import {
   AppError,
+  EDMS_WORK_ACCOUNT_SETTING,
   getAllowedWorkAccounts,
   getServiceAccountState,
   getUser,
+  getUserSetting,
+  normalizeWorkAddress,
   setAllowedWorkAccounts,
   type Actor,
   type Permission
@@ -32,9 +35,14 @@ export interface EdmsAllowanceDeps {
 
 export interface EdmsAllowancePayload {
   userId: string;
-  /** Выданные администратором ящики (без дублей). */
+  /** Выданные администратором АДРЕСА ящиков (без дублей) — то, что он и назначает. */
+  addresses: string[];
+  /**
+   * Идентификаторы ящиков работника, попавших в выдачу. Оставлено для совместимости
+   * с прежним экраном выдачи; источник правды — адреса.
+   */
   accountIds: string[];
-  /** Что работник может выбрать: служебный + выданные + свои по логину. */
+  /** Что работник может выбрать: служебный + выданные ему по адресу + свои по логину. */
   allowed: AllowedMailbox[];
   /** Ящик, выбор которого сброшен этим отзывом; null — выбор не тронут. */
   resetChoice: string | null;
@@ -52,14 +60,23 @@ export function mountEdmsAllowanceRoutes(app: express.Express, deps: EdmsAllowan
     const user = await getUser(userId);
     if (!user) throw new AppError("Работник не найден: " + userId, 404, "user_not_found");
 
-    const [state, accountIds] = await Promise.all([getServiceAccountState(), getAllowedWorkAccounts(userId)]);
+    const [state, addresses] = await Promise.all([getServiceAccountState(), getAllowedWorkAccounts(userId)]);
+    // Ящики БЕРЁМ У САМОГО РАБОТНИКА: администратор назначает адрес, а ящик с этим адресом
+    // заводит работник своим паролем (docs/design/mail-ownership.md).
+    const workerKey = String(user.ldapUid ?? "").trim() || user.id;
     const allowed = allowedMailboxes({
-      accounts: listAccounts() as SendAccountLike[],
+      accounts: listAccountsForUser(workerKey) as SendAccountLike[],
       serviceId: state.accountId,
-      grantedIds: accountIds,
+      grantedAddresses: addresses,
       workerLogins: [user.email, user.ldapUid]
     });
-    return { userId, accountIds, allowed, resetChoice };
+    return {
+      userId,
+      addresses,
+      accountIds: allowed.filter((a) => a.kind === "personal").map((a) => a.id),
+      allowed,
+      resetChoice
+    };
   }
 
   app.get(
@@ -78,28 +95,54 @@ export function mountEdmsAllowanceRoutes(app: express.Express, deps: EdmsAllowan
     asyncHandler(async (req, res) => {
       const userId = String(req.params.userId ?? "");
       const body = (req.body ?? {}) as Record<string, unknown>;
-      if (!Array.isArray(body.accountIds)) {
-        throw new AppError("accountIds — список идентификаторов ящиков", 400, "bad_accounts");
-      }
-      if (body.accountIds.some((id) => typeof id !== "string")) {
-        throw new AppError("accountIds — список строк", 400, "bad_accounts");
-      }
 
-      // Дубликаты схлопываем: один ящик выдаётся один раз.
+      // Новый способ — адреса (их администратор и назначает). Прежний способ
+      // (идентификаторы ящиков) принимаем и переводим в адреса: так старый экран не ломается.
       const requested: string[] = [];
-      for (const raw of body.accountIds as string[]) {
-        const id = raw.trim();
-        if (id && !requested.includes(id)) requested.push(id);
+      const push = (value: string) => {
+        const address = normalizeWorkAddress(value);
+        if (address && !requested.includes(address)) requested.push(address);
+      };
+      if (body.addresses !== undefined) {
+        if (!Array.isArray(body.addresses)) {
+          throw new AppError("addresses — список адресов ящиков", 400, "bad_addresses");
+        }
+        for (const raw of body.addresses) {
+          if (typeof raw !== "string") throw new AppError("addresses — список строк", 400, "bad_addresses");
+          const address = raw.trim();
+          if (!address) continue;
+          if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) {
+            throw new AppError("Не похоже на адрес ящика: " + raw, 400, "bad_address");
+          }
+          push(address);
+        }
+      } else if (Array.isArray(body.accountIds)) {
+        const known = new Map((listAccounts() as SendAccountLike[]).map((a) => [a.id, a.username]));
+        for (const raw of body.accountIds) {
+          if (typeof raw !== "string") throw new AppError("accountIds — список строк", 400, "bad_accounts");
+          const id = raw.trim();
+          if (!id) continue;
+          const username = known.get(id);
+          if (!username) throw new AppError("Ящик не найден: " + id, 400, "unknown_account");
+          push(username);
+        }
+      } else {
+        throw new AppError("addresses — список адресов ящиков", 400, "bad_addresses");
       }
 
-      // Несуществующие ящики — 400: выдать то, чего нет, нельзя.
-      const known = new Set((listAccounts() as SendAccountLike[]).map((a) => a.id));
-      const unknown = requested.filter((id) => !known.has(id));
-      if (unknown.length) {
-        throw new AppError("Ящик не найден: " + unknown.join(", "), 400, "unknown_account");
-      }
+      // Адрес выбранного работником ящика нужен, чтобы решить, сбрасывать ли его выбор:
+      // выдача хранит адреса, а выбор — идентификатор ящика.
+      const [state, chosenId] = await Promise.all([
+        getServiceAccountState(),
+        getUserSetting(userId, EDMS_WORK_ACCOUNT_SETTING)
+      ]);
+      const chosen = chosenId ? getAccountById(chosenId) : null;
+      const service = state.accountId ? getAccountById(state.accountId) : null;
 
-      const result = await setAllowedWorkAccounts(userId, requested, actorOf(req));
+      const result = await setAllowedWorkAccounts(userId, requested, actorOf(req), {
+        chosenWorkAddress: chosen?.username ?? null,
+        serviceAddress: service?.username ?? null
+      });
       res.json(await payloadFor(userId, result.resetChoice));
     })
   );

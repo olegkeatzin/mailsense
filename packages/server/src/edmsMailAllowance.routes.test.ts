@@ -19,6 +19,8 @@ const mockedDocflow = docflow as unknown as Record<string, jest.Mock> & { __sess
 const READY = {
   id: "acc-personal",
   username: "ivanov@mail.test",
+  // Работник, которому выдаём, — ldapUid «petrova_ma» (см. getUser ниже): ящики берутся его.
+  ownerUserId: "petrova_ma",
   host: "mail.test",
   protocol: "imap",
   port: 993,
@@ -67,8 +69,8 @@ beforeEach(() => {
     email: "petrova_ma@stand.test",
     ldapUid: "petrova_ma"
   }));
-  mockedDocflow.setAllowedWorkAccounts.mockImplementation(async (_userId: string, accountIds: string[]) => ({
-    accountIds,
+  mockedDocflow.setAllowedWorkAccounts.mockImplementation(async (_userId: string, addresses: string[]) => ({
+    addresses,
     resetChoice: null
   }));
 });
@@ -77,7 +79,7 @@ describe("право на выдачу: settings.manage", () => {
   test("рядовому работнику — 403, ничего не выдаём", async () => {
     const res = await request(app.baseUrl, "PUT", PATH, {
       token: "token:executor",
-      body: { accountIds: ["acc-personal"] }
+      body: { accountIds: ["ivanov@mail.test"] }
     });
 
     expect(res.status).toBe(403);
@@ -93,13 +95,15 @@ describe("право на выдачу: settings.manage", () => {
 
 describe("GET выдачи", () => {
   test("администратор видит выданное и разрешённое", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-personal"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["ivanov@mail.test"]);
 
     const res = await request(app.baseUrl, "GET", PATH, { token: "token:admin" });
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
       userId: "u-ivanov",
+      // Источник правды — адреса; идентификаторы оставлены для прежнего экрана.
+      addresses: ["ivanov@mail.test"],
       accountIds: ["acc-personal"],
       resetChoice: null
     });
@@ -110,7 +114,7 @@ describe("GET выдачи", () => {
   });
 
   test("выданный без SMTP виден администратору с честным флагом (дефект T58)", async () => {
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-nosmtp"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["petrova_ma@mail.test"]);
 
     const res = await request(app.baseUrl, "GET", PATH, { token: "token:admin" });
 
@@ -135,7 +139,7 @@ describe("GET выдачи", () => {
 describe("PUT выдачи", () => {
   test("выдача сохраняется, дубликаты схлопываются", async () => {
     // Заглушка хранилища отдаёт то же, что записали (как настоящая таблица).
-    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["acc-personal", "acc-service"]);
+    mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["ivanov@mail.test", "post@mail.test"]);
     const res = await request(app.baseUrl, "PUT", PATH, {
       token: "token:admin",
       body: { accountIds: ["acc-personal", " acc-personal ", "acc-service"] }
@@ -144,10 +148,11 @@ describe("PUT выдачи", () => {
     expect(res.status).toBe(200);
     expect(mockedDocflow.setAllowedWorkAccounts).toHaveBeenCalledWith(
       "u-ivanov",
-      ["acc-personal", "acc-service"],
-      expect.objectContaining({ id: "u-admin" })
+      ["ivanov@mail.test", "post@mail.test"],
+      expect.objectContaining({ id: "u-admin" }),
+      expect.anything()
     );
-    expect((res.body as { accountIds: string[] }).accountIds).toEqual(["acc-personal", "acc-service"]);
+    expect((res.body as { addresses: string[] }).addresses).toEqual(["ivanov@mail.test", "post@mail.test"]);
   });
 
   test("несуществующий ящик — 400 unknown_account, выдача не пишется", async () => {
@@ -161,19 +166,19 @@ describe("PUT выдачи", () => {
     expect(mockedDocflow.setAllowedWorkAccounts).not.toHaveBeenCalled();
   });
 
-  test("не список — 400 bad_accounts", async () => {
+  test("не список — 400 bad_addresses", async () => {
     const res = await request(app.baseUrl, "PUT", PATH, {
       token: "token:admin",
       body: { accountIds: "acc-personal" }
     });
 
     expect(res.status).toBe(400);
-    expect((res.body as { code: string }).code).toBe("bad_accounts");
+    expect((res.body as { code: string }).code).toBe("bad_addresses");
   });
 
   test("отзыв возвращает сброшенный выбор работника", async () => {
-    mockedDocflow.setAllowedWorkAccounts.mockImplementation(async (_userId: string, accountIds: string[]) => ({
-      accountIds,
+    mockedDocflow.setAllowedWorkAccounts.mockImplementation(async (_userId: string, addresses: string[]) => ({
+      addresses,
       resetChoice: "acc-personal"
     }));
 

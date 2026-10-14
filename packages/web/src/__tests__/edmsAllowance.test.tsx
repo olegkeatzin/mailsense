@@ -5,6 +5,7 @@ import { installDomEnvironment } from "./dom";
 jest.mock("../api", () => ({
   api: {
     accounts: jest.fn(),
+    searchContacts: jest.fn(),
     users: jest.fn(),
     roles: jest.fn(),
     setUserRoles: jest.fn(),
@@ -20,12 +21,14 @@ import { api, resolutionApi } from "../api";
 import { EdmsMailAllowanceModal } from "../components/EdmsMailAllowanceModal";
 import { UsersTab } from "../components/DocflowAdmin";
 import { edmsAllowanceErrorText } from "../components/edmsMail";
-import type { Account, EdmsMailAllowance } from "../types";
+import type { EdmsMailAllowance } from "../types";
 
 /**
- * Таблица пользователей и модалка выдачи тяжёлые (antd Table + Select + загрузка списков):
- * в полном прогоне под нагрузкой они не укладывались в секунду ожидания и падали по ТАЙМАУТУ,
- * а не по проверке. Лимиты подняты, сами проверки те же.
+ * Выдача «почты для СЭД» администратором (T57 → docs/design/mail-ownership.md).
+ *
+ * Администратор назначает АДРЕС (подсказки — из каталога), а пароль от ящика вводит сам
+ * работник. Список ящиков сервера для выдачи больше не нужен: он не говорит, что работник
+ * сможет подключить, а чужие ящики показывать администратору незачем.
  */
 jest.setTimeout(120000);
 
@@ -33,6 +36,7 @@ const personal = { id: "acc-1", username: "petrova@mail.test", host: "mail.test"
 
 const allowance: EdmsMailAllowance = {
   userId: "u-1",
+  addresses: ["petrova@mail.test"],
   accountIds: ["acc-1"],
   allowed: [personal],
   resetChoice: null
@@ -43,48 +47,55 @@ describe("выдача ящиков для СЭД администратором
 
   beforeEach(() => {
     jest.clearAllMocks();
-    (api.accounts as jest.Mock).mockResolvedValue([
-      { id: "acc-1", username: "petrova@mail.test" },
-      { id: "acc-2", username: "secretary@mail.test" }
-    ] as unknown as Account[]);
+    (api.searchContacts as jest.Mock).mockResolvedValue([
+      { login: "ivanov", displayName: "Иванов Иван", mail: "ivanov@kniitmu.ru", dn: "CN=Иванов" }
+    ]);
     (resolutionApi.userEdmsMailAllowance as jest.Mock).mockResolvedValue(allowance);
-    (resolutionApi.saveUserEdmsMailAllowance as jest.Mock).mockImplementation((_userId: string, ids: string[]) =>
-      Promise.resolve({ ...allowance, accountIds: ids })
+    (resolutionApi.saveUserEdmsMailAllowance as jest.Mock).mockImplementation(
+      (_userId: string, addresses: string[]) => Promise.resolve({ ...allowance, addresses })
     );
   });
 
-  it("показывает выданные ящики и объясняет правило", async () => {
+  it("показывает выданные адреса и объясняет правило", async () => {
     render(<EdmsMailAllowanceModal user={{ id: "u-1", fullName: "Мария Петрова" }} onClose={() => {}} />);
 
     await waitFor(() => expect(resolutionApi.userEdmsMailAllowance).toHaveBeenCalledWith("u-1"));
-    expect(await screen.findByText(/Работник сможет выбрать для писем СЭД только отмеченные здесь ящики/)).not.toBeNull();
-    // Выданный ящик виден как выбранный, доступные — в списке.
-    // Подпись выбранного ящика содержит host и признак — ищем по фрагменту.
-    expect(await screen.findByText(/petrova@mail\.test/)).not.toBeNull();
+    expect(
+      await screen.findByText(/Работник сможет выбрать для писем СЭД только ящики с этими адресами/)
+    ).not.toBeNull();
+    expect((await screen.findAllByText(/petrova@mail\.test/)).length).toBeGreaterThan(0);
   });
 
-  it("сохранение отправляет список выданных ящиков", async () => {
+  it("сохранение отправляет адреса, а не идентификаторы ящиков", async () => {
     render(<EdmsMailAllowanceModal user={{ id: "u-1", fullName: "Мария Петрова" }} onClose={() => {}} />);
-    await screen.findByText(/petrova@mail\.test/);
+    await screen.findAllByText(/petrova@mail\.test/);
 
-    fireEvent.mouseDown(screen.getByRole("combobox", { name: "Выданные ящики" }));
-    fireEvent.click(await screen.findByText(/secretary@mail\.test/));
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
 
     await waitFor(() =>
-      expect(resolutionApi.saveUserEdmsMailAllowance).toHaveBeenCalledWith("u-1", ["acc-1", "acc-2"])
+      expect(resolutionApi.saveUserEdmsMailAllowance).toHaveBeenCalledWith("u-1", ["petrova@mail.test"])
     );
+  });
+
+  it("подсказки адресов берутся из каталога", async () => {
+    render(<EdmsMailAllowanceModal user={{ id: "u-1", fullName: "Мария Петрова" }} onClose={() => {}} />);
+    const input = await screen.findByRole("combobox", { name: "Адреса ящиков для СЭД" });
+
+    fireEvent.change(input, { target: { value: "иван" } });
+
+    await waitFor(() => expect(api.searchContacts).toHaveBeenCalledWith("иван", 20), { timeout: 10000 });
   });
 
   it("отозвали выбранный ящик — говорим администратору, что выбор работника сброшен", async () => {
     (resolutionApi.saveUserEdmsMailAllowance as jest.Mock).mockResolvedValue({
       ...allowance,
+      addresses: [],
       accountIds: [],
       allowed: [],
       resetChoice: "acc-1"
     });
     render(<EdmsMailAllowanceModal user={{ id: "u-1", fullName: "Мария Петрова" }} onClose={() => {}} />);
-    await screen.findByText(/petrova@mail\.test/);
+    await screen.findAllByText(/petrova@mail\.test/);
 
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
 
@@ -92,10 +103,15 @@ describe("выдача ящиков для СЭД администратором
     expect((document.body.textContent ?? "").match(/petrova@mail.test/)).not.toBeNull();
   });
 
-  it("пустой список — это отзыв всех ящиков, а не «ничего не делать»", async () => {
-    (resolutionApi.userEdmsMailAllowance as jest.Mock).mockResolvedValue({ ...allowance, accountIds: [], allowed: [] });
+  it("пустой список — это отзыв всех адресов, а не «ничего не делать»", async () => {
+    (resolutionApi.userEdmsMailAllowance as jest.Mock).mockResolvedValue({
+      ...allowance,
+      addresses: [],
+      accountIds: [],
+      allowed: []
+    });
     render(<EdmsMailAllowanceModal user={{ id: "u-1", fullName: "Мария Петрова" }} onClose={() => {}} />);
-    await screen.findByRole("combobox", { name: "Выданные ящики" });
+    await screen.findByRole("combobox", { name: "Адреса ящиков для СЭД" });
 
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
 
@@ -108,18 +124,10 @@ describe("выдача ящиков для СЭД администратором
       err.code = code;
       return err;
     };
-    expect(edmsAllowanceErrorText(withCode("unknown_account"))).toMatch(/Такого ящика нет/);
-    expect(edmsAllowanceErrorText(withCode("bad_accounts"))).toMatch(/Список ящиков передан неверно/);
+    expect(edmsAllowanceErrorText(withCode("bad_addresses"))).toMatch(/Список адресов передан неверно/);
+    expect(edmsAllowanceErrorText(withCode("bad_address"))).toMatch(/не похоже на адрес ящика/);
     expect(edmsAllowanceErrorText(withCode("user_not_found"))).toMatch(/Работник не найден/);
     expect(edmsAllowanceErrorText(new Error("403 Forbidden"))).toMatch(/Недостаточно прав/);
-  });
-
-  it("без права на почту список ящиков недоступен — говорим честно, выданные видны", async () => {
-    (api.accounts as jest.Mock).mockRejectedValue(new Error("403 Forbidden"));
-    render(<EdmsMailAllowanceModal user={{ id: "u-1", fullName: "Мария Петрова" }} onClose={() => {}} />);
-
-    expect(await screen.findByText(/Полный список ящиков недоступен/)).not.toBeNull();
-    expect(await screen.findByText(/petrova@mail.test/)).not.toBeNull();
   });
 
   it("в списке пользователей есть действие «Настроить», открывающее выдачу", async () => {

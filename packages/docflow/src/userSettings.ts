@@ -22,11 +22,14 @@ export const EDMS_WORK_ACCOUNT_SETTING = "edms.workAccountId";
 /** Действие аудита при смене личной почты СЭД. */
 export const EDMS_WORK_MAIL_AUDIT_ACTION = "edms.work_mail";
 /**
- * Ключ выдачи: какие ящики администратор разрешил работнику как «почту для СЭД»
- * (идентификаторы через запятую). Выдача — основной механизм: строгая сверка логина
- * с адресом ящика на стенде не работает (почта @mail.test, каталог @stand.test).
+ * Ключ выдачи: какие АДРЕСА ящиков администратор разрешил работнику как «почту для СЭД»
+ * (адреса через запятую, регистр не важен).
+ *
+ * ⚠️ Храним именно АДРЕС, а не идентификатор ящика: администратор не знает ящиков
+ * работника и не должен вводить его пароль — он назначает адрес (по умолчанию из LDAP),
+ * а пароль работник вводит сам (docs/design/mail-ownership.md).
  */
-export const EDMS_ALLOWED_WORK_ACCOUNTS_SETTING = "edms.allowedWorkAccounts";
+export const EDMS_ALLOWED_WORK_ACCOUNTS_SETTING = "edms.allowedWorkMails";
 /** Действие аудита при выдаче/отзыве ящиков работнику. */
 export const EDMS_WORK_MAIL_ALLOWANCE_AUDIT_ACTION = "edms.work_mail_allowance";
 
@@ -107,24 +110,37 @@ export async function setUserSetting(
   });
 }
 
-/** Список идентификаторов из строки настройки: через запятую, без пустых и дублей. */
-export function parseAccountIdList(value: string | null | undefined): string[] {
+/** Адрес ящика для сравнения: регистр и краевые пробелы не важны. */
+export function normalizeWorkAddress(value: string | null | undefined): string {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+/** Список адресов из строки настройки: через запятую, без пустых и дублей. */
+export function parseWorkAddressList(value: string | null | undefined): string[] {
   const out: string[] = [];
   for (const part of String(value ?? "").split(",")) {
-    const id = part.trim();
-    if (id && !out.includes(id)) out.push(id);
+    const address = normalizeWorkAddress(part);
+    if (address && !out.includes(address)) out.push(address);
   }
   return out;
 }
 
-/** Выданные работнику ящики (пустой список — ничего не выдано). */
+/** Выданные работнику адреса ящиков (пустой список — ничего не выдано). */
 export async function getAllowedWorkAccounts(userId: string): Promise<string[]> {
-  return parseAccountIdList(await getUserSetting(userId, EDMS_ALLOWED_WORK_ACCOUNTS_SETTING));
+  return parseWorkAddressList(await getUserSetting(userId, EDMS_ALLOWED_WORK_ACCOUNTS_SETTING));
+}
+
+/** Что нужно знать, чтобы решить, сбрасывать ли выбор работника при отзыве. */
+export interface AllowanceContext {
+  /** Адрес ящика, который работник выбрал сейчас (резолвит сервер); null — не разрешился. */
+  chosenWorkAddress?: string | null;
+  /** Адрес служебного ящика предприятия: он разрешён всегда, его отзыв выбора не касается. */
+  serviceAddress?: string | null;
 }
 
 export interface AllowanceResult {
-  /** Итоговый список выданных ящиков. */
-  accountIds: string[];
+  /** Итоговый список выданных АДРЕСОВ ящиков. */
+  addresses: string[];
   /** Выбор, сброшенный отзывом (ящик больше не разрешён); null — выбор не тронут. */
   resetChoice: string | null;
 }
@@ -139,12 +155,13 @@ export interface AllowanceResult {
  */
 export async function setAllowedWorkAccounts(
   userId: string,
-  accountIds: string[],
-  actor: Actor
+  addresses: string[],
+  actor: Actor,
+  context: AllowanceContext = {}
 ): Promise<AllowanceResult> {
   const id = String(userId ?? "").trim();
   if (!id) throw new Error("Не указан работник");
-  const next = parseAccountIdList(Array.isArray(accountIds) ? accountIds.join(",") : "");
+  const next = parseWorkAddressList(Array.isArray(addresses) ? addresses.join(",") : "");
 
   return getDocflowDb().transaction(async (tx) => {
     const rows = await tx
@@ -152,7 +169,7 @@ export async function setAllowedWorkAccounts(
       .from(userSettings)
       .where(and(eq(userSettings.userId, id), eq(userSettings.key, EDMS_ALLOWED_WORK_ACCOUNTS_SETTING)))
       .limit(1);
-    const before = parseAccountIdList(rows[0]?.value ?? null);
+    const before = parseWorkAddressList(rows[0]?.value ?? null);
 
     if (next.length === 0) {
       if (rows.length) {
@@ -180,17 +197,23 @@ export async function setAllowedWorkAccounts(
       newValue: JSON.stringify({ [EDMS_ALLOWED_WORK_ACCOUNTS_SETTING]: next })
     });
 
-    // Отзыв: выбранный ящик обязан остаться разрешённым. Служебный ящик предприятия
-    // разрешён всегда, поэтому его отзыв выбора не касается.
-    const serviceId = await getServiceAccountId(tx);
+    // Отзыв: выбранный ящик обязан остаться разрешённым. Сравниваем АДРЕСА: выдача хранит
+    // адрес, а выбор работника — идентификатор ящика, поэтому адрес выбранного ящика
+    // передаёт сервер (у docflow нет почтового ядра). Служебный ящик предприятия разрешён
+    // всегда, поэтому его отзыв выбора не касается.
+    await getServiceAccountId(tx);
     const chosenRows = await tx
       .select()
       .from(userSettings)
       .where(and(eq(userSettings.userId, id), eq(userSettings.key, EDMS_WORK_ACCOUNT_SETTING)))
       .limit(1);
     const chosen = chosenRows[0]?.value?.trim() || null;
+    const chosenAddress = normalizeWorkAddress(context.chosenWorkAddress);
+    const serviceAddress = normalizeWorkAddress(context.serviceAddress);
+    const stillAllowed =
+      !!chosenAddress && (next.includes(chosenAddress) || chosenAddress === serviceAddress);
     let resetChoice: string | null = null;
-    if (chosen && !next.includes(chosen) && chosen !== serviceId) {
+    if (chosen && !stillAllowed) {
       await tx
         .delete(userSettings)
         .where(and(eq(userSettings.userId, id), eq(userSettings.key, EDMS_WORK_ACCOUNT_SETTING)));
@@ -206,6 +229,6 @@ export async function setAllowedWorkAccounts(
       resetChoice = chosen;
     }
 
-    return { accountIds: next, resetChoice };
+    return { addresses: next, resetChoice };
   });
 }

@@ -214,7 +214,9 @@ export function docflowMockModule(): Record<string, unknown> {
     EDMS_WORK_MAIL_AUDIT_ACTION: "edms.work_mail",
     getUserSetting: jest.fn(async () => null),
     // Выдача ящиков «почты для СЭД» (task-56): по умолчанию ничего не выдано.
-    EDMS_ALLOWED_WORK_ACCOUNTS_SETTING: "edms.allowedWorkAccounts",
+    EDMS_ALLOWED_WORK_ACCOUNTS_SETTING: "edms.allowedWorkMails",
+    // Нормализация адреса ящика — как в docflow: маршрут выдачи сравнивает адреса.
+    normalizeWorkAddress: (value: string | null | undefined) => String(value ?? "").trim().toLowerCase(),
     EDMS_WORK_MAIL_ALLOWANCE_AUDIT_ACTION: "edms.work_mail_allowance",
     getAllowedWorkAccounts: jest.fn(async () => []),
     setAllowedWorkAccounts: jest.fn(async (_userId: string, accountIds: string[]) => ({

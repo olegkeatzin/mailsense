@@ -1,13 +1,17 @@
-import { useEffect, useState } from "react";
-import { Alert, Button, Modal, Select, Skeleton, Typography, message } from "antd";
+import { useEffect, useRef, useState } from "react";
+import { Alert, Modal, Select, Skeleton, Typography, message } from "antd";
 import { api, resolutionApi } from "../api";
 import { edmsAllowanceErrorText, edmsMailOptionTitle } from "./edmsMail";
-import type { Account, EdmsMailAllowance } from "../types";
+import type { EdmsMailAllowance } from "../types";
 
 /**
- * Выдача ящиков работнику для СЭД (T57).
+ * Выдача работнику адресов «почты для СЭД» (T57, docs/design/mail-ownership.md).
  *
- * Здесь администратор решает, какие ящики работник вправе выбрать в «Личных настройках → Почта для СЭД».
+ * Администратор назначает АДРЕС — обычно выбрав человека в каталоге, — и пароля не вводит:
+ * ящик с этим адресом работник заводит сам, своим паролем. Поэтому список ящиков сервера
+ * здесь и не нужен: он ничего не говорит о том, что работник сможет подключить, а чужие
+ * ящики показывать администратору незачем.
+ *
  * Если отозвать уже выбранный ящик, сервер сбрасывает выбор работника — об этом администратору
  * сообщаем прямо здесь, иначе непонятно, почему у человека пропала настройка.
  */
@@ -19,12 +23,13 @@ export function EdmsMailAllowanceModal({
   onClose: () => void;
 }) {
   const [state, setState] = useState<EdmsMailAllowance | null>(null);
-  const [accounts, setAccounts] = useState<Account[]>([]);
   const [value, setValue] = useState<string[]>([]);
+  const [options, setOptions] = useState<Array<{ value: string; label: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [resetNotice, setResetNotice] = useState("");
+  const searchTimer = useRef<number | null>(null);
 
   useEffect(() => {
     if (!user) return;
@@ -33,32 +38,52 @@ export function EdmsMailAllowanceModal({
     setError("");
     setResetNotice("");
     setState(null);
-    void Promise.allSettled([resolutionApi.userEdmsMailAllowance(user.id), api.accounts()]).then(([allowance, all]) => {
-      if (!alive) return;
-      if (allowance.status === "fulfilled") {
-        setState(allowance.value);
-        setValue(allowance.value.accountIds);
-      } else {
-        setError(edmsAllowanceErrorText(allowance.reason));
+    setOptions([]);
+    void resolutionApi.userEdmsMailAllowance(user.id).then(
+      (allowance) => {
+        if (!alive) return;
+        setState(allowance);
+        // Источник правды — адреса: их и назначает администратор.
+        setValue(allowance.addresses ?? []);
+        setLoading(false);
+      },
+      (reason) => {
+        if (!alive) return;
+        setError(edmsAllowanceErrorText(reason));
+        setLoading(false);
       }
-      // Список всех ящиков нужен, чтобы выдать новый; без права на почту его не будет —
-      // тогда показываем уже выданные и честно об этом говорим.
-      setAccounts(all.status === "fulfilled" ? all.value : []);
-      setLoading(false);
-    });
+    );
     return () => {
       alive = false;
     };
   }, [user]);
 
-  const options = (() => {
-    const map = new Map<string, string>();
-    for (const a of accounts) map.set(a.id, a.username);
-    for (const a of state?.allowed ?? []) map.set(a.id, edmsMailOptionTitle(a));
-    return [...map.entries()].map(([v, label]) => ({ value: v, label }));
-  })();
-
-  const listUnavailable = !accounts.length && !loading;
+  /**
+   * Подсказки — из каталога LDAP: администратор называет адрес человека, а не ящик на сервере.
+   * Вписать адрес руками можно всегда: ящик работник заведёт сам.
+   */
+  const search = (query: string) => {
+    if (searchTimer.current) window.clearTimeout(searchTimer.current);
+    const q = query.trim();
+    if (!q) {
+      setOptions([]);
+      return;
+    }
+    searchTimer.current = window.setTimeout(() => {
+      void api.searchContacts(q, 20).then(
+        (found) =>
+          setOptions(
+            found
+              .filter((c) => !!c.mail)
+              .map((c) => ({
+                value: c.mail,
+                label: c.displayName ? c.displayName + " <" + c.mail + ">" : c.mail
+              }))
+          ),
+        () => setOptions([])
+      );
+    }, 300);
+  };
 
   const save = async () => {
     if (!user) return;
@@ -66,7 +91,7 @@ export function EdmsMailAllowanceModal({
     try {
       const res = await resolutionApi.saveUserEdmsMailAllowance(user.id, value);
       setState(res);
-      setValue(res.accountIds);
+      setValue(res.addresses ?? []);
       if (res.resetChoice) {
         // Выбор работника сброшен: называем ящик по-человечески. Если сервер уже не отдаёт
         // его в allowed, берём имя из того, что было до сохранения; идентификатор не показываем.
@@ -80,7 +105,7 @@ export function EdmsMailAllowanceModal({
             " Работник выберет другой в «Личных настройках» → «Почта для СЭД»."
         );
       } else {
-        message.success("Выданные ящики сохранены");
+        message.success("Выданные адреса сохранены");
       }
     } catch (e) {
       message.error(edmsAllowanceErrorText(e));
@@ -107,7 +132,7 @@ export function EdmsMailAllowanceModal({
           type="error"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Не удалось получить выданные ящики"
+          message="Не удалось получить выданные адреса"
           description={error}
         />
       ) : null}
@@ -115,21 +140,24 @@ export function EdmsMailAllowanceModal({
       {!loading && !error ? (
         <>
           <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
-            Работник сможет выбрать для писем СЭД только отмеченные здесь ящики. Пустой список — отозвать всё.
+            Работник сможет выбрать для писем СЭД только ящики с этими адресами. Пароль от ящика он вводит
+            сам — администратору он не нужен. Пустой список — отозвать всё.
           </Typography.Text>
           <Select
-            mode="multiple"
+            mode="tags"
             style={{ width: "100%" }}
-            aria-label="Выданные ящики"
-            placeholder="Ящики не выданы"
+            aria-label="Адреса ящиков для СЭД"
+            placeholder="Начните вводить фамилию или адрес"
             value={value}
             onChange={(v) => setValue(v as string[])}
+            onSearch={search}
             options={options}
-            notFoundContent={listUnavailable ? "Список ящиков недоступен без права на почту" : "Ящиков нет"}
+            tokenSeparators={[",", ";"]}
+            notFoundContent="Впишите адрес вручную, если его нет в подсказках"
           />
-          {listUnavailable ? (
-            <Typography.Text type="warning" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
-              Полный список ящиков недоступен: нет права на почту. Показаны только уже выданные.
+          {state && state.allowed.length ? (
+            <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
+              У работника уже подключены: {state.allowed.map((a) => edmsMailOptionTitle(a)).join(", ")}
             </Typography.Text>
           ) : null}
           {resetNotice ? (
