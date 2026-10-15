@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { parseRolePermissions } from "./roleAdmin.js";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { getDocflowDb, type DocflowDb } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
@@ -284,7 +285,9 @@ export function mapRole(row: typeof roles.$inferSelect): Role {
     name: row.name,
     description: row.description,
     sortOrder: row.sortOrder,
-    isSystem: row.isSystem
+    isSystem: row.isSystem,
+    // Права роли живут в базе (конструктор ролей): NULL — ещё не засеяно, см. installRoleStore.
+    permissions: parseRolePermissions(row.permissions)
   };
 }
 

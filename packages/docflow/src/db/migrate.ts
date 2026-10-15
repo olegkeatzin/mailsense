@@ -506,6 +506,20 @@ CREATE TABLE IF NOT EXISTS user_settings (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, key)
 );`
+  },
+  {
+    // ⚠️ Номер 10 — следующий свободный после 9.
+    version: 10,
+    name: "role_permissions",
+    sql: `
+-- Права роли переезжают в базу: администратор создаёт роли и расставляет галочки сам
+-- (конструктор ролей). NULL = «ещё не засеяно»: встроенные права подставит docflow при старте.
+-- Пустой массив '[]' — осознанное «прав нет» и повторно не засеивается.
+-- ⚠️ IF NOT EXISTS обязателен: тест идемпотентности прогоняет миграции повторно на уже
+-- мигрированной базе, и без этого падало «column already exists» — а следом рушились
+-- все тесты, которые ходят в ту же базу.
+ALTER TABLE roles ADD COLUMN IF NOT EXISTS permissions TEXT;
+`
   }
 ];
 

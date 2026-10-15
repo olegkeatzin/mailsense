@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { initDb as initCoreDb, closeDb as closeCoreDb } from "../../core/src/db/index.js";
 import { closeDocflowDb, getDocflowPool, initDocflowDb } from "./db/index.js";
-import { ROLE_DEFINITIONS, permissionsOfRoles } from "./roles.js";
+import { BUILTIN_ROLES, ROLE_DEFINITIONS, permissionsOfRoles } from "./roles.js";
+import { installRoleStore, updateRole } from "./roleAdmin.js";
 import { getUserRoles, insertUser, listRoles, setUserRoles } from "./repo.js";
 import type { BuiltinRoleId, Permission } from "./types.js";
 
@@ -171,21 +172,17 @@ describe("права на почту служебных ящиков (D-4, пл�
     }
   });
 
-  test("роль из БАЗЫ получает новые права без миграции: набор прав считается по id роли", async () => {
-    // ⚠️ Права ролей в базе НЕ хранятся — там только id/имя/описание/порядок. Значит новое
-    // право, появившееся в коде, само доезжает до уже существующих ролей, и миграция данных
-    // не нужна. Если кто-то однажды перенесёт набор прав в таблицу, этот тест напомнит,
-    // что тогда понадобится миграция — иначе аппарат получит 403 на живом стенде.
+  test("права роли живут в БАЗЕ: роль даёт ровно то, что отмечено галочками", async () => {
+    // ⚠️ Раньше права были зашиты в код, и роль из базы получала их «по id». Теперь права —
+    // колонка роли (конструктор ролей): что администратор отметил, то роль и даёт. Поэтому
+    // после правки прав реестр перечитывается, иначе смена вступала бы в силу после перезапуска.
+    await installRoleStore();
+
     const cols = await getDocflowPool().query<{ column_name: string }>(
       "SELECT column_name FROM information_schema.columns WHERE table_name = 'roles'"
     );
-    expect(cols.rows.map((r) => r.column_name)).not.toContain("permissions");
+    expect(cols.rows.map((r) => r.column_name)).toContain("permissions");
 
-    // Роль сидируется миграцией и уже лежит в базе…
-    const seeded = await listRoles();
-    expect(seeded.map((r) => r.id)).toContain("secretary");
-
-    // …а её носитель получает оба права почты, хотя строка роли про них ничего не знает.
     const user = await insertUser({
       ldapUid: "pochta-check",
       email: "pochta-check@stand.test",
@@ -193,10 +190,19 @@ describe("права на почту служебных ящиков (D-4, пл�
       source: "manual"
     });
     await setUserRoles(user.id, ["secretary"], "test");
-
     const roleIds = await getUserRoles(user.id);
-
     expect(roleIds).toEqual(["secretary"]);
+
+    // Стартовые права встроенных ролей засеяны: аппарату почта предприятия доступна.
+    expect(permissionsOfRoles(roleIds)).toEqual(expect.arrayContaining(["mail.view", "mail.send"]));
+
+    // Администратор снял у роли право читать почту — роль теряет его СРАЗУ, без перезапуска.
+    const startPermissions = BUILTIN_ROLES.find((r) => r.id === "secretary")!.permissions;
+    await updateRole("secretary", { permissions: ["journal.view"] }, { id: "u-admin", name: "Администратор" });
+    expect(permissionsOfRoles(roleIds)).toEqual(["journal.view"]);
+
+    // Возвращаем стартовые права: дальше тесты рассчитывают на штатную матрицу.
+    await updateRole("secretary", { permissions: startPermissions }, { id: "u-admin", name: "Администратор" });
     expect(permissionsOfRoles(roleIds)).toEqual(expect.arrayContaining(["mail.view", "mail.send"]));
   });
 });

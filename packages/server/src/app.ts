@@ -81,7 +81,14 @@ import { logger } from "@mailsense/core";
 // Серверная часть (документооборот) — отдельный пакет со своей базой.
 import {
   SESSION_COOKIE,
+  AppError,
   assignRoles,
+  createRole,
+  deleteRole,
+  listRolesFromDb,
+  PERMISSION_CATALOG,
+  RoleInputError,
+  updateRole,
   authStatus,
   createManualUser,
   getUserWithRoles,
@@ -1147,7 +1154,74 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     requireDocflowDb,
     requirePermission("journal.view"),
     asyncHandler(async (_req, res) => {
-      res.json(await listRoles());
+      // Роли отдаём с их правами: интерфейс показывает их и даёт править галочками.
+      res.json(await listRolesFromDb());
+    })
+  );
+
+  /**
+   * Конструктор ролей: роли заводит администратор, права — галочками из каталога.
+   * Права применяются сразу: docflow перечитывает реестр после каждой правки.
+   */
+  const actorOfRole = (req: express.Request): { id: string | null; name: string } => ({
+    id: req.user?.id ?? null,
+    name: req.user?.fullName ?? ""
+  });
+
+  app.get(
+    "/api/roles/permission-catalog",
+    requireDocflowDb,
+    requireAdmin,
+    (_req, res) => {
+      res.json(PERMISSION_CATALOG);
+    }
+  );
+
+  /** Отказ по данным роли — 400 с текстом ядра, а не «ошибка сервера». */
+  function throwRoleError(err: unknown): never {
+    if (err instanceof RoleInputError) throw new AppError(err.message, 400, err.code);
+    throw err;
+  }
+
+  app.post(
+    "/api/roles",
+    requireDocflowDb,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      try {
+        res.status(201).json(await createRole(body, actorOfRole(req)));
+      } catch (err) {
+        throwRoleError(err);
+      }
+    })
+  );
+
+  app.put(
+    "/api/roles/:id",
+    requireDocflowDb,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      try {
+        res.json(await updateRole(String(req.params.id ?? ""), body, actorOfRole(req)));
+      } catch (err) {
+        throwRoleError(err);
+      }
+    })
+  );
+
+  app.delete(
+    "/api/roles/:id",
+    requireDocflowDb,
+    requireAdmin,
+    asyncHandler(async (req, res) => {
+      try {
+        await deleteRole(String(req.params.id ?? ""), actorOfRole(req));
+        res.json({ ok: true });
+      } catch (err) {
+        throwRoleError(err);
+      }
     })
   );
 

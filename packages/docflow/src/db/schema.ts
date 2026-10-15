@@ -71,7 +71,13 @@ export const roles = pgTable("roles", {
   name: text("name").notNull(),
   description: text("description").notNull().default(""),
   sortOrder: integer("sort_order").notNull().default(0),
-  isSystem: boolean("is_system").notNull().default(true)
+  isSystem: boolean("is_system").notNull().default(true),
+  /**
+   * Права роли — JSON-массив. NULL = «ещё не засеяно» (роль заведена до конструктора ролей):
+   * при старте docflow подставит встроенные права. Пустой массив '[]' — решение администратора
+   * «прав нет», повторно не засеивается.
+   */
+  permissions: text("permissions")
 });
 
 export const userRoles = pgTable(

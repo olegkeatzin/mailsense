@@ -55,6 +55,8 @@ export interface Role {
   description: string;
   sortOrder: number;
   isSystem: boolean;
+  /** Права роли. Список пуст — роль ничего не разрешает (осознанное решение администратора). */
+  permissions: Permission[];
 }
 
 /** Пользователь СЭД (синхронизирован из LDAP или создан вручную). */

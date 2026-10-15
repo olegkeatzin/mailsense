@@ -242,6 +242,22 @@ export function docflowMockModule(): Record<string, unknown> {
     isAdmin: roles.isAdmin,
     roleName: roles.roleName,
     ROLE_DEFINITIONS: roles.ROLE_DEFINITIONS,
+    PERMISSION_CATALOG: roles.PERMISSION_CATALOG,
+    BUILTIN_ROLES: roles.BUILTIN_ROLES,
+    // Конструктор ролей: класс отказа как в docflow (маршрут ловит его через instanceof).
+    RoleInputError: class RoleInputError extends Error {
+      readonly code: string;
+      constructor(message: string, code = "role.invalid") {
+        super(message);
+        this.name = "RoleInputError";
+        this.code = code;
+      }
+    },
+    listRolesFromDb: stub([]),
+    createRole: jest.fn(async (input: { name?: string }) => ({ id: "role-new", name: input.name ?? "", permissions: [] })),
+    updateRole: jest.fn(async (id: string) => ({ id, name: "Роль", permissions: [] })),
+    deleteRole: jest.fn(async () => undefined),
+    installRoleStore: jest.fn(async () => undefined),
     DOCUMENT_STATUSES: types.DOCUMENT_STATUSES,
     DOCUMENT_STATUS_TITLES: types.DOCUMENT_STATUS_TITLES,
 

@@ -5,6 +5,7 @@ import {
   docflowDatabaseUrl,
   initDocflowDb,
   installLdapSettingsStore,
+  installRoleStore,
   isDocflowEnabled,
   recomputeUserStats,
   seedLocalAdmin
@@ -57,6 +58,8 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
     // Сервер становится владельцем настроек каталога: их задаёт предприятие,
     // пользователю остаётся ввести только свой логин и пароль.
     await installLdapSettingsStore();
+  // Реестр ролей из базы: права считаются по ролям, которые завёл администратор.
+  await installRoleStore();
     try {
       await cleanupSessions();
       await seedLocalAdmin();
