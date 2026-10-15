@@ -286,7 +286,7 @@ describe("действия СЭД передают выбранный ящик (
 
   beforeEach(() => {
     jest.clearAllMocks();
-    setPermissions(["resolution.dispatch", "resolution.create", "mail.send", "journal.view"]);
+    setPermissions(["resolution.dispatch", "resolution.create", "journal.view"]);
     (api.document as jest.Mock).mockResolvedValue({
       id: "doc-1",
       regNumber: "вх38",

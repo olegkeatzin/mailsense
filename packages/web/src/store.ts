@@ -30,17 +30,12 @@ export type AppSection =
   | "tasks"
   | "board";
 
-/**
- * Право на почту предприятия (T39). Раздел «Почта» без него не открывается: вместо пустого
- * списка и 403 в консоли человек видит объяснение и свои личные разделы.
- */
-export const MAIL_VIEW_PERMISSION: Permission = "mail.view";
-/** Право на отправку и импорт письма (T39). */
-export const MAIL_SEND_PERMISSION: Permission = "mail.send";
+
 
 /** Право, без которого раздел бессмысленен. */
 export const SECTION_PERMISSIONS: Record<AppSection, Permission | null> = {
-  mail: MAIL_VIEW_PERMISSION,
+  // Почта — собственные данные работника: права не нужно, доступ решает владелец ящика.
+  mail: null,
   journal: "journal.view",
   incoming: "journal.register",
   approvals: "resolution.approve",
@@ -440,17 +435,15 @@ export const useStore = create<State>()((set, get) => ({
    * Права берём ровно оттуда же, откуда их берут остальные экраны — из authUser.permissions.
    */
   canUseMail: () => {
-    const s = get();
-    if (s.docflowUnavailable) return true;
-    if (!s.authStatus?.docflowEnabled) return true;
-    return !!s.authUser?.permissions.includes(MAIL_VIEW_PERMISSION);
+    // ⚠️ Права на почту больше НЕ существует: свой ящик и своя почта — собственные данные
+    // работника, граница проходит по владельцу ящика на сервере (docs/design/mail-ownership.md).
+    // Раньше здесь требовался mail.view, и человек без ролей не мог открыть даже свой ящик.
+    return true;
   },
 
   canSendMail: () => {
-    const s = get();
-    if (s.docflowUnavailable) return true;
-    if (!s.authStatus?.docflowEnabled) return true;
-    return !!s.authUser?.permissions.includes(MAIL_SEND_PERMISSION);
+    // Отправка идёт со СВОЕГО ящика: сервер проверяет владельца, а не право роли.
+    return true;
   },
 
   loadNotifications: async (opts) => {

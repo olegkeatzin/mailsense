@@ -14,8 +14,8 @@ jest.mock("@mailsense/docflow", () => require("./testing/mocks.js").docflowMockM
  * исполнитель или внешний партнёр — читал бы переписку аппарата и отправлял письма от его имени.
  *
  * Матрица:
- *   • чтение почты (письма, вложения, треды, анализ, список ящиков, шаблон письма) → mail.view;
- *   • отправка и импорт письма → mail.send;
+ *   • своя почта (письма, вложения, треды, анализ, список ящиков, шаблон, отправка) → по ВЛАДЕЛЬЦУ
+ *     ящика, без права роли: прав mail.view/mail.send в каталоге больше нет;
  *   • управление ящиками и системные настройки → settings.manage;
  *   • личные маршруты (черновики, шаблоны, профиль) → любому вошедшему.
  *
@@ -121,27 +121,17 @@ describe("права предприятия закрыты для чужих (D-
  * (docs/design/mail-ownership.md). Отказ по правам здесь был бы регрессией: человек
  * без ролей обязан пользоваться своим ящиком. Пакетный анализ почты остаётся правом.
  */
-describe("личная почта доступна любому вошедшему, пакетный анализ — по праву", () => {
-  const GATED_PATHS = [
-    "/api/analysis/progress",
-    "/api/emails/analyze-all",
-    "/api/emails/analyze-range",
-    "/api/emails/analyze-stop"
-  ];
+describe("личная почта доступна любому вошедшему: прав на почту у ролей нет", () => {
+  // ⚠️ Раньше здесь был отдельный список «пакетный анализ — по праву mail.view». Права больше
+  // нет: разбор идёт по ящикам самого работника (сервер фильтрует по владельцу), чужое ему
+  // недоступно, поэтому и пакетные операции открыты вошедшему.
   const MAIL_ROUTES = [...READ_ROUTES, ...SEND_ROUTES];
-  const OPEN = MAIL_ROUTES.filter(([, path]) => !GATED_PATHS.includes(path));
-  const ANALYZE = MAIL_ROUTES.filter(([, path]) => GATED_PATHS.includes(path));
 
-  it.each(OPEN)("без ролей не отбивается по правам: %s %s", async (method, path) => {
+  it.each(MAIL_ROUTES)("без ролей не отбивается по правам: %s %s", async (method, path) => {
     for (const t of [TOKENS.executor, TOKENS.partner]) {
       const res = await call(method, path, t);
       expect([401, 403]).not.toContain(res.status);
     }
-  });
-
-  it.each(ANALYZE)("пакетный анализ остаётся правом роли: %s %s → 403", async (method, path) => {
-    const res = await call(method, path, TOKENS.executor);
-    expect(res.status).toBe(403);
   });
 });
 

@@ -69,7 +69,11 @@ function AccountTab() {
   const [serverDefaults, setServerDefaults] = useState<MailDefaults>({});
 
   useEffect(() => {
-    void api.mailDefaults().then(
+    // ⚠️ Клиент может работать со СТАРЫМ сервером, где ручки умолчаний ещё нет: тогда просто
+    // остаёмся на значениях по умолчанию, а не роняем форму ящика (и не сыплем в консоль).
+    const loadDefaults = api.mailDefaults;
+    if (typeof loadDefaults !== "function") return;
+    void loadDefaults().then(
       (value) => setServerDefaults(value ?? {}),
       () => setServerDefaults({})
     );

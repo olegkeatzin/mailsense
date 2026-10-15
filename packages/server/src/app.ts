@@ -401,7 +401,8 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     })
   );
 
-  app.get("/api/analysis/progress", requirePermission("mail.view"), (_req, res) => {
+  // Пакетный разбор идёт по СВОИМ ящикам (фильтр по владельцу ниже), поэтому права не требует.
+  app.get("/api/analysis/progress", (_req, res) => {
     res.json(getProgress());
   });
 
@@ -698,12 +699,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json({ ok: true });
   });
 
-  app.post("/api/emails/analyze-all", requirePermission("mail.view"), (req, res) => {
+  app.post("/api/emails/analyze-all", (req, res) => {
     const n = analyzeAllPending();
     res.json({ queued: n });
   });
 
-  app.post("/api/emails/analyze-range", requirePermission("mail.view"), (req, res) => {
+  app.post("/api/emails/analyze-range", (req, res) => {
     // Диапазон тоже ограничен своими ящиками: чужой id в запросе не учитываем.
     const allowed = myAccountIds(req);
     const asked = (req.body?.accountIds as string[]) || undefined;
@@ -715,7 +716,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json({ queued: n });
   });
 
-  app.post("/api/emails/analyze-stop", requirePermission("mail.view"), (_req, res) => {
+  app.post("/api/emails/analyze-stop", (_req, res) => {
     const cleared = stopAnalysis();
     res.json({ cleared });
   });

@@ -5,6 +5,7 @@ import { installDomEnvironment } from "./dom";
 jest.mock("../api", () => ({
   api: {
     emails: jest.fn(),
+    mailDefaults: jest.fn().mockResolvedValue({}),
     accounts: jest.fn(),
     email: jest.fn(),
     settings: jest.fn(),
@@ -74,43 +75,36 @@ describe("доступ к почте по правам (T44)", () => {
     (resolutionApi.markReceived as jest.Mock).mockResolvedValue({});
   });
 
-  it("права читаются из того же места: mail.view / mail.send, автономный режим — доступно", () => {
+  it("почта доступна ЛЮБОМУ вошедшему: прав на почту у ролей больше нет", () => {
+    // ⚠️ Раньше здесь требовались mail.view/mail.send, и человек без ролей не мог открыть
+    // даже свой ящик. Теперь граница — владелец ящика на сервере (docs/design/mail-ownership.md).
     setPermissions(["task.view"]);
-    expect(useStore.getState().canUseMail()).toBe(false);
-    expect(useStore.getState().canSendMail()).toBe(false);
-
-    setPermissions(["mail.view"]);
     expect(useStore.getState().canUseMail()).toBe(true);
-    expect(useStore.getState().canSendMail()).toBe(false);
+    expect(useStore.getState().canSendMail()).toBe(true);
 
-    setPermissions(["mail.view", "mail.send"]);
+    setPermissions([]);
+    expect(useStore.getState().canUseMail()).toBe(true);
     expect(useStore.getState().canSendMail()).toBe(true);
 
     // Автономный режим: документооборот включён, но сервер недоступен — почта работает.
     useStore.setState({ docflowUnavailable: true });
     expect(useStore.getState().canUseMail()).toBe(true);
-    expect(useStore.getState().canSendMail()).toBe(true);
 
     // Документооборот выключен — ограничений нет.
     useStore.setState({ docflowUnavailable: false, authStatus: { docflowEnabled: false } as unknown as AuthStatus });
     expect(useStore.getState().canUseMail()).toBe(true);
   });
 
-  it("без mail.view письма не запрашиваются вовсе — вместо пустого списка и 403", async () => {
-    setPermissions(["task.view"]);
+  it("без ролей письма и ящики всё равно загружаются — это свои данные", async () => {
+    setPermissions([]);
     await useStore.getState().init();
     await useStore.getState().loadEmails();
 
-    expect(api.emails).not.toHaveBeenCalled();
-    expect(api.accounts).not.toHaveBeenCalled();
+    expect(api.accounts).toHaveBeenCalled();
+    expect(api.emails).toHaveBeenCalled();
   });
 
-  it("с mail.view список писем загружается как раньше", async () => {
-    setPermissions(["mail.view"]);
-    await useStore.getState().loadEmails();
 
-    expect(api.emails).toHaveBeenCalledTimes(1);
-  });
 
   it("экран объяснения: честный текст и личные разделы на месте", async () => {
     setPermissions(["task.view"]);
@@ -155,13 +149,14 @@ describe("доступ к почте по правам (T44)", () => {
     expect(useStore.getState().draftsOpen).toBe(true);
   });
 
-  it("в настройках без mail.view нет вкладки «Почта», но есть «Личные настройки»", async () => {
+  it("в настройках БЕЗ ролей есть и «Почта» (свои ящики), и «Личные настройки»", async () => {
     setPermissions([]);
     useStore.setState({ settingsOpen: true });
     render(<SettingsModal />);
 
     expect(await screen.findByRole("menuitem", { name: "Личные настройки" })).not.toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Почта" })).toBeNull();
+    // Свой ящик заводят без роли: раздел «Почта» открыт всем.
+    expect(await screen.findByRole("menuitem", { name: "Почта" })).not.toBeNull();
   });
 
   /**

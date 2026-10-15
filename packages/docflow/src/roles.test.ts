@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { initDb as initCoreDb, closeDb as closeCoreDb } from "../../core/src/db/index.js";
 import { closeDocflowDb, getDocflowPool, initDocflowDb } from "./db/index.js";
-import { BUILTIN_ROLES, ROLE_DEFINITIONS, permissionsOfRoles } from "./roles.js";
+import { BUILTIN_ROLES, PERMISSION_CATALOG, ROLE_DEFINITIONS, permissionsOfRoles } from "./roles.js";
 import { installRoleStore, updateRole } from "./roleAdmin.js";
 import { getUserRoles, insertUser, listRoles, setUserRoles } from "./repo.js";
 import type { BuiltinRoleId, Permission } from "./types.js";
@@ -158,17 +158,14 @@ describe("объединение ролей (совмещение, О2)", () => 
     expect(permissionsOfRoles(["нет-такой"])).toEqual([]);
   });
 });
-describe("права на почту служебных ящиков (D-4, план Т5)", () => {
-  test("почта доступна только администратору и аппарату", () => {
-    for (const role of ["admin", "secretary"] as BuiltinRoleId[]) {
-      expect(has(role, "mail.view")).toBe(true);
-      expect(has(role, "mail.send")).toBe(true);
-    }
-    // Исполнитель, руководитель и подписант переписку аппарата НЕ читают: свои поручения
-    // они видят через документооборот (план Т5). Это и есть суть закрытия D-4.
-    for (const role of ["manager", "executor", "signer"] as BuiltinRoleId[]) {
-      expect(has(role, "mail.view")).toBe(false);
-      expect(has(role, "mail.send")).toBe(false);
+describe("прав на почту у ролей больше нет (docs/design/mail-ownership.md)", () => {
+  test("в каталоге нет прав на почту: свой ящик доступен по владению, а не по роли", () => {
+    // ⚠️ Раньше здесь были mail.view/mail.send, и человек без ролей не мог открыть даже
+    // СВОЙ ящик. Теперь граница — владелец ящика на сервере, а официальные письма уходят
+    // по правам СЭД и выданному администратором адресу.
+    expect(PERMISSION_CATALOG.some((p) => p.id.startsWith("mail."))).toBe(false);
+    for (const role of ["admin", "secretary", "manager", "executor", "signer"] as BuiltinRoleId[]) {
+      expect(permissionsOfRoles([role]).some((p) => p.startsWith("mail."))).toBe(false);
     }
   });
 
@@ -194,7 +191,7 @@ describe("права на почту служебных ящиков (D-4, пл�
     expect(roleIds).toEqual(["secretary"]);
 
     // Стартовые права встроенных ролей засеяны: аппарату почта предприятия доступна.
-    expect(permissionsOfRoles(roleIds)).toEqual(expect.arrayContaining(["mail.view", "mail.send"]));
+    expect(permissionsOfRoles(roleIds)).toEqual(expect.arrayContaining(["journal.view"]));
 
     // Администратор снял у роли право читать почту — роль теряет его СРАЗУ, без перезапуска.
     const startPermissions = BUILTIN_ROLES.find((r) => r.id === "secretary")!.permissions;
@@ -203,6 +200,6 @@ describe("права на почту служебных ящиков (D-4, пл�
 
     // Возвращаем стартовые права: дальше тесты рассчитывают на штатную матрицу.
     await updateRole("secretary", { permissions: startPermissions }, { id: "u-admin", name: "Администратор" });
-    expect(permissionsOfRoles(roleIds)).toEqual(expect.arrayContaining(["mail.view", "mail.send"]));
+    expect(permissionsOfRoles(roleIds)).toEqual(expect.arrayContaining(["journal.view"]));
   });
 });

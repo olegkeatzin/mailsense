@@ -16,7 +16,7 @@ jest.mock("@mailsense/docflow", () => require("./testing/mocks.js").docflowMockM
 const coreMocks = core as unknown as Record<string, jest.Mock>;
 const mockedDocflow = docflow as unknown as Record<string, jest.Mock> & { __sessions: Map<string, unknown> };
 
-// Ручной скан ящика — ПОЧТОВАЯ операция: право mail.view (матрица T39).
+// Ручной скан ящика — операция над СВОИМ ящиком: граница по владельцу, права роли не нужны.
 const TOKEN = "token:admin";
 let app: RunningApp;
 

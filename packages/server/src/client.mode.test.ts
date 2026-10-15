@@ -33,7 +33,7 @@ const remotePaths: string[] = [];
 // ⚠️ Настоящий /api/auth/me отдаёт ещё роли и права — пусть отдаёт и мок: иначе тест
 // на форму кэша ничего бы не ловил (нечего было бы отбрасывать).
 const remoteUsers = new Map<string, Record<string, unknown>>([
-  ["token:valid", { id: "u-1", ldapUid: "ivanov_ii", fullName: "Иванов И.И.", roles: ["secretary"], permissions: ["mail.view", "mail.send"] }],
+  ["token:valid", { id: "u-1", ldapUid: "ivanov_ii", fullName: "Иванов И.И.", roles: ["secretary"], permissions: ["journal.view"] }],
   ["token:petrova", { id: "u-2", ldapUid: "petrova_ma", fullName: "Петрова М.А.", roles: ["executor"], permissions: ["task.view"] }]
 ]);
 const revoked = new Set<string>();

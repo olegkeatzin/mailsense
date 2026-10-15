@@ -21,7 +21,7 @@ describe("разбор ответа удалённой сессии: тольк�
         fullName: "Иванов И.И.",
         email: "ivanov@stand.test",
         roles: ["admin"],
-        permissions: ["settings.manage", "mail.view"]
+        permissions: ["settings.manage"]
       }
     });
 

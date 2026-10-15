@@ -189,7 +189,7 @@ export default function App() {
   const threadView = useStore((s) => s.threadView);
   const setThreadView = useStore((s) => s.setThreadView);
   const section = useStore((s) => s.section);
-  // Почта предприятия закрыта правом mail.view (T39/T44). В автономном режиме доступна всегда.
+  // Почта (свои ящики) доступна любому вошедшему: это собственные данные, права роли не нужны.
   const mailAvailable = useStore((s) => s.canUseMail());
   const mailSendAllowed = useStore((s) => s.canSendMail());
 

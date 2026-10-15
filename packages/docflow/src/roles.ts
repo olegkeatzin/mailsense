@@ -6,6 +6,9 @@ import type { AuthUser, BuiltinRoleId, Permission, UserWithRoles } from "./types
  * ⚠️ Роли БОЛЬШЕ НЕ ЗАШИТЫ В КОД: администратор заводит их сам и расставляет галочки прав
  * (конструктор ролей). Здесь остались только три вещи:
  *   • каталог прав — что ВООБЩЕ можно разрешить (его показывает интерфейс галочками);
+ *     ⚠️ Прав «читать почту предприятия» и «отправлять письма» здесь НЕТ намеренно: свой ящик
+ *     и своя почта доступны работнику по владению, без роли, а официальные письма уходят
+ *     по правам СЭД и выданному администратором адресу (docs/design/mail-ownership.md);
  *   • встроенные описания пяти системных ролей — стартовые права и понятные названия;
  *   • реестр ролей в памяти, который docflow заполняет из базы при старте (installRoleStore).
  *
@@ -34,8 +37,6 @@ export const PERMISSION_CATALOG: PermissionInfo[] = [
   { id: "settings.manage", title: "Менять настройки предприятия", group: "Администрирование" },
   { id: "audit.view", title: "Смотреть аудит", group: "Администрирование" },
   { id: "notifications.view", title: "Видеть центр уведомлений", group: "Уведомления" },
-  { id: "mail.view", title: "Читать почту предприятия", group: "Почта" },
-  { id: "mail.send", title: "Отправлять письма", group: "Почта" }
 ];
 
 /** Все известные права — по каталогу. Незнакомое право в базе роль не даёт. */
@@ -94,9 +95,7 @@ export const BUILTIN_ROLES: RoleRecord[] = [
       "resolution.dispatch",
       "task.view",
       "task.report",
-      "notifications.view",
-      "mail.view",
-      "mail.send"
+      "notifications.view"
     ],
     isSystem: true
   },

@@ -98,7 +98,7 @@ DOCFLOW_DATABASE_URL=postgres://mailsense:testpass@127.0.0.1:55432/mailsense MAI
 | `resolution.approve` (утверждение) | да | — | да | **да** | — |
 | `resolution.dispatch` (отправка) | да | **да** | — | — | — |
 | `task.view` / `task.report` | да | да | view | view | view + report |
-| `mail.view` / `mail.send` | **да** | **да** | — | — | — |
+| почта (свои ящики) | всем | всем | всем | всем | всем |
 | `users.manage` / `settings.manage` / `audit.view` | да | — | — | — | — |
 | `notifications.view` | да | да | да | да | да |
 

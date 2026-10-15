@@ -65,7 +65,7 @@ const call = (method: string, path: string, role?: string, body?: unknown) =>
 
 interface Case { what: string; method: string; path: string; body?: unknown; allow: string[] }
 
-/** Чтение почты — только mail.view. */
+/** Своя почта: граница — владелец ящика, права роли не нужны. */
 const READ_CASES: Case[] = [
   { what: "GET /api/emails — список писем", method: "GET", path: "/api/emails", allow: MAIL_ROLES },
   { what: "GET /api/emails?accountId=ЧУЖОЙ — чужой ящик в параметре не помогает", method: "GET", path: "/api/emails?accountId=" + FOREIGN_ACC, allow: MAIL_ROLES },
@@ -89,7 +89,7 @@ const READ_CASES: Case[] = [
   // проверки в отдельном describe ниже.
 ];
 
-/** Отправка и импорт — mail.send. */
+/** Отправка и импорт — тоже по владельцу ящика. */
 const SEND_CASES: Case[] = [
   { what: "POST /api/emails/send — отправка письма", method: "POST", path: "/api/emails/send", body: {}, allow: MAIL_ROLES },
   { what: "POST /api/import — импорт писем в ящик", method: "POST", path: "/api/import", body: { accountId: FOREIGN_ACC, files: [] }, allow: MAIL_ROLES }
@@ -159,24 +159,24 @@ describe("D-4 · чужие данные не отдаются: 404 вместо
   });
 });
 
-describe("D-4 · пакетный анализ остаётся правом предприятия (mail.view)", () => {
-  const GATED: Case[] = [
-  { what: "GET /api/analysis/progress — состояние анализа", method: "GET", path: "/api/analysis/progress", allow: MAIL_ROLES },
-  { what: "POST /api/emails/analyze-all — пакетный анализ", method: "POST", path: "/api/emails/analyze-all", body: {}, allow: MAIL_ROLES },
-  { what: "POST /api/emails/analyze-range — анализ диапазона", method: "POST", path: "/api/emails/analyze-range", body: {}, allow: MAIL_ROLES },
-  { what: "POST /api/emails/analyze-stop — остановка анализа", method: "POST", path: "/api/emails/analyze-stop", body: {}, allow: MAIL_ROLES },
+describe("D-4 · пакетный анализ идёт по СВОИМ ящикам — права роли не нужны", () => {
+  // ⚠️ Раньше здесь требовалось mail.view («почта предприятия»). Права больше нет: разбор
+  // идёт по ящикам самого работника (сервер фильтрует по владельцу), а чужое ему недоступно.
+  const ANALYZE: Case[] = [
+    { what: "GET /api/analysis/progress — состояние анализа", method: "GET", path: "/api/analysis/progress" },
+    { what: "POST /api/emails/analyze-all — пакетный анализ", method: "POST", path: "/api/emails/analyze-all", body: {} },
+    { what: "POST /api/emails/analyze-range — анализ диапазона", method: "POST", path: "/api/emails/analyze-range", body: {} },
+    { what: "POST /api/emails/analyze-stop — остановка анализа", method: "POST", path: "/api/emails/analyze-stop", body: {} }
   ];
-  for (const c of GATED) {
+  for (const c of ANALYZE) {
     it(c.what, async () => {
       const failures: string[] = [];
       for (const role of ROLES) {
         const res = await call(c.method, c.path, role, c.body);
-        if (c.allow.includes(role)) {
-          if (res.status === 401 || res.status === 403) failures.push(role + ": guard НЕ пропустил — " + res.status);
-        } else if (res.status !== 403) {
-          failures.push(role + ": ждали 403, получили " + res.status);
-        }
+        if (res.status === 401 || res.status === 403) failures.push(role + ": отбит по правам — " + res.status);
       }
+      const anon = await call(c.method, c.path, undefined, c.body);
+      if (anon.status !== 401) failures.push("без сессии: ждали 401, получили " + anon.status);
       expect(failures).toEqual([]);
     });
   }

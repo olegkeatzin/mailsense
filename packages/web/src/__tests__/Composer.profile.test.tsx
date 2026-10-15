@@ -153,7 +153,7 @@ describe("окно письма: личное имя и личная подпи�
   });
 });
 
-describe("отправка только с правом mail.send (T44)", () => {
+describe("отправка доступна без прав роли: граница — владелец ящика", () => {
   beforeAll(installDomEnvironment);
 
   beforeEach(() => {
@@ -166,8 +166,8 @@ describe("отправка только с правом mail.send (T44)", () => 
       compose: { open: true, mode: "new", emailId: null, draft: null },
       docflowUnavailable: false,
       authStatus: { docflowEnabled: true } as never,
-      // Право на просмотр есть, на отправку — нет.
-      authUser: { permissions: ["mail.view"], roles: ["executor"], fullName: "Мария Петрова" } as never
+      // Ролей почты больше нет: работник отправляет со СВОЕГО ящика.
+      authUser: { permissions: [], roles: ["executor"], fullName: "Мария Петрова" } as never
     });
     (api.composeTemplate as jest.Mock).mockResolvedValue(template);
     (api.templates as jest.Mock).mockResolvedValue([]);
@@ -176,18 +176,15 @@ describe("отправка только с правом mail.send (T44)", () => 
     (api.mailProfile as jest.Mock).mockResolvedValue(profile);
   });
 
-  it("без mail.send кнопка «Отправить» недоступна и понятно почему", async () => {
+  it("без ролей кнопка «Отправить» не заблокирована правами", async () => {
     render(<Composer />);
     await screen.findByTestId("editor-body");
 
     const sendButton = screen.getByRole("button", { name: /Отправить/ }) as HTMLButtonElement;
-    // Недоступна и объясняет почему: у выключенной кнопки текст живёт в подсказке.
-    expect(sendButton.disabled).toBe(true);
-    expect(sendButton.getAttribute("title")).toBe("Недостаточно прав для отправки");
-
-    fireEvent.click(sendButton);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(api.sendEmail).not.toHaveBeenCalled();
+    // ⚠️ Раньше кнопка была выключена без mail.send. Теперь прав на почту нет: причина
+    // блокировки может быть только в самом письме (пустые поля), но не в правах.
+    expect(sendButton.getAttribute("title")).not.toBe("Недостаточно прав для отправки");
+    expect(useStore.getState().canSendMail()).toBe(true);
   });
 });
 
