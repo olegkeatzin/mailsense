@@ -105,6 +105,22 @@ services:
       - MAILSENSE_LDAP_PASSWORD=${MAILSENSE_LDAP_PASSWORD:-}
       - MAILSENSE_SERVICE_MAILBOX=${MAILSENSE_SERVICE_MAILBOX:-}
       - MAILSENSE_EXTERNAL_MAILBOX=${MAILSENSE_EXTERNAL_MAILBOX:-}
+      # ⚠️ Ниже — переменные, которые уже описаны в .env.example. Держим списки СИНХРОННО:
+      # документированная, но не проброшенная переменная молча не работает в контейнере
+      # (так было с умолчаниями почты и суффиксом UPN — их приходилось задавать в интерфейсе).
+      # Формат входа и суффикс UPN нужны, когда работник входит КОРОТКИМ логином (в т. ч. кириллицей).
+      - MAILSENSE_LDAP_ENABLED=${MAILSENSE_LDAP_ENABLED:-}
+      - MAILSENSE_LDAP_LOGIN_FORMAT=${MAILSENSE_LDAP_LOGIN_FORMAT:-}
+      - MAILSENSE_LDAP_UPN_SUFFIX=${MAILSENSE_LDAP_UPN_SUFFIX:-}
+      - MAILSENSE_LDAP_REJECT_UNAUTHORIZED=${MAILSENSE_LDAP_REJECT_UNAUTHORIZED:-}
+      # Умолчания почтового сервера предприятия: работник вводит только адрес ящика и пароль.
+      - MAILSENSE_MAIL_DEFAULTS=${MAILSENSE_MAIL_DEFAULTS:-}
+      # Аварийный локальный администратор: почта и имя в журнале.
+      - MAILSENSE_ADMIN_EMAIL=${MAILSENSE_ADMIN_EMAIL:-}
+      - MAILSENSE_ADMIN_NAME=${MAILSENSE_ADMIN_NAME:-}
+      # Сколько писем разбирать одновременно (1 — бережно к слабому серверу ИИ).
+      - MAILSENSE_AI_CONCURRENCY=${MAILSENSE_AI_CONCURRENCY:-}
+      - MAILSENSE_OCR_CONCURRENCY=${MAILSENSE_OCR_CONCURRENCY:-}
       # Засев ОДНОГО тестового ящика — только стенд и разработка, в проде выключено
       - MAILSENSE_SEED_ACCOUNT=${MAILSENSE_SEED_ACCOUNT:-false}
       - MAILSENSE_MAIL_USER=${MAILSENSE_MAIL_USER:-}
