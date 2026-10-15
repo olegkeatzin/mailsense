@@ -38,6 +38,8 @@ import type {
   ServiceAccountPatch,
   ServiceAccountState,
   MailDefaults,
+  Permission,
+  PermissionInfo,
   SortPreview,
   Template,
   ThreadGroup,
@@ -279,6 +281,14 @@ export const api = {
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
 
   roles: () => request<Role[]>("/api/roles"),
+  /** Каталог прав: из него строятся галочки конструктора ролей. */
+  permissionCatalog: () => request<PermissionInfo[]>("/api/roles/permission-catalog"),
+  createRole: (input: { name: string; description?: string; permissions: Permission[] }) =>
+    request<Role>("/api/roles", { method: "POST", body: JSON.stringify(input) }),
+  updateRole: (id: string, patch: { name?: string; description?: string; permissions?: Permission[] }) =>
+    request<Role>("/api/roles/" + encodeURIComponent(id), { method: "PUT", body: JSON.stringify(patch) }),
+  deleteRole: (id: string) =>
+    request<{ ok: boolean }>("/api/roles/" + encodeURIComponent(id), { method: "DELETE" }),
   users: (opts: { q?: string; roleId?: string; includeInactive?: boolean } = {}) => {
     const p = new URLSearchParams();
     if (opts.q) p.set("q", opts.q);

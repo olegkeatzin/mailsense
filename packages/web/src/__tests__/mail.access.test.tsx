@@ -131,7 +131,8 @@ describe("доступ к почте по правам (T44)", () => {
     render(<SettingsModal />);
 
     // Вкладка «Личные настройки» активна сразу: человек попадает туда, где чинится выбор ящика.
-    expect(await screen.findByRole("tab", { name: "Личные настройки", selected: true })).not.toBeNull();
+    // У inline-меню выбранный пункт помечается классом antd, а не aria-selected.
+    expect(document.querySelector(".ant-menu-item-selected")?.textContent).toContain("Личные настройки");
     expect(await screen.findByText("Почта для СЭД")).not.toBeNull();
     // Просьбу исполнили один раз — дальше вкладками ходит сам человек.
     expect(useStore.getState().settingsTab).toBeNull();
@@ -159,8 +160,8 @@ describe("доступ к почте по правам (T44)", () => {
     useStore.setState({ settingsOpen: true });
     render(<SettingsModal />);
 
-    expect(await screen.findByRole("tab", { name: "Личные настройки" })).not.toBeNull();
-    expect(screen.queryByRole("tab", { name: "Почта" })).toBeNull();
+    expect(await screen.findByRole("menuitem", { name: "Личные настройки" })).not.toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Почта" })).toBeNull();
   });
 
   /**
@@ -172,11 +173,11 @@ describe("доступ к почте по правам (T44)", () => {
     useStore.setState({ settingsOpen: true });
     render(<SettingsModal />);
 
-    expect(await screen.findByRole("tab", { name: "Подключение" })).not.toBeNull();
-    expect(screen.queryByRole("tab", { name: "Документооборот" })).toBeNull();
-    expect(screen.queryByRole("tab", { name: "Пользователи и роли" })).toBeNull();
+    expect(await screen.findByRole("menuitem", { name: "Подключение" })).not.toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Документооборот" })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: "Пользователи и роли" })).toBeNull();
 
-    fireEvent.click(screen.getByRole("tab", { name: "Подключение" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Подключение" }));
     // В браузере моста нет — честный текст вместо поля.
     expect(await screen.findByText(/В браузере адрес задаётся сервером/)).not.toBeNull();
   });
@@ -199,7 +200,7 @@ describe("доступ к почте по правам (T44)", () => {
     (window as unknown as { mailsense?: unknown }).mailsense = bridge;
     try {
       render(<SettingsModal />);
-      fireEvent.click(await screen.findByRole("tab", { name: "Подключение" }));
+      fireEvent.click(await screen.findByRole("menuitem", { name: "Подключение" }));
       const input = await screen.findByLabelText("Адрес сервера");
       fireEvent.change(input, { target: { value: "http://my:9000" } });
       fireEvent.click(screen.getByRole("button", { name: "Сохранить адрес" }));

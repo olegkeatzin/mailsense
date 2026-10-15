@@ -68,7 +68,7 @@ describe("настройки: «Общие» не пишут ключи доку
   it("поля служебного ящика в «Общих» нет и docflow-ключи отсюда не пишутся", async () => {
     render(<SettingsModal />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Общие" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Общие" }));
     expect(await screen.findByText("Автоматическая проверка новой почты")).not.toBeNull();
 
     expect(screen.queryByText("Служебный ящик аппарата")).toBeNull();
@@ -82,7 +82,7 @@ describe("настройки: «Общие» не пишут ключи доку
   it("смена обычной настройки по-прежнему сохраняется", async () => {
     render(<SettingsModal />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Общие" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Общие" }));
     const switches = await screen.findAllByRole("switch");
     fireEvent.click(switches[0]);
 
@@ -98,7 +98,7 @@ describe("настройки: «Общие» не пишут ключи доку
     (api.settings as jest.Mock).mockRejectedValue(new Error("403 Forbidden"));
     render(<SettingsModal />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Общие" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Общие" }));
 
     expect(await screen.findByText(/Недостаточно прав/)).not.toBeNull();
     expect(screen.getByText(/403 Forbidden/)).not.toBeNull();
@@ -110,7 +110,7 @@ describe("настройки: «Общие» не пишут ключи доку
     (api.saveSetting as jest.Mock).mockRejectedValue(new Error("403 Forbidden"));
     render(<SettingsModal />);
 
-    fireEvent.click(await screen.findByRole("tab", { name: "Общие" }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Общие" }));
     const switches = await screen.findAllByRole("switch");
     fireEvent.click(switches[0]);
 

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect, useRef, useState, type ReactNode } from "react";
 import { loadAiModelList } from "../utils/aiModels";
 import {
   Alert,
@@ -10,6 +11,7 @@ import {
   Input,
   InputNumber,
   List,
+  Menu,
   Modal,
   Popconfirm,
   Select,
@@ -33,6 +35,7 @@ import { ServiceAccountAdmin } from "./ServiceAccountAdmin";
 import { MailProfileTab } from "./MailProfileTab";
 import { ServerAddressCard } from "./ServerAddressCard";
 import { NotificationsTab } from "./sorting/NotificationsTab";
+import { RolesEditor } from "./RolesEditor";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, MailDefaults, Template } from "../types";
 import { humanError } from "../utils/humanError";
 
@@ -1125,6 +1128,101 @@ export default function SettingsModal() {
     }
   }, [open, requestedTab]);
 
+  /**
+   * Разделы настроек. Список слева вертикальный и по категориям: вкладок стало много,
+   * и горизонтальная прокрутка была неудобна (жалоба заказчика).
+   *
+   * ⚠️ Меню и содержимое строятся из ОДНОГО массива: иначе подпись раздела и его экран
+   * разъедутся при первой же правке. Категории задают только порядок и заголовки;
+   * раздел, забытый в категориях, попадает в «Прочее» и не теряется.
+   */
+  const settingsTabs: Array<{ key: string; label: string; children: ReactNode }> = [
+    // Вкладка «Почта» читает список ящиков — показываем её только с правом mail.view.
+    ...(canUseMail ? [{ key: "mail", label: "Почта", children: <AccountTab /> }] : []),
+    // Личные настройки: свои данные, поэтому доступны ЛЮБОМУ вошедшему (не settings.manage).
+    { key: "profile", label: "Личные настройки", children: <MailProfileTab key={reloadKey} /> },
+    // Адрес сервера — личная настройка работника (Р21): файл предприятия выше и не
+    // редактируется, а свой адрес человек задаёт сам. Поэтому вкладка доступна всем,
+    // а администрирование документооборота осталось у администраторов ниже.
+    { key: "connection", label: "Подключение", children: <ServerAddressCard key={reloadKey} /> },
+    ...(canManageUsers
+      ? [
+          { key: "users", label: "Пользователи и роли", children: <UsersTab key={reloadKey} /> },
+          { key: "roles", label: "Роли", children: <RolesEditor key={reloadKey} /> },
+          { key: "docflow", label: "Документооборот", children: <DocflowTab key={reloadKey} /> }
+        ]
+      : []),
+    ...(can("journal.view") ? [{ key: "numbering", label: "Нумерация", children: <NumberingTab key={reloadKey} /> }] : []),
+    ...(can("audit.view") ? [{ key: "audit", label: "Аудит", children: <AuditTab /> }] : []),
+    // Настройки ИИ и «Общие» закрыты правом settings.manage: у остальных ролей
+    // вкладки открывались, а запросы отвечали 403 и сыпались в консоль.
+    ...(canManageSettings
+      ? [
+          // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
+          // Служебный ящик: аппарат видит подсказку, выбирает администратор (settings.manage).
+          { key: "service", label: "Служебные ящики", children: <ServiceAccountAdmin key={reloadKey} /> },
+          { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
+          { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> }
+        ]
+      : []),
+    ...(canManageSettings ? [{ key: "ai", label: "ИИ", children: <AiTab /> }] : []),
+    { key: "templates", label: "Шаблоны", children: <TemplatesTab key={reloadKey} /> },
+    { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> },
+    ...(canManageSettings ? [{ key: "general", label: "Общие", children: <GeneralTab /> }] : [])
+  ];
+
+  const SETTINGS_CATEGORIES: Array<{ group: string; keys: string[] }> = [
+    { group: "Почта", keys: ["mail", "profile", "connection"] },
+    { group: "Документооборот", keys: ["users", "roles", "docflow", "numbering", "audit"] },
+    { group: "Правила предприятия", keys: ["service", "sorting", "notifications", "templates"] },
+    { group: "Служба", keys: ["ldap", "ai", "general"] }
+  ];
+  const knownKeys = new Set(SETTINGS_CATEGORIES.flatMap((c) => c.keys));
+  const restKeys = settingsTabs.filter((t) => !knownKeys.has(t.key)).map((t) => t.key);
+  const categories = restKeys.length
+    ? [...SETTINGS_CATEGORIES, { group: "Прочее", keys: restKeys }]
+    : SETTINGS_CATEGORIES;
+
+  const settingsMenu = categories
+    .map(({ group, keys }) => ({
+      type: "group" as const,
+      label: group,
+      children: keys
+        .map((key) => settingsTabs.find((t) => t.key === key))
+        .filter((t): t is { key: string; label: string; children: ReactNode } => !!t)
+        .map((t) => ({ key: t.key, label: t.label }))
+    }))
+    .filter((g) => g.children.length > 0);
+
+  // Раздел мог не войти в категории для этой роли — тогда показываем первый доступный.
+  const currentTab = settingsTabs.find((t) => t.key === activeTab) ?? settingsTabs[0] ?? null;
+
+  /** Открытые разделы: монтируем один раз, дальше переключаем видимость. */
+  const [mountedTabs, setMountedTabs] = useState<string[]>([]);
+  /**
+   * ⚠️ Элемент раздела кэшируем по ключу: React пропускает перерисовку поддерева, если
+   * ссылка на элемент не изменилась. Без этого каждый переход пересобирал ВСЕ открытые
+   * разделы (тяжёлые таблицы и запросы), и настройки заметно тормозили.
+   */
+  const sectionCache = useRef(new Map<string, ReactNode>());
+  useEffect(() => {
+    if (currentTab && !mountedTabs.includes(currentTab.key)) {
+      setMountedTabs((prev) => [...prev, currentTab.key]);
+    }
+  }, [currentTab, mountedTabs]);
+
+  useEffect(() => {
+    // Настройки переоткрыли — разделы пересобираем: списки и статусы не должны быть устаревшими.
+    sectionCache.current.clear();
+    setMountedTabs([]);
+  }, [reloadKey]);
+
+  for (const t of settingsTabs) {
+    if (mountedTabs.includes(t.key) && !sectionCache.current.has(t.key)) {
+      sectionCache.current.set(t.key, t.children);
+    }
+  }
+
   return (
     <Modal
       open={open}
@@ -1132,46 +1230,33 @@ export default function SettingsModal() {
       footer={null}
       // Таблица пользователей и таблица правил сортировки шире обычной формы: на 760 px
       // колонка «Статус» и кнопки действий обрезались.
-      width={activeTab === "users" || activeTab === "sorting" ? "min(1100px, 94vw)" : 760}
+      // Ширина постоянная: раньше она зависела от вкладки, и окно прыгало (жалоба заказчика).
+      width="min(1100px, 94vw)"
       title="Настройки"
     >
-      <Tabs
-        activeKey={activeTab}
-        onChange={setActiveTab}
-        items={[
-          // Вкладка «Почта» читает список ящиков — показываем её только с правом mail.view.
-          ...(canUseMail ? [{ key: "mail", label: "Почта", children: <AccountTab /> }] : []),
-          // Личные настройки: свои данные, поэтому доступны ЛЮБОМУ вошедшему (не settings.manage).
-          { key: "profile", label: "Личные настройки", children: <MailProfileTab key={reloadKey} /> },
-          // Адрес сервера — личная настройка работника (Р21): файл предприятия выше и не
-          // редактируется, а свой адрес человек задаёт сам. Поэтому вкладка доступна всем,
-          // а администрирование документооборота осталось у администраторов ниже.
-          { key: "connection", label: "Подключение", children: <ServerAddressCard key={reloadKey} /> },
-          ...(canManageUsers
-            ? [
-                { key: "users", label: "Пользователи и роли", children: <UsersTab key={reloadKey} /> },
-                { key: "docflow", label: "Документооборот", children: <DocflowTab key={reloadKey} /> }
-              ]
-            : []),
-          ...(can("journal.view") ? [{ key: "numbering", label: "Нумерация", children: <NumberingTab key={reloadKey} /> }] : []),
-          ...(can("audit.view") ? [{ key: "audit", label: "Аудит", children: <AuditTab /> }] : []),
-          // Настройки ИИ и «Общие» закрыты правом settings.manage: у остальных ролей
-          // вкладки открывались, а запросы отвечали 403 и сыпались в консоль.
-          ...(canManageSettings
-            ? [
-                // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
-                // Служебный ящик: аппарат видит подсказку, выбирает администратор (settings.manage).
-                { key: "service", label: "Служебные ящики", children: <ServiceAccountAdmin key={reloadKey} /> },
-                { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
-                { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> }
-              ]
-            : []),
-          ...(canManageSettings ? [{ key: "ai", label: "ИИ", children: <AiTab /> }] : []),
-          { key: "templates", label: "Шаблоны", children: <TemplatesTab key={reloadKey} /> },
-          { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> },
-          ...(canManageSettings ? [{ key: "general", label: "Общие", children: <GeneralTab /> }] : [])
-        ]}
-      />
+      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+        <Menu
+          mode="inline"
+          selectedKeys={currentTab ? [currentTab.key] : []}
+          onSelect={({ key }: { key: string }) => setActiveTab(key)}
+          items={settingsMenu}
+          style={{ width: 236, flex: "0 0 236px", borderInlineEnd: "none" }}
+        />
+        {/* Высота фиксирована, прокрутка — вертикальная: окно настроек не прыгает
+            при переходе между разделами (жалоба заказчика). */}
+        {/* Разделы монтируем при первом открытии и дальше только прячем — как делал antd Tabs:
+            иначе каждый переход пересоздавал экран и заново тянул данные (и тесты в jsdom
+            переставали укладываться в таймаут). */}
+        <div style={{ flex: 1, minWidth: 0, height: "62vh", overflowY: "auto", paddingRight: 4 }}>
+          {settingsTabs
+            .filter((t) => mountedTabs.includes(t.key))
+            .map((t) => (
+              <div key={t.key} style={{ display: t.key === currentTab?.key ? "block" : "none" }}>
+                {t.children}
+              </div>
+            ))}
+        </div>
+      </div>
     </Modal>
   );
 }

@@ -414,12 +414,21 @@ export type Permission =
   /** Отправка и импорт письма. */
   | "mail.send";
 
+/** Право из каталога: что вообще можно разрешить роли (галочки конструктора). */
+export interface PermissionInfo {
+  id: Permission;
+  title: string;
+  group: string;
+}
+
 export interface Role {
   id: string;
   name: string;
   description: string;
   sortOrder: number;
   isSystem: boolean;
+  /** Права роли. Пустой список — роль ничего не разрешает. */
+  permissions: Permission[];
 }
 
 export interface User {
