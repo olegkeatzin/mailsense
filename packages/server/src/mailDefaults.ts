@@ -76,6 +76,45 @@ export function parseMailDefaults(raw: string | null | undefined): {
 }
 
 /** Есть ли что применять: пустые умолчания не считаются настроенными. */
+/**
+ * Строгий разбор того, что прислал АДМИНИСТРАТОР в интерфейсе.
+ *
+ * ⚠️ В отличие от `.env` (там мусор молча игнорируем, чтобы чужая опечатка не роняла сервер),
+ * здесь ошибку надо ПОКАЗАТЬ: админ ждёт ответа и должен видеть, что именно не так.
+ */
+export function parseMailDefaultsInput(value: unknown): { defaults: MailDefaults; error: string | null } {
+  if (value === null || value === undefined) return { defaults: {}, error: null };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return { defaults: {}, error: "Ожидался объект с ключами imap/pop3/smtp" };
+  }
+  const source = value as Record<string, unknown>;
+  for (const key of Object.keys(source)) {
+    if (!(BLOCKS as readonly string[]).includes(key)) {
+      return { defaults: {}, error: "Неизвестный раздел «" + key + "»: допустимы imap, pop3, smtp" };
+    }
+  }
+  const defaults: MailDefaults = {};
+  for (const block of BLOCKS) {
+    const raw = source[block];
+    if (raw === undefined || raw === null) continue;
+    if (typeof raw !== "object" || Array.isArray(raw)) {
+      return { defaults: {}, error: "Раздел «" + block + "» должен быть объектом с адресом, портом, шифрованием" };
+    }
+    const server = readServer(raw);
+    if (!server) continue;
+    const port = (raw as Record<string, unknown>).port;
+    if (port !== undefined && port !== null && port !== "" && server.port === undefined) {
+      return { defaults: {}, error: "Порт в разделе «" + block + "» должен быть числом от 1 до 65535" };
+    }
+    const host = (raw as Record<string, unknown>).host;
+    if (typeof host === "string" && host.trim() && !server.host) {
+      return { defaults: {}, error: "Не разобрал адрес сервера в разделе «" + block + "»" };
+    }
+    defaults[block] = server;
+  }
+  return { defaults, error: null };
+}
+
 export function hasMailDefaults(defaults: MailDefaults): boolean {
   return BLOCKS.some((block) => !!defaults[block]);
 }

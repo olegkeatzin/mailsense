@@ -92,6 +92,7 @@ import {
   authStatus,
   createManualUser,
   getSetting,
+  setSetting,
   getUserWithRoles,
   hasDocflowDb,
   isAppError,
@@ -128,6 +129,7 @@ import { mountServiceAccountRoutes } from "./serviceAccountRoutes.js";
 import { mountMailProfileRoutes } from "./mailProfileRoutes.js";
 import {
   MAIL_DEFAULTS_SETTING,
+  parseMailDefaultsInput,
   mergeAccountDefaults,
   parseMailDefaults,
   type MailDefaults
@@ -490,6 +492,19 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     "/api/mail-defaults",
     asyncHandler(async (_req, res) => {
       res.json(await mailDefaults());
+    })
+  );
+
+  // Умолчания почтового сервера предприятия задаёт администратор: работник вводит только
+  // адрес ящика и пароль. Значение в базе важнее .env — как у каталога.
+  app.put(
+    "/api/mail-defaults",
+    requirePermission("settings.manage"),
+    asyncHandler(async (req, res) => {
+      const parsed = parseMailDefaultsInput(req.body);
+      if (parsed.error) throw new AppError(parsed.error, 400, "bad_mail_defaults");
+      await setSetting(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
+      res.json(parsed.defaults);
     })
   );
 

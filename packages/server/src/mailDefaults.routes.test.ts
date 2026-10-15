@@ -21,10 +21,12 @@ const DEFAULTS = {
   smtp: { host: "192.168.1.10", port: 465, tls: "ssl", authType: "login" }
 };
 const TOKEN = "token:worker";
+const TOKEN_ADMIN = "token:admin";
 let app: RunningApp;
 
 beforeAll(async () => {
   mockedDocflow.__sessions.set(TOKEN, testUser("u-ivanov", ["secretary"], { ldapUid: "ivanov" }));
+  mockedDocflow.__sessions.set(TOKEN_ADMIN, testUser("u-admin", ["admin"], { ldapUid: "admin" }));
   app = await listen(await createApp({}));
 });
 
@@ -110,4 +112,59 @@ describe("умолчания почтового сервера", () => {
       "ivanov"
     );
   });
+  /**
+   * Вопрос заказчика: умолчания задаются «на сервере в .env или в клиенте у админа»?
+   * Ответ — и так, и так: .env засеивает при первом запуске, дальше админ правит их
+   * в интерфейсе, и значение в базе важнее переменной окружения (как у каталога).
+   */
+  test("администратор сохраняет умолчания из интерфейса, и форма их получает", async () => {
+    const saved = await request(app.baseUrl, "PUT", "/api/mail-defaults", {
+      token: TOKEN_ADMIN,
+      body: {
+        pop3: { host: "10.0.0.5", port: 110, tls: "starttls", authType: "login" },
+        smtp: { host: "10.0.0.6", port: 587, tls: "starttls", authType: "login" }
+      }
+    });
+
+    expect(saved.status).toBe(200);
+    expect(mockedDocflow.setSetting).toHaveBeenCalledWith("mail.defaults", expect.stringContaining("10.0.0.5"));
+
+    mockedDocflow.getSetting.mockResolvedValue(JSON.stringify(saved.body));
+    const form = await request(app.baseUrl, "GET", "/api/mail-defaults", { token: TOKEN });
+    expect(form.body.pop3.host).toBe("10.0.0.5");
+    expect(form.body.smtp.port).toBe(587);
+  });
+
+  test("рядовому работнику менять умолчания нечем — 403", async () => {
+    const res = await request(app.baseUrl, "PUT", "/api/mail-defaults", {
+      token: TOKEN,
+      body: { pop3: { host: "10.0.0.5" } }
+    });
+    expect(res.status).toBe(403);
+    expect(mockedDocflow.setSetting).not.toHaveBeenCalled();
+  });
+
+  test("кривой порт и незнакомый раздел отвергаются с понятным текстом", async () => {
+    const badPort = await request(app.baseUrl, "PUT", "/api/mail-defaults", {
+      token: TOKEN_ADMIN,
+      body: { pop3: { host: "10.0.0.5", port: "сто" } }
+    });
+    expect(badPort.status).toBe(400);
+    expect(String(badPort.body.error)).toContain("Порт");
+
+    const badBlock = await request(app.baseUrl, "PUT", "/api/mail-defaults", {
+      token: TOKEN_ADMIN,
+      body: { pop4: { host: "10.0.0.5" } }
+    });
+    expect(badBlock.status).toBe(400);
+    expect(String(badBlock.body.error)).toContain("Неизвестный раздел");
+    expect(mockedDocflow.setSetting).not.toHaveBeenCalled();
+  });
+
+  test("пустой объект сбрасывает умолчания предприятия", async () => {
+    const res = await request(app.baseUrl, "PUT", "/api/mail-defaults", { token: TOKEN_ADMIN, body: {} });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({});
+  });
+
 });
