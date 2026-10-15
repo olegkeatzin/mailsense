@@ -20,7 +20,8 @@ import {
   Tag,
   Tabs,
   Typography,
-  message
+  message,
+  Card,
 } from "antd";
 import { DeleteOutlined, PlusOutlined, SyncOutlined } from "@ant-design/icons";
 import { useStore } from "../store";
@@ -36,7 +37,7 @@ import { MailProfileTab } from "./MailProfileTab";
 import { ServerAddressCard } from "./ServerAddressCard";
 import { NotificationsTab } from "./sorting/NotificationsTab";
 import { RolesEditor } from "./RolesEditor";
-import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, MailDefaults, Template } from "../types";
+import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, MailDefaults, MailServerDefaults, Template } from "../types";
 import { humanError } from "../utils/humanError";
 
 const PROTOCOL_OPTIONS = [
@@ -67,6 +68,33 @@ function AccountTab() {
    * задаются на сервере, поэтому работник вводит только адрес ящика и пароль.
    */
   const [serverDefaults, setServerDefaults] = useState<MailDefaults>({});
+  // «Дополнительно» раскрыто, если предприятие умолчаний не задало: тогда поля надо заполнить руками.
+  const [extraKeys, setExtraKeys] = useState<string[]>([]);
+  const [enterprise, setEnterprise] = useState<MailDefaults>({});
+  const [savingEnterprise, setSavingEnterprise] = useState(false);
+  const canManageSettings = useStore((st) => st.can("settings.manage"));
+
+  // Админ заполняет умолчания предприятия в том же разделе: работнику остаётся адрес и пароль.
+  useEffect(() => {
+    setEnterprise(serverDefaults);
+  }, [serverDefaults]);
+
+  const setBlock = (block: "imap" | "pop3" | "smtp", patch: Partial<MailServerDefaults>) => {
+    setEnterprise((prev) => ({ ...prev, [block]: { ...(prev[block] ?? {}), ...patch } }));
+  };
+
+  const saveEnterprise = async () => {
+    setSavingEnterprise(true);
+    try {
+      const saved = await api.saveMailDefaults(enterprise);
+      setServerDefaults(saved ?? {});
+      message.success("Умолчания почтового сервера сохранены");
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setSavingEnterprise(false);
+    }
+  };
 
   useEffect(() => {
     // ⚠️ Клиент может работать со СТАРЫМ сервером, где ручки умолчаний ещё нет: тогда просто
@@ -234,6 +262,47 @@ function AccountTab() {
 
   return (
     <div>
+      {canManageSettings ? (
+        <Card size="small" title="Почтовый сервер предприятия" style={{ marginBottom: 12 }}>
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12 }}>
+            Работник вводит только адрес ящика и пароль — адрес сервера, порты и шифрование
+            подставляются ему отсюда. Значения из .env действуют, пока их не переопределят здесь.
+          </Typography.Paragraph>
+          {(["imap", "pop3", "smtp"] as const).map((block) => (
+            <Space key={block} wrap style={{ marginBottom: 6 }}>
+              <Typography.Text strong style={{ width: 46, display: "inline-block" }}>
+                {block.toUpperCase()}
+              </Typography.Text>
+              <Input
+                placeholder="адрес сервера"
+                value={enterprise[block]?.host ?? ""}
+                onChange={(e) => setBlock(block, { host: e.target.value })}
+                style={{ width: 170 }}
+              />
+              <InputNumber
+                placeholder="порт"
+                min={1}
+                max={65535}
+                value={enterprise[block]?.port ?? null}
+                onChange={(value) => setBlock(block, { port: typeof value === "number" ? value : undefined })}
+              />
+              <Select
+                placeholder="шифрование"
+                allowClear
+                style={{ width: 140 }}
+                value={enterprise[block]?.tls}
+                options={TLS_OPTIONS}
+                onChange={(value) => setBlock(block, { tls: value })}
+              />
+            </Space>
+          ))}
+          <div>
+            <Button size="small" type="primary" loading={savingEnterprise} onClick={saveEnterprise}>
+              Сохранить умолчания
+            </Button>
+          </div>
+        </Card>
+      ) : null}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <Typography.Title level={5} style={{ margin: 0 }}>
           Аккаунты
@@ -290,7 +359,31 @@ function AccountTab() {
         width={620}
       >
       <Form form={form} layout="vertical" onFinish={submitAccount}>
+        {/* Работник вводит только адрес ящика и пароль: сервер, порты и шифрование приходят
+            из умолчаний предприятия (их задаёт администратор в этом же разделе). */}
         <Space wrap>
+          <Form.Item name="username" label="Логин" rules={[{ required: true }]}>
+            <Input placeholder="user@mail.test" style={{ width: 220 }} />
+          </Form.Item>
+          <Form.Item name="password" label="Пароль" rules={editingId ? [] : [{ required: true }]}>
+            <Input.Password placeholder={editingId ? "пусто = не менять" : undefined} style={{ width: 200 }} />
+          </Form.Item>
+          <Form.Item name="authType" label="Аутентификация">
+            <Select options={AUTH_OPTIONS} style={{ width: 130 }} />
+          </Form.Item>
+        </Space>
+        <Collapse
+          size="small"
+          style={{ marginBottom: 12 }}
+          activeKey={extraKeys}
+          onChange={(keys) => setExtraKeys(Array.isArray(keys) ? keys : [String(keys)])}
+          items={[
+            {
+              key: "server",
+              label: "Дополнительно: сервер, порты и шифрование",
+              children: (
+                <>
+<Space wrap>
           <Form.Item name="protocol" label="Протокол" style={{ minWidth: 120 }}>
             <Select options={PROTOCOL_OPTIONS} />
           </Form.Item>
@@ -302,17 +395,6 @@ function AccountTab() {
           </Form.Item>
           <Form.Item name="tls" label="Шифрование">
             <Select options={TLS_OPTIONS} style={{ width: 130 }} />
-          </Form.Item>
-        </Space>
-        <Space wrap>
-          <Form.Item name="username" label="Логин" rules={[{ required: true }]}>
-            <Input placeholder="user@mail.test" style={{ width: 220 }} />
-          </Form.Item>
-          <Form.Item name="password" label="Пароль" rules={editingId ? [] : [{ required: true }]}>
-            <Input.Password placeholder={editingId ? "пусто = не менять" : undefined} style={{ width: 200 }} />
-          </Form.Item>
-          <Form.Item name="authType" label="Аутентификация">
-            <Select options={AUTH_OPTIONS} style={{ width: 130 }} />
           </Form.Item>
         </Space>
         <Divider plain style={{ fontSize: 13, margin: "12px 0" }}>
@@ -340,6 +422,15 @@ function AccountTab() {
             <Select options={AUTH_OPTIONS} style={{ width: 130 }} />
           </Form.Item>
         </Space>
+                  <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+                    Обычно это задано предприятием — значения уже подставлены. Меняйте, только если
+                    ваш ящик на другом сервере (своя почта, другой филиал).
+                  </Typography.Paragraph>
+                </>
+              )
+            }
+          ]}
+        />
         <Divider plain style={{ fontSize: 13, margin: "12px 0" }}>
           Отправка и подпись
         </Divider>

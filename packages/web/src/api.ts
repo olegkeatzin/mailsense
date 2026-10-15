@@ -135,6 +135,9 @@ export const api = {
   accounts: () => request<Account[]>("/api/accounts"),
   /** Умолчания почтового сервера: форма ящика подставляет их, работник вводит логин и пароль. */
   mailDefaults: () => request<MailDefaults>("/api/mail-defaults"),
+  /** Умолчания почтового сервера предприятия — задаёт администратор (право settings.manage). */
+  saveMailDefaults: (defaults: MailDefaults) =>
+    request<MailDefaults>("/api/mail-defaults", { method: "PUT", body: JSON.stringify(defaults) }),
   createAccount: (input: AccountInput) =>
     request<Account>("/api/accounts", { method: "POST", body: JSON.stringify(input) }),
   updateAccount: (id: string, input: AccountInput) =>
