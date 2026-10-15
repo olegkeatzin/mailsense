@@ -34,8 +34,9 @@ afterAll(async () => {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockedCore.getSettingValue.mockImplementation((key: string) =>
-    key === "mail.defaults" ? JSON.stringify(DEFAULTS) : ""
+  // Умолчания — настройка предприятия: в серверном режиме их читает docflow из своей базы.
+  mockedDocflow.getSetting.mockImplementation(async (key: string) =>
+    key === "mail.defaults" ? JSON.stringify(DEFAULTS) : null
   );
   mockedCore.createAccount.mockImplementation((input: Record<string, unknown>) => ({ id: "acc-1", ...input }));
 });
@@ -97,7 +98,7 @@ describe("умолчания почтового сервера", () => {
   });
 
   test("без умолчаний ящик создаётся как раньше", async () => {
-    mockedCore.getSettingValue.mockReturnValue("");
+    mockedDocflow.getSetting.mockResolvedValue(null);
 
     await request(app.baseUrl, "POST", "/api/accounts", {
       token: TOKEN,

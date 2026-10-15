@@ -91,6 +91,7 @@ import {
   updateRole,
   authStatus,
   createManualUser,
+  getSetting,
   getUserWithRoles,
   hasDocflowDb,
   isAppError,
@@ -473,21 +474,34 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
    * Умолчания почтового сервера предприятия: адрес, порты, шифрование и способ входа.
    * Работник вводит только адрес ящика и пароль (пункт 5 заказчика). Секретов тут нет.
    */
-  function mailDefaults(): MailDefaults {
-    return parseMailDefaults(getSettingValue(MAIL_DEFAULTS_SETTING)).defaults;
+  async function mailDefaults(): Promise<MailDefaults> {
+    // ⚠️ Умолчания — настройка ПРЕДПРИЯТИЯ, как и каталог: в серверном режиме они лежат в базе
+    // документооборота (PostgreSQL), а в режиме «только почта» — в локальной базе ядра.
+    // Читаем из того же места, куда их положил засев из окружения, иначе работник получает
+    // пустой ящик и создание падает на NOT NULL (найдено сквозным прогоном на стенде).
+    const raw = hasDocflowDb()
+      ? ((await getSetting(MAIL_DEFAULTS_SETTING)) ?? "")
+      : getSettingValue(MAIL_DEFAULTS_SETTING);
+    return parseMailDefaults(raw).defaults;
   }
 
-  app.get("/api/mail-defaults", (_req, res) => {
-    res.json(mailDefaults());
-  });
+  app.get(
+    "/api/mail-defaults",
+    asyncHandler(async (_req, res) => {
+      res.json(await mailDefaults());
+    })
+  );
 
-  app.post("/api/accounts", (req, res) => {
-    // Свой ящик заводит сам работник: это его личные данные, а не настройка предприятия.
-    // Незаполненные поля закрываем умолчаниями предприятия: заполненное человеком не трогаем.
-    const input = mergeAccountDefaults(req.body as AccountInput, mailDefaults());
-    const account = createAccount(input, accountOwnerKey(req) || null);
-    res.status(201).json(accountDto(account));
-  });
+  app.post(
+    "/api/accounts",
+    asyncHandler(async (req, res) => {
+      // Свой ящик заводит сам работник: это его личные данные, а не настройка предприятия.
+      // Незаполненные поля закрываем умолчаниями предприятия: заполненное человеком не трогаем.
+      const input = mergeAccountDefaults(req.body as AccountInput, await mailDefaults());
+      const account = createAccount(input, accountOwnerKey(req) || null);
+      res.status(201).json(accountDto(account));
+    })
+  );
 
   app.put("/api/accounts/:id", (req, res) => {
     if (!ownAccount(req, req.params.id)) return res.status(404).json({ error: "Ящик не найден" });
