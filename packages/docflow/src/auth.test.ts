@@ -266,18 +266,23 @@ describe("вход и сессии", () => {
 });
 
 describe("управление ролями", () => {
-  test("назначение ролей меняет права и рвёт старые сессии", async () => {
+  test("назначение ролей меняет права сразу и НЕ выкидывает из системы", async () => {
     await ensureAdminCount(2);
     const res = await login({ login: "ivanov", password: "Secret123!" });
     const admin = actorOf(["admin"]);
 
     const updated = await assignRoles(res.user.id, ["executor"], admin);
     expect(updated.roles).toEqual(["executor"]);
-    // старая сессия отозвана: права в ней устарели
-    expect(await resolveToken(res.token)).toBeNull();
+    // ⚠️ Заказчик: выдав роль, администратор выкидывал человека из приложения («новое
+    // появляется только после перезапуска»). Права и так перечитываются на каждом запросе,
+    // поэтому сессия остаётся живой, а набор прав меняется сразу.
+    const sameSession = await resolveToken(res.token);
+    expect(sameSession).not.toBeNull();
+    expect(sameSession?.roles).toEqual(["executor"]);
+    expect(sameSession?.permissions ?? []).not.toContain("users.manage");
 
     await assignRoles(res.user.id, ["admin"], admin);
-    expect(await getUserRoles(res.user.id)).toEqual(["admin"]);
+    expect((await resolveToken(res.token))?.roles).toEqual(["admin"]);
   });
 
   test("нельзя снять роль у последнего администратора", async () => {
