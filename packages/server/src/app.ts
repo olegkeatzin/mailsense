@@ -554,7 +554,11 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
       const parsed = parseMailDefaultsInput(req.body);
       if (parsed.error) throw new AppError(parsed.error, 400, "bad_mail_defaults");
       try {
-        await setSetting(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
+        // ⚠️ Умолчания — настройка предприятия, но в режиме «только почта» базы документооборота
+        // нет: пишем в локальную базу ядра. Иначе администратор получал «проверьте
+        // DOCFLOW_DATABASE_URL» на обычном сохранении формы (живая жалоба заказчика).
+        if (hasDocflowDb()) await setSetting(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
+        else setSettingValue(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
       } catch (err) {
         logger.warn({ err }, "Не удалось сохранить умолчания почты в базе предприятия");
         // ⚠️ На проде это выглядело как «Внутренняя ошибка сервера» без записи в журнале:

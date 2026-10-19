@@ -187,3 +187,38 @@ describe("умолчания почтового сервера", () => {
   });
 
 });
+
+/**
+ * Живая жалоба заказчика: в режиме «только почта» (нет DOCFLOW_DATABASE_URL) сохранение
+ * умолчаний падало с «проверьте DOCFLOW_DATABASE_URL», а значение из .env вообще не
+ * появлялось — засев шёл только при наличии базы документооборота.
+ */
+describe("умолчания без базы документооборота", () => {
+  test("сохранение пишет в локальную базу и не даёт 503", async () => {
+    mockedDocflow.hasDocflowDb.mockReturnValue(false);
+    try {
+      const res = await request(app.baseUrl, "PUT", "/api/mail-defaults", {
+        token: TOKEN_ADMIN,
+        body: { pop3: { host: "10.0.0.7", port: 110 } }
+      });
+      expect(res.status).toBe(200);
+      expect(mockedCore.setSettingValue).toHaveBeenCalledWith("mail.defaults", expect.stringContaining("10.0.0.7"));
+      expect(mockedDocflow.setSetting).not.toHaveBeenCalled();
+    } finally {
+      mockedDocflow.hasDocflowDb.mockReturnValue(true);
+    }
+  });
+
+  test("чтение берёт значение из локальной базы", async () => {
+    mockedDocflow.hasDocflowDb.mockReturnValue(false);
+    mockedCore.getSettingValue.mockReturnValue(JSON.stringify({ smtp: { host: "10.0.0.8", port: 25 } }));
+    try {
+      const res = await request(app.baseUrl, "GET", "/api/mail-defaults", { token: TOKEN });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ smtp: { host: "10.0.0.8", port: 25 } });
+    } finally {
+      mockedDocflow.hasDocflowDb.mockReturnValue(true);
+      mockedCore.getSettingValue.mockReturnValue("");
+    }
+  });
+});

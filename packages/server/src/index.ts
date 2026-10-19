@@ -1,5 +1,5 @@
 import type { Config, SecretStore } from "@mailsense/core";
-import { initApp, startMailScheduler, logger } from "@mailsense/core";
+import { getSettingValue, initApp, setSettingValue, startMailScheduler, logger } from "@mailsense/core";
 import {
   cleanupSessions,
   docflowDatabaseUrl,
@@ -12,7 +12,7 @@ import {
 } from "@mailsense/docflow";
 import { createApp } from "./app.js";
 import { applyDocflowStartupPolicy } from "./docflowStartup.js";
-import { seedFromEnvironment } from "./envSeed.js";
+import { seedFromEnvironment, seedMailDefaultsFromEnv } from "./envSeed.js";
 import type http from "node:http";
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -84,6 +84,20 @@ export async function startServer(options: ServerOptions = {}): Promise<RunningS
       );
   } else {
     // База документооборота не задана — приложение работает как почтовый клиент.
+    // ⚠️ Умолчания почты нужны и здесь! Раньше засев шёл ТОЛЬКО при наличии
+    // DOCFLOW_DATABASE_URL, и в этом режиме MAILSENSE_MAIL_DEFAULTS молча пропадал,
+    // а сохранение из интерфейса падало с «проверьте DOCFLOW_DATABASE_URL».
+    const mailDefaults = await seedMailDefaultsFromEnv({
+      env: process.env,
+      readSetting: async (key) => getSettingValue(key) || null,
+      writeSetting: async (key, value) => setSettingValue(key, value)
+    });
+    if (mailDefaults) {
+      logger.info(
+        { written: mailDefaults.written, skipped: mailDefaults.skipped, warnings: mailDefaults.warnings },
+        "Умолчания почты из окружения (локальная база)"
+      );
+    }
     // Политику всё равно зовём: если оператор задал MAILSENSE_DOCFLOW_ENABLED, он должен
     // увидеть в журнале, что переменная здесь не действует, а не гадать.
     await applyDocflowStartupPolicy({

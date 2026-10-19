@@ -72,7 +72,7 @@ export function preferredActionAccountId(settings: EdmsMailSettings | null): str
 export function edmsMailProblem(settings: EdmsMailSettings | null): string {
   if (!settings) return "Не удалось получить список ящиков для СЭД";
   if (!settings.allowed.length) {
-    return "Нет доступных ящиков: попросите администратора подключить ящик для писем СЭД";
+    return "Нет подходящих ящиков: добавьте свой ящик в «Настройки → Почта» — для СЭД подойдёт любой ваш ящик на почтовом сервере предприятия";
   }
   // Отправляем только со служебного или с ЛИЧНОГО ВЫБРАННОГО. Если отправлять не с чего,
   // действие не выполняем: сервер такой запрос всё равно отвергнет, а заведомо провальную
@@ -100,7 +100,7 @@ export function edmsMailWarning(settings: EdmsMailSettings | null): string {
   if (!id) return "";
   const option = edmsActionOptions(settings).find((a) => a.id === id);
   if (option && !option.smtpReady) {
-    return "У выбранного ящика не настроена отправка: письмо, скорее всего, не уйдёт. Выберите другой ящик или попросите администратора";
+    return "У выбранного ящика не настроена отправка: письмо, скорее всего, не уйдёт. Выберите другой ящик или настройте отправку в «Настройки → Почта»";
   }
   return "";
 }
@@ -123,7 +123,7 @@ export function edmsSendErrorText(error: unknown): string {
     case "no_account":
       return "Не выбран ящик для писем СЭД: задайте его в «Личных настройках» → «Почта для СЭД»";
     case "smtp_not_configured":
-      return "У выбранного ящика не настроена отправка: выберите другой ящик или попросите администратора";
+      return "У выбранного ящика не настроена отправка: выберите другой ящик или настройте её в «Настройки → Почта»";
     case "account_missing":
       return "Выбранный ящик для СЭД больше не существует. Выберите другой в «Личных настройках» → «Почта для СЭД»";
     default:
