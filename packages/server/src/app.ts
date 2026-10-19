@@ -191,6 +191,48 @@ function attachmentsError(list: unknown, needDraftId = false): string | null {
   return null;
 }
 
+/**
+ * Отказ ПОЧТОВОГО СЕРВЕРА (nodemailer), а не сбой приложения.
+ *
+ * ⚠️ Ловим только признаки транспорта: коды E* (EAUTH, ECONNECTION, EENVELOPE…) и типичные
+ * тексты. Иначе любая внутренняя ошибка превращалась бы в 502 и прятала настоящий баг.
+ */
+function isSmtpFailure(err: unknown): err is Error {
+  if (!(err instanceof Error)) return false;
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string" && /^E[A-Z]+$/.test(code)) return true;
+  return /no recipients defined|connection error|invalid login|greeting never received|must issue a starttls|not authenticated|authentication failed/i.test(
+    err.message
+  );
+}
+
+/**
+ * Проверка списка адресов письма.
+ *
+ * ⚠️ API ждёт `[{ address }]`, а не строки. Без этой проверки `to.map` падал с 500, а
+ * nodemailer отвечал «No recipients defined» — человек видел «Внутренняя ошибка сервера»
+ * вместо «получатели: список вида { address }». Нашлось при живой отправке через стенд.
+ */
+function recipientsError(list: unknown, field: "to" | "cc" | "bcc"): string | null {
+  if (list === undefined || list === null) {
+    return field === "to" ? "Не указаны получатели (to)" : null;
+  }
+  if (!Array.isArray(list)) {
+    return "Поле " + field + " должно быть списком адресов вида [{ address }]";
+  }
+  if (field === "to" && list.length === 0) return "Не указаны получатели (to)";
+  for (const item of list) {
+    if (typeof item === "string") {
+      return "Адрес в «" + field + "» должен быть объектом { address }, а не строкой";
+    }
+    const address = item && typeof item === "object" ? (item as { address?: unknown }).address : undefined;
+    if (typeof address !== "string" || !address.trim()) {
+      return "В списке «" + field + "» есть пустой адрес";
+    }
+  }
+  return null;
+}
+
 function accountDto(a: {
   id: string;
   protocol: string;
@@ -570,12 +612,22 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
       if (!ownAccount(req, req.params.id)) return res.status(404).json({ error: "Ящик не найден" });
       // Ручной скан пользователя: удалённые письма можно скачать заново
       // (авто-скан по-прежнему уважает надгробия — см. scheduler.ts).
-      const result = await fetchEmails(req.params.id, {
-        since: (req.body?.since as string) || undefined,
-        until: (req.body?.until as string) || undefined,
-        includeDeleted: true
-      });
-      res.json(result);
+      try {
+        const result = await fetchEmails(req.params.id, {
+          since: (req.body?.since as string) || undefined,
+          until: (req.body?.until as string) || undefined,
+          includeDeleted: true
+        });
+        res.json(result);
+      } catch (err) {
+        // ⚠️ Сервер почты отказал (например, «Cleartext authentication disallowed»):
+        // это не 500, а понятный отказ с текстом сервера.
+        throw new AppError(
+          "Не удалось забрать почту: " + (err instanceof Error ? err.message : String(err)),
+          502,
+          "mail_fetch_failed"
+        );
+      }
     })
   );
 
@@ -844,6 +896,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
       if (!compose.accountId || !ownAccount(req, compose.accountId)) {
         return res.status(404).json({ error: "Ящик не найден" });
       }
+      // Получателей проверяем ДО ядра: иначе падение уходит в 500.
+      const badRecipients =
+        recipientsError(compose.to, "to") ?? recipientsError(compose.cc, "cc") ?? recipientsError(compose.bcc, "bcc");
+      if (badRecipients) return res.status(400).json({ error: badRecipients });
       const bad = attachmentsError(compose.attachments, true);
       if (bad) return res.status(400).json({ error: bad });
       // Ссылку на файл черновика проверяем ДО отправки: письмо не должно уйти без
@@ -865,6 +921,12 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
         // русским текстом ядра. Показывать человеку «ошибка сервера» здесь нельзя: он не поймёт,
         // что именно поправить в письме.
         if (err instanceof ComposeInputError) return res.status(400).json({ error: err.message });
+        // Отказ самого почтового сервера (нет получателей, запрет AUTH, TLS): это не сбой
+        // приложения, и человеку нужен текст сервера, а не «Внутренняя ошибка».
+        // Прочие ошибки остаются 500 — иначе настоящий баг спрячется за «сервер не принял».
+        if (isSmtpFailure(err)) {
+          throw new AppError("Почтовый сервер не принял письмо: " + err.message, 502, "smtp_failed");
+        }
         throw err;
       }
     })

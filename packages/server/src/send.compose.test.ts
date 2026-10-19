@@ -157,3 +157,49 @@ describe("F-5: шаблон письма не падает 500 на негодн
     expect(coreMocks.buildComposeTemplate).toHaveBeenCalled();
   });
 });
+
+/**
+ * Найдено ЖИВОЙ отправкой через стенд: при кривом теле запроса сервер отвечал 500
+ * («compose.to.map is not a function», «No recipients defined»), и человек видел
+ * «Внутренняя ошибка сервера» вместо того, что нужно поправить. Отказ почтового сервера —
+ * тоже не сбой приложения: отдаём его текст как 502.
+ */
+describe("получатели и отказы почтового сервера", () => {
+  const send = (body: Record<string, unknown>) =>
+    request(app.baseUrl, "POST", "/api/emails/send", { token: TOKEN, body });
+
+  test("адрес строкой — 400 с понятным текстом, до ядра не доходит", async () => {
+    const res = await send({ ...base, to: "kto-to@mail.test" });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toContain("списком адресов");
+    expect(coreMocks.sendEmail).not.toHaveBeenCalled();
+  });
+
+  test("пустой список получателей — 400", async () => {
+    const res = await send({ ...base, to: [] });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toContain("Не указаны получатели");
+  });
+
+  test("пустой адрес в списке — 400", async () => {
+    const res = await send({ ...base, to: [{ address: "   " }] });
+    expect(res.status).toBe(400);
+    expect(String(res.body.error)).toContain("пустой адрес");
+  });
+
+  test("отказ почтового сервера — 502 с его текстом, а не 500", async () => {
+    coreMocks.sendEmail.mockRejectedValueOnce(new Error("No recipients defined"));
+    const res = await send({ ...base });
+    expect(res.status).toBe(502);
+    expect(String(res.body.error)).toContain("No recipients defined");
+  });
+
+  test("отказ при заборе почты — 502 с текстом сервера", async () => {
+    coreMocks.fetchEmails.mockRejectedValueOnce(
+      new Error("POP3 USER: -ERR [AUTH] Cleartext authentication disallowed on non-secure (SSL/TLS) connections")
+    );
+    const res = await request(app.baseUrl, "POST", "/api/accounts/acc-1/fetch", { token: TOKEN, body: {} });
+    expect(res.status).toBe(502);
+    expect(String(res.body.error)).toContain("Cleartext");
+  });
+});
