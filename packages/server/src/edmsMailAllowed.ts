@@ -26,6 +26,11 @@ export interface AllowedMailboxesInput {
   grantedAddresses: string[];
   /** Логины работника из каталога (email и логин) — для автодополнения. */
   workerLogins: Array<string | null | undefined>;
+  /**
+   * Адреса почтового сервера предприятия (умолчания почты: imap/pop3/smtp).
+   * Пусто — предприятие адрес не задало, тогда принимаем любой СВОЙ ящик работника.
+   */
+  enterpriseHosts?: string[];
 }
 
 /** Логин для сравнения: регистр и краевые пробелы не важны. */
@@ -51,6 +56,22 @@ export function allowedMailboxes(input: AllowedMailboxesInput): AllowedMailbox[]
   const granted = new Set((Array.isArray(input.grantedAddresses) ? input.grantedAddresses : []).map(normalizeLogin).filter(Boolean));
   const out: AllowedMailbox[] = [];
   const seen = new Set<string>();
+  // ⚠️ Заказчик: список адресов, который вёл администратор, — лишний шаг. Работник сам
+  // выбирает СВОЙ ящик, единственное условие — он заведён на почтовом сервере предприятия.
+  const enterprise = new Set((input.enterpriseHosts ?? []).map(normalizeLogin).filter(Boolean));
+  const onEnterpriseServer = (account: SendAccountLike) =>
+    enterprise.size === 0 ||
+    enterprise.has(normalizeLogin(account.host)) ||
+    enterprise.has(normalizeLogin(account.smtpHost));
+
+  const ownOnEnterprise = (kind: AllowedMailbox["kind"]) => {
+    for (const account of accounts) {
+      if (seen.has(account.id)) continue;
+      if (!onEnterpriseServer(account)) continue;
+      seen.add(account.id);
+      out.push(view(account, kind));
+    }
+  };
 
   const view = (account: SendAccountLike, kind: AllowedMailbox["kind"]): AllowedMailbox => ({
     id: account.id,
@@ -65,6 +86,10 @@ export function allowedMailboxes(input: AllowedMailboxesInput): AllowedMailbox[]
     out.push(view(service, "service"));
     seen.add(service.id);
   }
+
+  // Свои ящики на сервере предприятия — основной вариант и без выдачи администратором:
+  // идут сразу после служебного, чтобы первый личный пункт был предсказуем.
+  ownOnEnterprise("personal");
 
   // Личный вариант — ящик САМОГО работника: его адрес выдан администратором или совпал
   // с логином из каталога. Чужие ящики в список не попадают: отправлять с них нельзя.

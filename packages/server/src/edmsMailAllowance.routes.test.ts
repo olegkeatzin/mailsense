@@ -107,9 +107,12 @@ describe("GET выдачи", () => {
       accountIds: ["acc-personal"],
       resetChoice: null
     });
+    // Администратор видит РЕАЛЬНОСТЬ работника: служебный ящик и его СВОИ ящики на сервере
+    // предприятия (списка адресов больше нет — заказчик), плюс то, что он выдал сам.
     expect((res.body as { allowed: Array<{ id: string; kind: string }> }).allowed).toEqual([
       { id: "acc-service", username: "post@mail.test", host: "mail.test", smtpReady: true, kind: "service" },
-      { id: "acc-personal", username: "ivanov@mail.test", host: "mail.test", smtpReady: true, kind: "personal" }
+      { id: "acc-personal", username: "ivanov@mail.test", host: "mail.test", smtpReady: true, kind: "personal" },
+      { id: "acc-nosmtp", username: "petrova_ma@mail.test", host: "mail.test", smtpReady: false, kind: "personal" }
     ]);
   });
 
@@ -122,6 +125,7 @@ describe("GET выдачи", () => {
     // Раньше здесь был только служебный ящик: выдача выглядела успешной, а эффекта не было.
     expect((res.body as { allowed: Array<{ id: string; smtpReady: boolean }> }).allowed).toMatchObject([
       { id: "acc-service", smtpReady: true },
+      { id: "acc-personal", smtpReady: true, kind: "personal" },
       { id: "acc-nosmtp", smtpReady: false, kind: "personal" }
     ]);
   });

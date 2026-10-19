@@ -25,6 +25,8 @@ import { selectSendAccount, smtpReady, type SendAccountLike } from "./serviceAcc
  */
 export interface MyEdmsMailDeps {
   requireDocflowDb: express.RequestHandler;
+  /** Адреса почтового сервера предприятия (из умолчаний почты) — условие выбора ящика. */
+  enterpriseHosts: () => Promise<string[]>;
   asyncHandler: (
     fn: (req: express.Request, res: express.Response) => Promise<unknown>
   ) => express.RequestHandler;
@@ -85,7 +87,7 @@ interface Worker {
 }
 
 export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps): void {
-  const { requireDocflowDb, asyncHandler } = deps;
+  const { requireDocflowDb, asyncHandler, enterpriseHosts } = deps;
 
   async function allowedFor(worker: Worker): Promise<AllowedMailbox[]> {
     const [state, grantedAddresses] = await Promise.all([
@@ -96,7 +98,8 @@ export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps
       accounts: listAccountsForUser(worker.ownerKey) as SendAccountLike[],
       serviceId: state.accountId,
       grantedAddresses,
-      workerLogins: worker.logins
+      workerLogins: worker.logins,
+      enterpriseHosts: await enterpriseHosts()
     });
   }
 
@@ -151,8 +154,8 @@ export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps
         const allowed = await allowedFor(worker);
         if (!isMailboxAllowed(allowed, accountId)) {
           throw new AppError(
-            "С этого ящика отправлять нельзя: разрешены служебный ящик предприятия и ящики, " +
-              "выданные вам администратором.",
+            "С этого ящика отправлять нельзя: выберите свой ящик на почтовом сервере " +
+              "предприятия (или служебный ящик предприятия).",
             403,
             "account_not_allowed"
           );

@@ -26,6 +26,8 @@ import type { SendAccountLike } from "./serviceAccount.js";
  * в той же транзакции): иначе за работником осталось бы право отправлять с запрещённого.
  */
 export interface EdmsAllowanceDeps {
+  /** Адреса почтового сервера предприятия: по ним определяется «свой ящик годится». */
+  enterpriseHosts: () => Promise<string[]>;
   requireDocflowDb: express.RequestHandler;
   requirePermission: (permission: Permission) => express.RequestHandler;
   asyncHandler: (
@@ -42,7 +44,7 @@ export interface EdmsAllowancePayload {
    * с прежним экраном выдачи; источник правды — адреса.
    */
   accountIds: string[];
-  /** Что работник может выбрать: служебный + выданные ему по адресу + свои по логину. */
+  /** Что работник может выбрать: служебный + свои ящики на сервере предприятия + выданные. */
   allowed: AllowedMailbox[];
   /** Ящик, выбор которого сброшен этим отзывом; null — выбор не тронут. */
   resetChoice: string | null;
@@ -64,19 +66,21 @@ export function mountEdmsAllowanceRoutes(app: express.Express, deps: EdmsAllowan
     // Ящики БЕРЁМ У САМОГО РАБОТНИКА: администратор назначает адрес, а ящик с этим адресом
     // заводит работник своим паролем (docs/design/mail-ownership.md).
     const workerKey = String(user.ldapUid ?? "").trim() || user.id;
+    const accounts = listAccountsForUser(workerKey) as SendAccountLike[];
     const allowed = allowedMailboxes({
-      accounts: listAccountsForUser(workerKey) as SendAccountLike[],
+      accounts,
       serviceId: state.accountId,
       grantedAddresses: addresses,
-      workerLogins: [user.email, user.ldapUid]
+      workerLogins: [user.email, user.ldapUid],
+      enterpriseHosts: await deps.enterpriseHosts()
     });
-    return {
-      userId,
-      addresses,
-      accountIds: allowed.filter((a) => a.kind === "personal").map((a) => a.id),
-      allowed,
-      resetChoice
-    };
+    // ⚠️ Идентификаторы считаем ТОЛЬКО по выданным адресам: в allowed теперь входят и
+    // собственные ящики работника на сервере предприятия, но администратор их не выдавал.
+    const granted = new Set(addresses.map((a) => String(a ?? "").trim().toLowerCase()).filter(Boolean));
+    const accountIds = accounts
+      .filter((a) => granted.has(String(a.username ?? "").trim().toLowerCase()))
+      .map((a) => a.id);
+    return { userId, addresses, accountIds, allowed, resetChoice };
   }
 
   app.get(

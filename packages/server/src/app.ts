@@ -1464,9 +1464,14 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   // Служебный ящик отправки (Р12): параметры — аппарату, смена — администратору с аудитом.
   mountServiceAccountRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
   // Личный выбор «почты для СЭД» (Р24): доступен любому вошедшему и только за себя.
-  mountMyEdmsMailRoutes(app, { requireDocflowDb, asyncHandler });
+  // Условие выбора ящика для СЭД: он должен быть на почтовом сервере предприятия.
+  const enterpriseHosts = async () => {
+    const defaults = await mailDefaults();
+    return [defaults.imap?.host, defaults.pop3?.host, defaults.smtp?.host].filter((host): host is string => !!host);
+  };
+  mountMyEdmsMailRoutes(app, { requireDocflowDb, asyncHandler, enterpriseHosts });
   // Выдача «почты для СЭД» (task-56) — решение администратора, право settings.manage.
-  mountEdmsAllowanceRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+  mountEdmsAllowanceRoutes(app, { requireDocflowDb, requirePermission, asyncHandler, enterpriseHosts });
   // Личный профиль почты (T34/T35): локальный маршрут, в проксирование не входит.
   mountMailProfileRoutes(app, { asyncHandler });
   // Агрегат «профиль исполнителя» (task-18): данные под будущую подсказку, читает только админ.

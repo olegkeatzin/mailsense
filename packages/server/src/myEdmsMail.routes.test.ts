@@ -72,6 +72,9 @@ beforeEach(() => {
   stored = null;
   mockedCore.listAccounts.mockReturnValue([SERVICE, READY, FOREIGN, NO_SMTP]);
   mockedDocflow.getAllowedWorkAccounts.mockResolvedValue([]);
+  // ⚠️ clearAllMocks не сбрасывает реализации: без этого «сервер предприятия» из одного
+  // теста протекал в следующие (найдено падением трёх тестов после добавления нового).
+  mockedDocflow.getSetting.mockResolvedValue(null);
   mockedDocflow.getServiceAccountState.mockResolvedValue({ explicit: true, accountId: "acc-service" });
   // Чтение и запись связаны: ответ PUT обязан показать уже сохранённый выбор.
   mockedDocflow.getUserSetting.mockImplementation(async () => stored);
@@ -82,19 +85,25 @@ beforeEach(() => {
 });
 
 describe("GET /api/docflow/my-edms-mail", () => {
-  test("выбора нет: пусто, а разрешён только служебный ящик", async () => {
+  test("выбора нет: в списке служебный ящик и СВОИ ящики работника (без выдачи)", async () => {
+    // Заказчик: администратор не ведёт список адресов — работник выбирает свой ящик сам,
+    // условие одно: он заведён на почтовом сервере предприятия.
     const res = await request(app.baseUrl, "GET", "/api/docflow/my-edms-mail", { token: TOKEN });
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       accountId: null,
       account: null,
-      allowed: [{ id: "acc-service", username: "post@mail.test", host: "mail.test", smtpReady: true, kind: "service" }],
+      allowed: [
+        { id: "acc-service", username: "post@mail.test", host: "mail.test", smtpReady: true, kind: "service" },
+        { id: "acc-personal", username: "ivanov@mail.test", host: "mail.test", smtpReady: true, kind: "personal" },
+        { id: "acc-nosmtp", username: "petrova_ma@mail.test", host: "mail.test", smtpReady: false, kind: "personal" }
+      ],
       defaultAccountId: "acc-service"
     });
   });
 
-  test("выданный ящик разрешён: он в списке и выбирается по умолчанию", async () => {
+  test("свой ящик в списке и выбирается по умолчанию", async () => {
     mockedDocflow.getAllowedWorkAccounts.mockResolvedValue(["ivanov@mail.test"]);
     mockedDocflow.getUserSetting.mockResolvedValue("acc-personal");
 
@@ -109,16 +118,35 @@ describe("GET /api/docflow/my-edms-mail", () => {
     // Порядок постановки: сначала служебный ящик предприятия, затем личные варианты.
     expect((res.body as { allowed: Array<{ kind: string }> }).allowed.map((a) => a.kind)).toEqual([
       "service",
+      "personal",
       "personal"
     ]);
   });
 
   test("чужой ящик не попадает в список, даже если он готов к отправке", async () => {
-    // Выдачи нет: в списке только служебный ящик предприятия.
     const res = await request(app.baseUrl, "GET", "/api/docflow/my-edms-mail", { token: TOKEN });
 
     expect(res.status).toBe(200);
-    expect((res.body as { allowed: Array<{ id: string }> }).allowed.map((a) => a.id)).toEqual(["acc-service"]);
+    // Чужой (директора) ящик в списке не появляется, хотя он готов к отправке.
+    expect((res.body as { allowed: Array<{ id: string }> }).allowed.map((a) => a.id)).not.toContain("acc-foreign");
+  });
+
+  test("условие выбора: ящик на ДРУГОМ сервере не предлагается (заказчик)", async () => {
+    // Предприятие задало свой почтовый сервер — тогда свои ящики на сторонних серверах
+    // для официальных писем не годятся: работник видит служебный и ящики на сервере предприятия.
+    mockedDocflow.getSetting.mockImplementation(async (key: string) =>
+      key === "mail.defaults" ? JSON.stringify({ smtp: { host: "corp.example" } }) : null
+    );
+    const ON_CORP = { ...READY, id: "acc-corp", username: "ivanov@corp.example", host: "corp.example" };
+    mockedCore.listAccounts.mockReturnValue([SERVICE, READY, NO_SMTP, ON_CORP]);
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/my-edms-mail", { token: TOKEN });
+
+    expect(res.status).toBe(200);
+    expect((res.body as { allowed: Array<{ id: string }> }).allowed.map((a) => a.id)).toEqual([
+      "acc-service",
+      "acc-corp"
+    ]);
   });
 
   test("выданный ящик БЕЗ SMTP виден работнику с честным флагом (дефект T58)", async () => {
@@ -131,6 +159,7 @@ describe("GET /api/docflow/my-edms-mail", () => {
     // отправка с него не пойдёт (интерфейс пишет это по smtpReady).
     expect((res.body as { allowed: Array<{ id: string; smtpReady: boolean; kind: string }> }).allowed).toEqual([
       { id: "acc-service", username: "post@mail.test", host: "mail.test", smtpReady: true, kind: "service" },
+      { id: "acc-personal", username: "ivanov@mail.test", host: "mail.test", smtpReady: true, kind: "personal" },
       { id: "acc-nosmtp", username: "petrova_ma@mail.test", host: "mail.test", smtpReady: false, kind: "personal" }
     ]);
   });
@@ -162,7 +191,11 @@ describe("GET /api/docflow/my-edms-mail", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ accountId: "acc-удалён", account: null, defaultAccountId: null });
-    expect((res.body as { allowed: Array<{ id: string }> }).allowed.map((a) => a.id)).toEqual(["acc-service"]);
+    expect((res.body as { allowed: Array<{ id: string }> }).allowed.map((a) => a.id)).toEqual([
+      "acc-service",
+      "acc-personal",
+      "acc-nosmtp"
+    ]);
   });
 
   test("свой ящик разрешён без выдачи: адрес из каталога совпал с адресом ящика", async () => {
@@ -201,7 +234,7 @@ describe("PUT /api/docflow/my-edms-mail", () => {
       "edms.work_mail"
     );
     expect(res.body).toMatchObject({ accountId: "acc-personal" });
-    expect((res.body as { allowed: unknown[] }).allowed).toHaveLength(2);
+    expect((res.body as { allowed: unknown[] }).allowed).toHaveLength(3);
   });
 
   test("снятие выбора: null очищает настройку", async () => {
