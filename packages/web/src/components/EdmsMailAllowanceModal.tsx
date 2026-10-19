@@ -117,7 +117,7 @@ export function EdmsMailAllowanceModal({
   return (
     <Modal
       open={!!user}
-      title={"Ящики для СЭД: " + (user?.fullName ?? "")}
+      title={"Почта для СЭД: " + (user?.fullName ?? "")}
       onCancel={onClose}
       okText="Сохранить"
       cancelText="Отмена"
@@ -132,7 +132,7 @@ export function EdmsMailAllowanceModal({
           type="error"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Не удалось получить выданные адреса"
+          message="Не удалось получить адреса для СЭД"
           description={error}
         />
       ) : null}
@@ -140,8 +140,9 @@ export function EdmsMailAllowanceModal({
       {!loading && !error ? (
         <>
           <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
-            Работник сможет выбрать для писем СЭД только ящики с этими адресами. Пароль от ящика он вводит
-            сам — администратору он не нужен. Пустой список — отозвать всё.
+            Работник выбирает ящик для СЭД САМ — из своих ящиков на почтовом сервере предприятия.
+            Здесь вы можете задать или исправить адрес (например, если ящик заведён на другом сервере).
+            Пароль от ящика он вводит сам — администратору он не нужен.
           </Typography.Text>
           <Select
             mode="tags"
