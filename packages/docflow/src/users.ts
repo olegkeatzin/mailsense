@@ -349,7 +349,44 @@ async function applyDirectoryProfile(
  * Роли не трогаем — они живут в базе документооборота (ТЗ п. 2).
  * Сотрудники, исчезнувшие из каталога, помечаются is_active = false (история сохраняется).
  */
+/**
+ * Пауза после отказа каталога.
+ *
+ * ⚠️ На проде служебная учётная запись получала AD-ошибку 775 (заблокирована), а каждая
+ * следующая попытка синхронизации снова шла в bind — учётку добивало до полного lockout,
+ * и вместе с ней падал выбор исполнителей. Теперь после такой ошибки 5 минут не пытаемся.
+ */
+const DIRECTORY_PAUSE_MS = 5 * 60 * 1000;
+let directoryPause: { until: number; message: string } | null = null;
+
+/** Сбросить паузу: после смены настроек каталога и в тестах. */
+export function resetDirectorySyncPause(): void {
+  directoryPause = null;
+}
+
+/**
+ * Отказ служебной учётной записи — это состояние каталога, а не сбой сервера.
+ * Наружу должен уйти понятный текст (409), а не 500 с «data 775».
+ */
+function directorySyncFailure(err: unknown): unknown {
+  const kind = (err as { kind?: string } | null)?.kind;
+  const readable = err instanceof Error ? err.message : String(err);
+  const message = "Синхронизация каталога не выполнена: " + readable;
+  if (kind === "account_locked" || kind === "invalid_credentials" || kind === "password_expired") {
+    directoryPause = {
+      until: Date.now() + DIRECTORY_PAUSE_MS,
+      message: message + ". Повтор через 5 минут, чтобы не заблокировать учётную запись окончательно"
+    };
+  }
+  if (kind) return new AppError(message, 409, "directory_sync_" + kind);
+  return err;
+}
+
 export async function syncDirectoryUsers(actor: AuthUser | null): Promise<SyncResult> {
+  if (directoryPause && Date.now() < directoryPause.until) {
+    throw new AppError(directoryPause.message, 409, "directory_sync_paused");
+  }
+
   const cred = directoryCredentials();
   if (!cred) throw new AppError("Сначала войдите в каталог: «Настройки → Каталог (LDAP)»");
 
@@ -357,7 +394,13 @@ export async function syncDirectoryUsers(actor: AuthUser | null): Promise<SyncRe
   // Предел выгрузки не задаём: берётся дефолт каталога (core). Свой предел здесь
   // означал бы, что на справочнике больше него уволенных НИКОГДА не отключат —
   // и никто не поймёт почему. Признак обрезки приходит отдельно (truncated).
-  const { profiles, total, truncated } = await ldapListProfiles(s, cred.login, cred.password);
+  let listing: Awaited<ReturnType<typeof ldapListProfiles>>;
+  try {
+    listing = await ldapListProfiles(s, cred.login, cred.password);
+  } catch (err) {
+    throw directorySyncFailure(err);
+  }
+  const { profiles, total, truncated } = listing;
 
   // ⚠️ Неполный список нельзя принимать за «этих людей в каталоге больше нет»:
   // деактивация выключила бы живых сотрудников и разорвала им сессии. Обрезка по

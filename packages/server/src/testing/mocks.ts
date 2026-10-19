@@ -273,6 +273,8 @@ export function docflowMockModule(): Record<string, unknown> {
     createManualUser: stub({ id: "created" }),
     updateManualUser: jest.fn(async (id: string) => ({ id })),
     syncDirectoryUsers: stub({ synced: 0 }),
+  /** Пауза после отказа каталога (см. docflow/users.ts). */
+  resetDirectorySyncPause: jest.fn(),
 
     // Журнал.
     listDocuments: stub({ items: [], total: 0 }),

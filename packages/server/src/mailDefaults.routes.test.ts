@@ -167,4 +167,23 @@ describe("умолчания почтового сервера", () => {
     expect(res.body).toEqual({});
   });
 
+  test("если хранилище настроек недоступно — 503 с причиной, а не немой 500", async () => {
+    mockedDocflow.setSetting.mockRejectedValueOnce(new Error("нет соединения с Postgres"));
+
+    const res = await request(app.baseUrl, "PUT", "/api/mail-defaults", {
+      token: TOKEN_ADMIN,
+      body: { pop3: { host: "10.0.0.5", port: 110 } }
+    });
+
+    expect(res.status).toBe(503);
+    expect(String(res.body.error)).toContain("DOCFLOW_DATABASE_URL");
+  });
+
+  test("если хранилище не читается, форма получает пустые умолчания, а не 500", async () => {
+    mockedDocflow.getSetting.mockRejectedValueOnce(new Error("таймаут"));
+    const res = await request(app.baseUrl, "GET", "/api/mail-defaults", { token: TOKEN });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({});
+  });
+
 });

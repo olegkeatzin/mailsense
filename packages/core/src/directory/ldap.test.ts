@@ -689,3 +689,27 @@ describe("аутентификация", () => {
     expect(mockUnbind).toHaveBeenCalled();
   });
 });
+describe("служебная учётная запись каталога (прод: data 775)", () => {
+  test("заблокированная учётка: по-русски и как LdapError, а не сырой текст AD", async () => {
+    mockBind.mockRejectedValueOnce(
+      new Error("80090308: LdapErr: DSID-0C0903A9, comment: AcceptSecurityContext error, data 775, v1db1 Code: 0x31")
+    );
+
+    const failure = await ldapListProfiles(settings(), "ldap-bind@test", "пароль").catch((e) => e);
+
+    expect(failure).toBeInstanceOf(LdapError);
+    expect(failure.kind).toBe("account_locked");
+    expect(failure.message).toContain("заблокирована");
+    expect(failure.message).toContain("Каталог (LDAP)");
+  });
+
+  test("неверный пароль служебной учётки — тоже LdapError с причиной", async () => {
+    mockBind.mockRejectedValueOnce(new Error("80090308: LdapErr: DSID-0C0903A9, data 52e, v1db1 Code: 0x31"));
+
+    const failure = await ldapListProfiles(settings(), "ldap-bind@test", "пароль").catch((e) => e);
+
+    expect(failure).toBeInstanceOf(LdapError);
+    expect(failure.kind).toBe("invalid_credentials");
+    expect(failure.message).toContain("Неверный логин или пароль");
+  });
+});

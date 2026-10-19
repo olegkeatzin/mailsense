@@ -4,7 +4,8 @@ import path from "node:path";
 import { initDb as initCoreDb, closeDb as closeCoreDb } from "../../core/src/db/index.js";
 import { closeDocflowDb, getDocflowPool, initDocflowDb } from "./db/index.js";
 import { login } from "./auth.js";
-import { syncDirectoryUsers } from "./users.js";
+import { resetDirectorySyncPause, syncDirectoryUsers } from "./users.js";
+import { AppError } from "./errors.js";
 import { getSession, getUser, getUserByLdapUid, insertSession, insertUser, listAudit } from "./repo.js";
 import type { LdapProfile } from "@mailsense/core/directory";
 
@@ -24,7 +25,7 @@ jest.mock("@mailsense/core/directory", () => ({
   ldapListProfiles: jest.fn(),
   ldapAuthenticate: jest.fn(),
   ldapFailureMessage: jest.fn(() => "Каталог недоступен"),
-  LdapError: class LdapError extends Error {}
+  LdapError: class LdapError extends Error { kind: string; constructor(m: string, kind = "unknown") { super(m); this.kind = kind; } }
 }));
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -208,5 +209,50 @@ describe("неполный список каталога", () => {
     expect(res.incomplete).toBe(false);
     expect(res.deactivated).toBe(1);
     expect((await getUser(gone.id))!.isActive).toBe(false);
+  });
+});
+
+/**
+ * Отказ служебной учётной записи каталога на проде выглядел так: 500 «Внутренняя ошибка
+ * сервера» с текстом AD внутри, а каждая следующая попытка снова шла в bind и добивала
+ * учётку до блокировки (data 775). Теперь отказ — это 409 с понятным текстом и пауза.
+ */
+describe("отказ каталога: 409 и пауза вместо 500 и молотьбы AD", () => {
+  beforeEach(() => {
+    resetDirectorySyncPause();
+    directory.ldapListProfiles.mockReset();
+  });
+
+  test("заблокированная служебная учётка — понятный отказ, а не 500", async () => {
+    directory.ldapListProfiles.mockRejectedValueOnce(
+      Object.assign(new Error("Служебная учётная запись каталога не принята: Учётная запись заблокирована"), {
+        kind: "account_locked"
+      })
+    );
+
+    const failure = await syncDirectoryUsers(null).catch((e) => e);
+
+    expect(failure).toBeInstanceOf(AppError);
+    expect(failure.status).toBe(409);
+    expect(failure.message).toContain("заблокирована");
+  });
+
+  test("после отказа 5 минут не пытаемся снова — учётку не добиваем", async () => {
+    directory.ldapListProfiles.mockRejectedValue(
+      Object.assign(new Error("Служебная учётная запись каталога не принята: Неверный логин или пароль"), {
+        kind: "invalid_credentials"
+      })
+    );
+
+    await expect(syncDirectoryUsers(null)).rejects.toMatchObject({ status: 409 });
+    const attempts = directory.ldapListProfiles.mock.calls.length;
+    expect(attempts).toBe(1);
+
+    const second = await syncDirectoryUsers(null).catch((e) => e);
+    expect(second).toBeInstanceOf(AppError);
+    expect(second.status).toBe(409);
+    expect(second.message).toContain("Повтор через 5 минут");
+    // Второго bind не было: каталог больше не тревожим.
+    expect(directory.ldapListProfiles.mock.calls.length).toBe(attempts);
   });
 });

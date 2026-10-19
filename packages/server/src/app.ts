@@ -105,6 +105,7 @@ import {
   logout,
   sessionTtlHours,
   setDocflowEnabled,
+  resetDirectorySyncPause,
   setUserActive,
   syncDirectoryUsers,
   updateManualUser,
@@ -482,10 +483,17 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     // документооборота (PostgreSQL), а в режиме «только почта» — в локальной базе ядра.
     // Читаем из того же места, куда их положил засев из окружения, иначе работник получает
     // пустой ящик и создание падает на NOT NULL (найдено сквозным прогоном на стенде).
-    const raw = hasDocflowDb()
-      ? ((await getSetting(MAIL_DEFAULTS_SETTING)) ?? "")
-      : getSettingValue(MAIL_DEFAULTS_SETTING);
-    return parseMailDefaults(raw).defaults;
+    try {
+      const raw = hasDocflowDb()
+        ? ((await getSetting(MAIL_DEFAULTS_SETTING)) ?? "")
+        : getSettingValue(MAIL_DEFAULTS_SETTING);
+      return parseMailDefaults(raw).defaults;
+    } catch (err) {
+      // База предприятия недоступна — это не «ошибка сервера вообще»: нужен понятный текст,
+      // иначе администратор видит пустую форму и «Внутренняя ошибка» в журнале.
+      logger.warn({ err }, "Умолчания почты недоступны: хранилище настроек предприятия не отвечает");
+      return {};
+    }
   }
 
   app.get(
@@ -503,7 +511,18 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     asyncHandler(async (req, res) => {
       const parsed = parseMailDefaultsInput(req.body);
       if (parsed.error) throw new AppError(parsed.error, 400, "bad_mail_defaults");
-      await setSetting(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
+      try {
+        await setSetting(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
+      } catch (err) {
+        logger.warn({ err }, "Не удалось сохранить умолчания почты в базе предприятия");
+        // ⚠️ На проде это выглядело как «Внутренняя ошибка сервера» без записи в журнале:
+        // понятного текста не было, и администратор не понимал, что делать. Теперь 503 и причина.
+        throw new AppError(
+          "Не удалось сохранить умолчания: база настроек предприятия недоступна. Проверьте DOCFLOW_DATABASE_URL и перезапустите сервер (или задайте умолчания в .env)",
+          503,
+          "mail_defaults_unavailable"
+        );
+      }
       res.json(parsed.defaults);
     })
   );
@@ -965,7 +984,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     "/api/directory/settings",
     requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
-      res.json(await setLdapSettings(req.body ?? {}));
+      const saved = await setLdapSettings(req.body ?? {});
+      // Логин или пароль поправили — прошлая блокировка больше не повод молчать.
+      resetDirectorySyncPause();
+      res.json(saved);
     })
   );
 
@@ -974,7 +996,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     requirePermission("settings.manage"),
     asyncHandler(async (req, res) => {
       const b = req.body ?? {};
-      res.json(await directoryLogin(String(b.login ?? ""), String(b.password ?? "")));
+      const result = await directoryLogin(String(b.login ?? ""), String(b.password ?? ""));
+      // Вход в каталог прошёл — значит учётка жива: снимаем паузу после прошлых отказов.
+      resetDirectorySyncPause();
+      res.json(result);
     })
   );
 

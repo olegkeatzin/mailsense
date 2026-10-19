@@ -266,6 +266,29 @@ export interface LdapProfilesResult {
  * деактивирует всех, кого в нём не оказалось: на каталоге больше страницы каждая
  * синхронизация выключала людей и рвала им сессии.
  */
+/**
+ * Bind служебной учётной записи каталога с человеческой причиной отказа.
+ *
+ * ⚠️ На проде это давало 500 «Внутренняя ошибка сервера» с текстом AD внутри, а повторные
+ * попытки добивали учётку до блокировки (AD: data 775) — падала и синхронизация, и выбор
+ * исполнителей. Теперь причина называется по-русски и с указанием, что делать.
+ */
+async function bindServiceAccount(c: Client, login: string, password: string, s: LdapSettings): Promise<void> {
+  try {
+    await c.bind(buildBindIdentifier(login, s), password);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const kind = classifyAdError(message);
+    logger.warn({ kind, err: message }, "Каталог не принял служебную учётную запись");
+    throw new LdapError(
+      "Служебная учётная запись каталога не принята: " +
+        ldapFailureMessage(kind) +
+        ". Проверьте логин и пароль в «Настройки → Каталог (LDAP)»",
+      kind
+    );
+  }
+}
+
 export async function ldapListProfiles(
   s: LdapSettings,
   login: string,
@@ -274,7 +297,7 @@ export async function ldapListProfiles(
 ): Promise<LdapProfilesResult> {
   const c = clientOf(s);
   try {
-    await c.bind(buildBindIdentifier(login, s), password);
+    await bindServiceAccount(c, login, password, s);
     const base = s.baseDn && s.baseDn.trim() ? s.baseDn.trim() : "";
     if (!base) throw new Error("Не задан Base DN каталога");
     const filter = s.userFilter && s.userFilter.trim() ? s.userFilter.trim() : DEFAULT_FILTER;
