@@ -57,13 +57,33 @@ import { humanError } from "./utils/humanError";
 
 const BASE = "";
 
+/**
+ * Событие для интерфейса. Раньше потеря связи с сервером и истёкшая сессия были НЕВИДИМЫ:
+ * приложение показывало старые данные, и человек не понимал, почему ничего не меняется.
+ * Теперь App.tsx слушает эти события: «offline» — экран «нет связи», «auth-lost» — выкидывает
+ * на вход, «online» — снимает тревогу.
+ */
+function notify(name: "mailsense:offline" | "mailsense:online" | "mailsense:auth-lost"): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(name));
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE + url, {
-    // Сессия документооборот живёт в HttpOnly-cookie — без credentials её не будет.
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    ...init
-  });
+  // Проверка входа сама по себе не означает потерю сессии: 401 от неё — это «не вошёл».
+  const authProbe = url.startsWith("/api/auth/login") || url.startsWith("/api/auth/status");
+  let res: Response;
+  try {
+    res = await fetch(BASE + url, {
+      // Сессия документооборот живёт в HttpOnly-cookie — без credentials её не будет.
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      ...init
+    });
+  } catch (err) {
+    notify("mailsense:offline");
+    throw err;
+  }
+  notify("mailsense:online");
+  if (res.status === 401 && !authProbe) notify("mailsense:auth-lost");
   if (!res.ok) {
     let msg = res.statusText;
     let code: string | undefined;

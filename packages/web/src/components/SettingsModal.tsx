@@ -1197,8 +1197,7 @@ export default function SettingsModal() {
   const open = useStore((s) => s.settingsOpen);
   const setOpen = useStore((s) => s.setSettingsOpen);
   const can = useStore((s) => s.can);
-  // Почта предприятия закрыта правом mail.view (T39/T44): без него стартовая вкладка —
-  // личные настройки, иначе открывалась «Почта» с запросом списка ящиков и 403 в консоли.
+  // Раздел «Почта» открыт любому вошедшему: свои ящики — собственные данные работника.
   const canUseMail = useStore((s) => s.canUseMail());
   const [reloadKey, setReloadKey] = useState(0);
   const [activeTab, setActiveTab] = useState(canUseMail ? "mail" : "profile");

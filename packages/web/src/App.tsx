@@ -180,6 +180,8 @@ export default function App() {
   const authStatus = useStore((s) => s.authStatus);
   const authUser = useStore((s) => s.authUser);
   const docflowUnavailable = useStore((s) => s.docflowUnavailable);
+  const connectionLost = useStore((s) => s.connectionLost);
+  const setConnectionLost = useStore((s) => s.setConnectionLost);
   const folder = useStore((s) => s.folder);
   const accounts = useStore((s) => s.accounts);
   const analyzeAll = useStore((s) => s.analyzeAll);
@@ -228,10 +230,87 @@ export default function App() {
     return () => clearInterval(t);
   }, [authorized]);
 
+  /**
+   * Связь с сервером и свежесть прав.
+   *
+   * ⚠️ Две жалобы заказчика: (1) выданная почта для СЭД и новые права появлялись только
+   * после перезапуска приложения; (2) при потере связи человек ничего не замечал.
+   * Поэтому: права перечитываем раз в 30 секунд и при возврате в окно, а по событиям
+   * api.ts показываем «нет связи» или выкидываем на вход.
+   */
+  useEffect(() => {
+    const refresh = () => {
+      if (document.hidden) return;
+      void useStore.getState().loadAuth();
+    };
+    const onLost = () => void useStore.getState().loadAuth();
+    const onOffline = () => useStore.getState().setConnectionLost(true);
+    const onOnline = () => useStore.getState().setConnectionLost(false);
+
+    window.addEventListener("mailsense:auth-lost", onLost);
+    window.addEventListener("mailsense:offline", onOffline);
+    window.addEventListener("mailsense:online", onOnline);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    const timer = authorized ? setInterval(refresh, 30000) : null;
+
+    return () => {
+      window.removeEventListener("mailsense:auth-lost", onLost);
+      window.removeEventListener("mailsense:offline", onOffline);
+      window.removeEventListener("mailsense:online", onOnline);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+      if (timer) clearInterval(timer);
+    };
+  }, [authorized]);
+
   if (!authReady) {
     return (
       <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
         <Spin size="large" />
+      </div>
+    );
+  }
+
+  // Связь пропала: не показываем устаревшие данные как живые.
+  if (connectionLost) {
+    return (
+      <div
+        style={{
+          height: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 12,
+          background: "#f5f5f5"
+        }}
+      >
+        <div style={{ fontSize: 18, fontWeight: 600 }}>Нет связи с сервером</div>
+        <div style={{ color: "#595959", maxWidth: 420, textAlign: "center" }}>
+          Данные могут быть устаревшими. Проверьте, что сервер запущен и сеть доступна, затем
+          повторите — или войдите заново.
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => {
+              setConnectionLost(false);
+              void loadAuth();
+            }}
+          >
+            Повторить
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setConnectionLost(false);
+              void useStore.getState().logout();
+            }}
+          >
+            Войти заново
+          </button>
+        </div>
       </div>
     );
   }

@@ -148,6 +148,9 @@ interface State extends FilterState {
    * поэтому не блокируем приложение, а только прячем функции документооборота.
    */
   docflowUnavailable: boolean;
+  /** Нет связи с сервером: показываем экран и не делаем вид, что всё в порядке. */
+  connectionLost: boolean;
+  setConnectionLost: (value: boolean) => void;
   loadAuth: () => Promise<void>;
   login: (login: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -377,6 +380,7 @@ export const useStore = create<State>()((set, get) => ({
   authUser: null,
   authReady: false,
   docflowUnavailable: false,
+  connectionLost: false,
   notifications: [],
   notificationsTotal: 0,
   notificationsEnabled: true,
@@ -413,6 +417,8 @@ export const useStore = create<State>()((set, get) => ({
     set({ section: resolveSection(get().section, get().can) });
     await get().init();
   },
+
+  setConnectionLost: (value: boolean) => set({ connectionLost: value }),
 
   logout: async () => {
     await api.logout();
