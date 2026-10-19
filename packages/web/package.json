@@ -8,7 +8,8 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "test": "node ../core/node_modules/jest/bin/jest.js --forceExit --config jest.config.cjs",
-    "test:serial": "node ../core/node_modules/jest/bin/jest.js --runInBand --forceExit --config jest.config.cjs"
+    "test:serial": "node ../core/node_modules/jest/bin/jest.js --runInBand --forceExit --config jest.config.cjs",
+    "test:ui": "playwright test"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.2",
@@ -30,6 +31,7 @@
     "@types/react-window": "^1.8.8",
     "@vitejs/plugin-react": "^4.3.4",
     "typescript": "^5.7.3",
-    "vite": "^5.4.11"
+    "vite": "^5.4.11",
+    "@playwright/test": "^1.55.0"
   }
 }
