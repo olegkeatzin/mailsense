@@ -99,6 +99,23 @@ describe("параметры SMTP-соединения", () => {
     expect(mockTransportOptions[1]).toMatchObject({ port: 465, secure: true });
   });
 
+  test("«none» — строго без TLS: апгрейд запрещён", () => {
+    // Живая жалоба: сервер предлагал STARTTLS, и письмо уходило по TLS там, где просили
+    // открытый текст, — на самоподписанном сертификате это ломалось. ignoreTLS обязателен.
+    buildSmtpTransport(account({ smtpTls: "none", smtpPort: 25 }), "pass");
+    expect(mockTransportOptions[0]).toMatchObject({ secure: false, ignoreTLS: true, requireTLS: false });
+  });
+
+  test("«starttls» — требуем шифрование, а не просим", () => {
+    buildSmtpTransport(account({ smtpTls: "starttls" }), "pass");
+    expect(mockTransportOptions[0]).toMatchObject({ secure: false, requireTLS: true, ignoreTLS: false });
+  });
+
+  test("«ssl» — сразу TLS и без принудительного STARTTLS", () => {
+    buildSmtpTransport(account({ smtpTls: "ssl" }), "pass");
+    expect(mockTransportOptions[0]).toMatchObject({ secure: true, ignoreTLS: false, requireTLS: false });
+  });
+
   test("заданный порт перекрывает умолчание", () => {
     buildSmtpTransport(account({ smtpPort: 2525, smtpTls: "ssl" }), "pass");
     expect(mockTransportOptions[0]).toMatchObject({ port: 2525 });

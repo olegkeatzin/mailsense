@@ -1,4 +1,7 @@
 import nodemailer, { type Transporter } from "nodemailer";
+
+/** Опции, которые принимает createTransport (среди них — SMTP-опции). */
+type TransportOptionsArg = Parameters<typeof nodemailer.createTransport>[0];
 import type { Account } from "../types.js";
 
 export interface SmtpAttachment {
@@ -33,16 +36,27 @@ export function buildSmtpTransport(account: Account, password: string): Transpor
   const host = account.smtpHost || account.host;
   const secure = (account.smtpTls ?? "starttls") === "ssl";
   const port = account.smtpPort ?? (secure ? 465 : 587);
-  return nodemailer.createTransport({
+  const options = {
     host,
     port,
     secure,
+    // ⚠️ Три режима должны значить разное (TlsMode = none | ssl | starttls):
+    //   none     — БЕЗ TLS: ignoreTLS запрещает даже попытку апгрейда. Без него сервер,
+    //              предлагающий STARTTLS, навязывал шифрование там, где просили открытый
+    //              текст (и падал на самоподписанном сертификате) — живая жалоба заказчика;
+    //   starttls — требовать TLS: requireTLS, иначе «starttls» был просто пожеланием;
+    //   ssl      — сразу TLS (secure).
+    ignoreTLS: account.smtpTls === "none",
+    requireTLS: account.smtpTls === "starttls",
     auth: {
       user: account.smtpUsername || account.username,
       pass: password
     },
     tls: { rejectUnauthorized: account.settings.rejectUnauthorized === true }
-  });
+    // ⚠️ ignoreTLS/requireTLS — опции SMTP-транспорта nodemailer; в типе createTransport они
+    // описаны через объединение, поэтому приводим явно. Без них «none» навязывал TLS.
+  } as unknown as TransportOptionsArg;
+  return nodemailer.createTransport(options);
 }
 
 /**
