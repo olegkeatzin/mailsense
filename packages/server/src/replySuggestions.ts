@@ -1,11 +1,15 @@
 import {
   analyzeReportReply,
   extractApprovalInstruction,
+  getAccountById,
   getAiConfig,
   getEmailView,
   logger
 } from "@mailsense/core";
 import { listReplyCandidates, matchReplies, type ThreadReplyCandidate } from "@mailsense/docflow";
+import { executorsFromReply } from "./replyExecutors.js";
+
+export { executorsFromReply };
 
 /**
  * Подсказки аппарату по письму-ответу (Р9, этап 4).
@@ -29,7 +33,18 @@ export interface ReplyContextItem {
   documentSummary: string;
   taskText: string;
   assignees: Array<{ userId: string; fullName: string; kind: string }>;
+  /**
+   * Текст ответа — черновик резолюции. Руководитель мог отвечать из Outlook,
+   * и тогда текст резолюции есть только в письме.
+   */
+  replyText: string;
+  /**
+   * Исполнители, НАЗВАННЫЕ РУКОВОДИТЕЛЕМ В ПИСЬМЕ: получатели и копия, кроме нашего
+   * служебного ящика и самого руководителя (решение заказчика). Аппарат их подтверждает.
+   */
+  executorCandidates: Array<{ address: string; name: string }>;
 }
+
 
 /**
  * В переписке ли это письмо и по какому поручению.
@@ -62,9 +77,21 @@ export async function findReplyContext(emailId: string): Promise<ReplyContextIte
   );
   const ids = new Set(matches.map((m) => m.resolutionId));
 
+  // Наши адреса: ящик, из которого ушёл запрос, и он же — «служебный» для письма.
+  const ownAccount = mail.accountId ? getAccountById(mail.accountId) : null;
+  const executorCandidates = executorsFromReply({
+    from: mail.from?.address ?? "",
+    to: mail.to ?? [],
+    cc: mail.cc ?? [],
+    exclude: ownAccount ? [ownAccount.username] : []
+  });
+  const replyText = (mail.bodyText ?? "").trim();
+
   return candidates
     .filter((c) => ids.has(c.resolutionId))
     .map((c) => ({
+      replyText,
+      executorCandidates,
       resolutionId: c.resolutionId,
       expects: c.expects,
       documentNumber: c.documentNumber,
