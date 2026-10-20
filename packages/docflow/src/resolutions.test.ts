@@ -25,7 +25,8 @@ import {
   rejectResolution,
   reportExecution,
   requestApproval,
-  updateResolution
+  updateResolution,
+  resolutionsByDocument
 } from "./resolutions.js";
 
 /**
@@ -786,5 +787,51 @@ describe("отчёт об исполнении (этап 4)", () => {
   test("закрыть можно только отправленное поручение", async () => {
     const r = await draft();
     await expect(closeResolution(r.id, secretary, "Закрываю")).rejects.toThrow(/невозможно/i);
+  });
+});
+
+/**
+ * Таблица журнала: резолюция, исполнитель и срок должны быть в СПИСКЕ, а не только в карточке
+ * (жалоба заказчика: в журнале колонок не было, хотя в документе всё есть).
+ */
+describe("поручения для списка журнала", () => {
+  it("отдаёт последнее поручение с исполнителем и сроком", async () => {
+    await createResolution(
+      {
+        documentId,
+        text: "Подготовить ответ",
+        assignees: [{ userId: executorA.id, kind: "responsible" }],
+        deadline: "2026-10-25"
+      },
+      secretary
+    );
+
+    const brief = (await resolutionsByDocument([documentId])).get(documentId)!;
+
+    expect(brief.text).toBe("Подготовить ответ");
+    expect(brief.deadline).toBe("2026-10-25");
+    expect(brief.assignees).toEqual([executorA.name]);
+  });
+
+  it("из двух поручений берётся последнее, а чужой документ не попадает", async () => {
+    await createResolution(
+      { documentId, text: "Первое", assignees: [{ userId: executorA.id, kind: "responsible" }] },
+      secretary
+    );
+    await createResolution(
+      { documentId, text: "Второе", assignees: [{ userId: executorB.id, kind: "responsible" }] },
+      secretary
+    );
+    const other = await registerDocument({ summary: "Другой документ" }, secretary);
+
+    const map = await resolutionsByDocument([documentId, other.id]);
+
+    expect(map.get(documentId)!.text).toBe("Второе");
+    expect(map.get(documentId)!.assignees).toEqual([executorB.name]);
+    expect(map.has(other.id)).toBe(false);
+  });
+
+  it("пустой список не ходит в базу", async () => {
+    expect((await resolutionsByDocument([])).size).toBe(0);
   });
 });

@@ -124,6 +124,14 @@ export interface EdmsMailSettings {
   defaultAccountId: string | null;
 }
 
+/** Короткое поручение по документу — колонки журнала. */
+export interface DocumentResolutionBrief {
+  text: string;
+  status: string;
+  deadline: string | null;
+  assignees: string[];
+}
+
 export interface TaskSourceEmail {
   resolutionId: string;
   emailId: string;
@@ -518,6 +526,8 @@ export interface DocumentListItem extends DocumentRecord {
   /** ФИО того, кто зарегистрировал: видно прямо в журнале. */
   createdByName: string;
   emailsCount: number;
+  /** Поручение по документу (колонки журнала), если оно уже создано. */
+  resolution?: DocumentResolutionBrief | null;
 }
 
 export interface DocumentPage {

@@ -172,25 +172,48 @@ export default function Journal() {
       align: "right",
       render: (v: number | null) => (v === null ? <span style={{ color: "#767676" }}>—</span> : v)
     },
+    /*
+      ⚠️ Раньше это были заглушки «—» с подсказкой «заполняется на этапе резолюций»: текст
+      поручения, исполнитель и срок жили только в карточке (жалоба заказчика). Теперь список
+      отдаёт последнее поручение по документу, и графы заполняются по-настоящему.
+    */
     {
       title: (
-        <Tooltip title="Графа заполняется на этапе резолюций">
+        <Tooltip title="Последнее поручение по документу">
           <span>Резолюция</span>
         </Tooltip>
       ),
       key: "resolution",
-      width: 110,
-      render: () => <span style={{ color: "#767676" }}>—</span>
+      width: 200,
+      render: (_v, r) => {
+        const text = r.resolution?.text ?? "";
+        if (!text) return <span style={{ color: "#767676" }}>—</span>;
+        return (
+          <Tooltip title={text}>
+            <span>{text.length > 60 ? text.slice(0, 60) + "…" : text}</span>
+          </Tooltip>
+        );
+      }
     },
     {
       title: (
-        <Tooltip title="Графа заполняется на этапе резолюций">
+        <Tooltip title="Исполнители поручения и срок исполнения">
           <span>Исполнитель и срок</span>
         </Tooltip>
       ),
       key: "assignee",
-      width: 140,
-      render: () => <span style={{ color: "#767676" }}>—</span>
+      width: 190,
+      render: (_v, r) => {
+        const names = r.resolution?.assignees ?? [];
+        const due = r.resolution?.deadline;
+        if (!names.length && !due) return <span style={{ color: "#767676" }}>—</span>;
+        return (
+          <span style={{ fontSize: 12 }}>
+            {names.join(", ")}
+            {due ? <span style={{ color: "#595959" }}> · до {dayjs(due).format("DD.MM.YYYY")}</span> : null}
+          </span>
+        );
+      }
     },
     {
       title: "№ дела",

@@ -1090,6 +1090,53 @@ export async function cancelResolution(id: string, actor: Actor, comment: string
 }
 // ---------------- Списки и задачи ----------------
 
+/** Короткое поручение по документу — для таблицы журнала. */
+export interface DocumentResolutionBrief {
+  text: string;
+  status: string;
+  deadline: string | null;
+  assignees: string[];
+}
+
+/**
+ * ПОСЛЕДНЕЕ поручение по каждому документу — для таблицы журнала.
+ *
+ * В карточке поручение было видно, а в списке журнала — нет ни резолюции, ни исполнителя,
+ * ни срока (жалоба заказчика). Журнал показывает ТЕКУЩЕЕ состояние, поэтому берём последнее
+ * поручение документа, а не все подряд.
+ */
+export async function resolutionsByDocument(
+  documentIds: string[]
+): Promise<Map<string, DocumentResolutionBrief>> {
+  const out = new Map<string, DocumentResolutionBrief>();
+  const ids = [...new Set(documentIds.filter(Boolean))];
+  if (!ids.length) return out;
+  const rows = await getDocflowDb()
+    .select({
+      id: resolutions.id,
+      documentId: resolutions.documentId,
+      text: resolutions.text,
+      status: resolutions.status,
+      deadline: resolutions.deadline,
+      createdAt: resolutions.createdAt
+    })
+    .from(resolutions)
+    .where(inArray(resolutions.documentId, ids))
+    .orderBy(desc(resolutions.createdAt));
+  const latest = new Map<string, (typeof rows)[number]>();
+  for (const r of rows) if (!latest.has(r.documentId)) latest.set(r.documentId, r);
+  const assignees = await assigneesForResolutions([...latest.values()].map((r) => r.id));
+  for (const [docId, r] of latest) {
+    out.set(docId, {
+      text: r.text,
+      status: r.status,
+      deadline: r.deadline,
+      assignees: (assignees.get(r.id) ?? []).map((a) => a.fullName)
+    });
+  }
+  return out;
+}
+
 export async function listResolutions(filter: ResolutionFilter = {}): Promise<ResolutionPage> {
   const db = getDocflowDb();
   const conds = [];

@@ -39,6 +39,7 @@ import {
   listCorrespondents,
   listDocumentEmails,
   listDocuments,
+  resolutionsByDocument,
   listDocumentsForExport,
   listRegisteredEmailIds,
   listSortRules,
@@ -685,7 +686,14 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     "/api/docflow/journal",
     ...view,
     asyncHandler(async (req, res) => {
-      res.json(await listDocuments(docFilterFromQuery(req.query as Record<string, unknown>)));
+      const page = await listDocuments(docFilterFromQuery(req.query as Record<string, unknown>));
+      // Поручение по документу прямо в таблице журнала: резолюция, исполнитель и срок
+      // (жалоба заказчика — в карточке видно, в списке нет).
+      const briefs = await resolutionsByDocument(page.items.map((d) => d.id));
+      res.json({
+        ...page,
+        items: page.items.map((d) => ({ ...d, resolution: briefs.get(d.id) ?? null }))
+      });
     })
   );
 
