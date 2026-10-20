@@ -602,9 +602,15 @@ export const resolutionApi = {
   ) {
     // Письмо уже отправлено человеком из окна (emailId) — сервер только свяжет его
     // с поручением; toEmail позволяет вписать адрес, даже если в каталоге почты нет.
+    // Поля, которых нет, НЕ передаём: сервер сам решает, какой ящик взять
+    // (личная настройка работника), а лишние null в контракте скрывают это правило.
+    const payload: Record<string, unknown> = { documentId };
+    if (toUserId) payload.toUserId = toUserId;
+    if (accountId) payload.accountId = accountId;
+    Object.assign(payload, opts ?? {});
     return request<Resolution & { sentTo?: string; sentEmailId?: string }>("/api/docflow/resolutions/forward", {
       method: "POST",
-      body: JSON.stringify({ documentId, toUserId: toUserId || null, accountId: accountId ?? null, ...opts })
+      body: JSON.stringify(payload)
     });
   },
 

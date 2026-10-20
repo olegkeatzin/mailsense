@@ -341,7 +341,21 @@ describe("T41 · письмо-источник: только участнику 
     expect(res.status).toBe(200);
     const body = res.body as Record<string, unknown>;
     expect(Object.keys(body).sort()).toEqual(
-      ["attachments", "bodyHtml", "bodyText", "cc", "date", "emailId", "from", "resolutionId", "subject", "to"].sort()
+      [
+        "attachments",
+        "bodyHtml",
+        "bodyText",
+        "cc",
+        "date",
+        "emailId",
+        "from",
+        // Своя копия письма о поручении: это id, а не служебное поле ящика
+        // (accountId/uid/folder/path запрещены и проверяются ниже).
+        "ownEmailId",
+        "resolutionId",
+        "subject",
+        "to"
+      ].sort()
     );
     for (const key of Object.keys(body)) {
       expect(/account|uid|folder|storage|path/i.test(key)).toBe(false);
