@@ -26,6 +26,44 @@ export interface ReplyCandidate {
   emailId: string;
   inReplyTo: string | null;
   references: string[];
+  /** Заголовки письма: в них наша техническая метка СЭД (если письмо наше). */
+  headers?: Record<string, unknown> | null;
+}
+
+/** Разобранная техническая метка письма СЭД. */
+export interface EdmsMarker {
+  documentId: string;
+  resolutionId: string | null;
+  kind: string;
+}
+
+/**
+ * Разбирает метку X-MailSense-EDMS из заголовков письма.
+ *
+ * Заказчик: «ставить в письме техническую информацию, по которой наша система на другом
+ * конце сможет понять, что это за письмо». Метка сильнее треда: её не ломает пересылка,
+ * а заголовки почтовые клиенты сохраняют.
+ */
+export function parseEdmsMarker(headers: Record<string, unknown> | null | undefined): EdmsMarker | null {
+  if (!headers) return null;
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === "x-mailsense-edms");
+  if (!key) return null;
+  const raw = typeof headers[key] === "string" ? (headers[key] as string) : "";
+  if (!raw) return null;
+  const parts = new Map<string, string>();
+  for (const chunk of raw.split(";")) {
+    const [k, v] = chunk.split("=");
+    if (!k || v === undefined) continue;
+    parts.set(k.trim().toLowerCase(), v.trim());
+  }
+  const documentId = parts.get("doc") ?? "";
+  if (!documentId || documentId === "-") return null;
+  const res = parts.get("res") ?? "";
+  return {
+    documentId,
+    resolutionId: res && res !== "-" ? res : null,
+    kind: parts.get("kind") ?? "forward"
+  };
 }
 
 export interface MatchedReply {
@@ -59,7 +97,17 @@ export function matchReplies(
 
   const out: MatchedReply[] = [];
   const used = new Set<string>();
+  /** Поручения, ждущие ответа: по ним проверяем метку. */
+  const awaitingIds = new Set(awaiting.map((a) => a.resolutionId));
   for (const r of replies) {
+    // 1) Техническая метка в заголовках: самый надёжный признак — её не ломает пересылка.
+    const marker = parseEdmsMarker(r.headers);
+    if (marker?.resolutionId && awaitingIds.has(marker.resolutionId) && !used.has(marker.resolutionId)) {
+      used.add(marker.resolutionId);
+      out.push({ resolutionId: marker.resolutionId, emailId: r.emailId });
+      continue;
+    }
+    // 2) Тред: In-Reply-To и References.
     const chain = [bare(r.inReplyTo), ...(r.references ?? []).map(bare)].filter(Boolean);
     for (const link of chain) {
       const resolutionId = byRequest.get(link);

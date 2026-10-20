@@ -50,7 +50,15 @@ export async function findReplyContext(emailId: string): Promise<ReplyContextIte
 
   const matches = matchReplies(
     candidates.map((c) => ({ resolutionId: c.resolutionId, requestMessageId: requests.get(c.resolutionId) ?? null })),
-    [{ emailId: mail.id, inReplyTo: mail.inReplyTo ?? null, references: mail.references ?? [] }]
+    [
+      {
+        emailId: mail.id,
+        inReplyTo: mail.inReplyTo ?? null,
+        references: mail.references ?? [],
+        // Метка СЭД: по ней письмо узнаётся даже после пересылки (жалоба заказчика).
+        headers: mail.headers ?? null
+      }
+    ]
   );
   const ids = new Set(matches.map((m) => m.resolutionId));
 

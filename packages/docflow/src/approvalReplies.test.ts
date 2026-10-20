@@ -1,4 +1,4 @@
-import { matchReplies, type AwaitingApproval, type ReplyCandidate } from "./approvalReplies.js";
+import { matchReplies, parseEdmsMarker, type AwaitingApproval, type ReplyCandidate } from "./approvalReplies.js";
 
 /**
  * Сопоставление ответа руководителя с запросом резолюции.
@@ -68,5 +68,55 @@ describe("сопоставление ответа с запросом", () => {
 
   test("пустой список писем ничего не ломает", () => {
     expect(matchReplies(WAITING, [])).toEqual([]);
+  });
+});
+/**
+ * Техническая метка СЭД в заголовках: заказчик просил ставить в письме то, по чему
+ * система на другом конце узнаёт письмо. Метка сильнее треда — её не ломает пересылка.
+ */
+describe("распознавание по метке СЭД", () => {
+  test("метка разбирается: документ, поручение, вид письма", () => {
+    expect(parseEdmsMarker({ "x-mailsense-edms": "doc=doc-7; res=res-3; kind=dispatch; v=1" })).toEqual({
+      documentId: "doc-7",
+      resolutionId: "res-3",
+      kind: "dispatch"
+    });
+  });
+
+  test("регистр названия заголовка не важен, прочерк означает «нет поручения»", () => {
+    expect(parseEdmsMarker({ "X-MailSense-EDMS": "doc=doc-7; res=-" })?.resolutionId).toBeNull();
+  });
+
+  test("чужая метка или письмо без неё не считаются нашими", () => {
+    expect(parseEdmsMarker({ subject: "привет" })).toBeNull();
+    expect(parseEdmsMarker(null)).toBeNull();
+    // doc=- значит «не наш документ»: письмо не должно стать резолюцией.
+    expect(parseEdmsMarker({ "x-mailsense-edms": "doc=-; res=res-3" })).toBeNull();
+  });
+
+  test("метка находит ответ, даже если тред потерян (пересылка)", () => {
+    const m = matchReplies(WAITING, [
+      { emailId: "e9", inReplyTo: null, references: [], headers: { "x-mailsense-edms": "doc=d1; res=res-2; kind=forward" } }
+    ]);
+    expect(m).toEqual([{ resolutionId: "res-2", emailId: "e9" }]);
+  });
+
+  test("метка на неизвестное поручение не срабатывает — работает тред", () => {
+    const m = matchReplies(WAITING, [
+      {
+        emailId: "e10",
+        inReplyTo: "<req-1@mail.test>",
+        references: [],
+        headers: { "x-mailsense-edms": "doc=d1; res=res-999; kind=forward" }
+      }
+    ]);
+    expect(m).toEqual([{ resolutionId: "res-1", emailId: "e10" }]);
+  });
+
+  test("одна резолюция — один ответ, даже если пришли и метка, и тред", () => {
+    const m = matchReplies(WAITING, [
+      { emailId: "e11", inReplyTo: "<req-1@mail.test>", references: [], headers: { "x-mailsense-edms": "doc=d1; res=res-1" } }
+    ]);
+    expect(m).toEqual([{ resolutionId: "res-1", emailId: "e11" }]);
   });
 });
