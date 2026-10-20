@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, DatePicker, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, message } from "antd";
+import { Alert, Button, DatePicker, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, message , Typography } from "antd";
 import { SaveOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api, resolutionApi } from "../api";
@@ -74,6 +74,8 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
   const canDispatch = can("resolution.dispatch");
   /** Переход в личные настройки по ссылке из отказа («Выбрать другой ящик»). */
   const openSettings = useStore((s) => s.openSettings);
+  /** Открыть окно письма с готовым текстом: аппарат правит и отправляет сам (пункт 5). */
+  const openEdmsCompose = useStore((s) => s.openEdmsCompose);
   const edms = useEdmsMail(canDispatch);
   const [edmsAccountId, setEdmsAccountId] = useState<string | null>(null);
 
@@ -556,9 +558,42 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
         }}
       >
         <p style={{ color: "#666", fontSize: 13 }}>
-          Письмо уйдёт на адрес руководителя из каталога, вместе с кратким содержанием.
-          Резолюцию — кому и что поручить — он напишет сам.
+          Письмо уйдёт на адрес руководителя, вместе с кратким содержанием. Резолюцию — кому и что
+          поручить — он напишет сам.
         </p>
+        {/*
+          ⚠️ Основной путь — ОКНО ПИСЬМА: человек видит текст, правит его и сам выбирает
+          получателя (в том числе вписывает адрес, если в каталоге почты нет). Молчаливая
+          серверная отправка осталась только как быстрый вариант (жалоба заказчика).
+        */}
+        <Button
+          type="primary"
+          block
+          style={{ marginBottom: 8 }}
+          onClick={() => {
+            const head = doc?.regNumber ? "Письмо " + doc.regNumber : "Письмо";
+            const subject = head + " — прошу наложить резолюцию";
+            const bodyText = [
+              "Добрый день!",
+              "",
+              "Направляю поступившее письмо для наложения резолюции.",
+              doc?.regNumber ? "Регистрационный номер: " + doc.regNumber + "." : "",
+              doc?.summary ? "Краткое содержание: " + doc.summary : "",
+              doc?.sender ? "Отправитель: " + doc.sender : "",
+              "",
+              "Прошу указать поручение и исполнителя."
+            ]
+              .filter((line) => line !== "")
+              .join("\n");
+            openEdmsCompose({ documentId: documentId ?? "", subject, bodyText });
+            setForwardOpen(false);
+          }}
+        >
+          Открыть окно письма (править текст)
+        </Button>
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 8 }}>
+          Или отправьте сразу, не правя текст:
+        </Typography.Text>
         <div style={{ marginBottom: 8 }}>
           {/* Причину показываем сразу в окне: «выберите ящик» человек должен видеть до нажатия. */}
           {edmsMailProblem(edms.settings) ? (

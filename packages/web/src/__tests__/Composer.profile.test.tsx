@@ -336,3 +336,50 @@ describe("ответ: ящик из письма и replyTo (Р19)", () => {
     expect(payload.fromName).toBe("Петрова Мария");
   });
 });
+
+/**
+ * Письмо по документу СЭД: человек видит заранее собранный текст и правит его.
+ * Раньше текст строился на сервере и уходил молча (жалоба заказчика).
+ */
+describe("письмо по документу: окно письма с готовым текстом", () => {
+  beforeAll(installDomEnvironment);
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    useStore.setState({
+      ...initial,
+      accounts: [{ id: "acc-1", username: "user2@mail.test", settings: {} } as unknown as Account],
+      accountFilter: "acc-1",
+      emailView: null,
+      compose: {
+        open: true,
+        mode: "new",
+        emailId: null,
+        draft: null,
+        edms: {
+          documentId: "doc-1",
+          subject: "Письмо вх1 — прошу наложить резолюцию",
+          bodyText: "Добрый день!\n\nНаправляю поступившее письмо для наложения резолюции."
+        }
+      }
+    });
+    (api.composeTemplate as jest.Mock).mockResolvedValue(template);
+    (api.templates as jest.Mock).mockResolvedValue([]);
+    (api.emails as jest.Mock).mockResolvedValue([]);
+    (api.mailProfile as jest.Mock).mockResolvedValue(profile);
+  });
+
+  it("тема и текст берутся из документа, серверный шаблон не запрашивается", async () => {
+    render(<Composer />);
+
+    await waitFor(() =>
+      expect((screen.getByPlaceholderText("Тема") as HTMLInputElement).value).toBe(
+        "Письмо вх1 — прошу наложить резолюцию"
+      )
+    );
+    const editor = await screen.findByTestId("editor-body");
+    expect(editor.textContent ?? "").toContain("Направляю поступившее письмо");
+    // Шаблон с сервера не нужен: текст задал человек, а не сервер.
+    expect(api.composeTemplate).not.toHaveBeenCalled();
+  });
+});

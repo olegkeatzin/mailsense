@@ -124,8 +124,20 @@ interface State extends FilterState {
   /** Вкладка, которую просят открыть в настройках («Личные настройки», «Подключение»). */
   settingsTab: string | null;
   aiConfig: AiConfig | null;
-  compose: { open: boolean; mode: ComposeMode; emailId: string | null; draft: Draft | null };
+  compose: {
+    open: boolean;
+    mode: ComposeMode;
+    emailId: string | null;
+    draft: Draft | null;
+    /**
+     * Письмо по документу СЭД: тема и текст предзаполнены, человек их правит.
+     * После отправки письмо связывается с поручением (заказчик: «отправляете молча»).
+     */
+    edms?: { documentId: string; subject: string; bodyText: string } | null;
+  };
   openCompose: (mode: ComposeMode, emailId?: string | null) => void;
+  /** Открыть окно письма с готовым текстом по документу (аппарат правит и отправляет сам). */
+  openEdmsCompose: (input: { documentId: string; subject: string; bodyText: string }) => void;
   /** Открыть композер с уже сохранённым черновиком. */
   openDraftCompose: (draft: Draft) => void;
   closeCompose: () => void;
@@ -357,7 +369,7 @@ export const useStore = create<State>()((set, get) => ({
   settingsOpen: false,
   settingsTab: null,
   aiConfig: null,
-  compose: { open: false, mode: "new", emailId: null, draft: null },
+  compose: { open: false, mode: "new", emailId: null, draft: null, edms: null },
   draftsOpen: false,
   threadView: false,
   threads: [],
@@ -735,9 +747,11 @@ export const useStore = create<State>()((set, get) => ({
   clearDocumentIntent: () => set({ documentIntent: null }),
   setAnalysisQueue: (n) => set({ analysisQueue: n }),
 
-  openCompose: (mode, emailId = null) => set({ compose: { open: true, mode, emailId, draft: null } }),
-  openDraftCompose: (draft) => set({ compose: { open: true, mode: "new", emailId: null, draft } }),
-  closeCompose: () => set({ compose: { open: false, mode: "new", emailId: null, draft: null } }),
+  openCompose: (mode, emailId = null) => set({ compose: { open: true, mode, emailId, draft: null, edms: null } }),
+  openEdmsCompose: (input) =>
+    set({ compose: { open: true, mode: "new", emailId: null, draft: null, edms: input } }),
+  openDraftCompose: (draft) => set({ compose: { open: true, mode: "new", emailId: null, draft, edms: null } }),
+  closeCompose: () => set({ compose: { open: false, mode: "new", emailId: null, draft: null, edms: null } }),
   setDraftsOpen: (v: boolean) => set({ draftsOpen: v }),
 
   setThreadView: (v: boolean) => {

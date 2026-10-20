@@ -594,11 +594,17 @@ export const resolutionApi = {
   },
 
   /** Аппарат направляет письмо руководителю: резолюции ещё нет, решает он. */
-  forward(documentId: string, toUserId: string, accountId?: string) {
+  forward(
+    documentId: string,
+    toUserId: string,
+    accountId?: string,
+    opts?: { emailId?: string; toEmail?: string }
+  ) {
+    // Письмо уже отправлено человеком из окна (emailId) — сервер только свяжет его
+    // с поручением; toEmail позволяет вписать адрес, даже если в каталоге почты нет.
     return request<Resolution & { sentTo?: string; sentEmailId?: string }>("/api/docflow/resolutions/forward", {
       method: "POST",
-      // accountId — ящик, с которого уходит письмо (T53). Без него сервер берёт личную настройку.
-      body: JSON.stringify(accountId ? { documentId, toUserId, accountId } : { documentId, toUserId })
+      body: JSON.stringify({ documentId, toUserId: toUserId || null, accountId: accountId ?? null, ...opts })
     });
   },
 

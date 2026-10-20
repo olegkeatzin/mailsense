@@ -4,7 +4,7 @@ import { DeleteOutlined, PaperClipOutlined, SaveOutlined, SendOutlined } from "@
 import { useStore } from "../store";
 import { withoutQuote } from "../utils/personalSignature";
 import type { MailProfile } from "../types";
-import { api, attachmentBase64, materializeAttachments, type ComposerAttachment } from "../api";
+import { api, resolutionApi, attachmentBase64, materializeAttachments, type ComposerAttachment } from "../api";
 import type {
   Account,
   ComposeInput,
@@ -590,7 +590,7 @@ function ComposerForm({
     if (to.length === 0) return message.warning("Укажите получателя");
     setSending(true);
     try {
-      await api.sendEmail(await outgoing());
+      const sent = await api.sendEmail(await outgoing());
       if (draftIdRef.current) {
         try {
           await api.deleteDraft(draftIdRef.current);
@@ -599,7 +599,22 @@ function ComposerForm({
         }
         draftIdRef.current = null;
       }
-      message.success("Письмо отправлено");
+      // Письмо по документу: связываем его с поручением, чтобы ответ руководителя нашёлся
+      // по треду, а в истории был реальный emailId.
+      const edms = useStore.getState().compose.edms;
+      if (edms) {
+        try {
+          await resolutionApi.forward(edms.documentId, "", undefined, {
+            emailId: sent.emailId,
+            ...(to[0] ? { toEmail: to[0] } : {})
+          });
+          message.success("Письмо отправлено и связано с поручением");
+        } catch (e) {
+          message.warning("Письмо ушло, но поручение не связалось: " + humanError(e));
+        }
+      } else {
+        message.success("Письмо отправлено");
+      }
       closeCompose();
       await loadEmails();
     } catch (e) {
@@ -759,6 +774,23 @@ export default function Composer() {
     // Открытие сохранённого черновика: шаблон берём из него, а не с сервера.
     if (compose.draft) {
       setTemplate(draftToTemplate(compose.draft));
+      return;
+    }
+    // Письмо по документу СЭД: текст готовит аппарат-человек, поэтому берём его как есть,
+    // а не шаблон с сервера (там был бы жёстко зашитый текст «от аппарата»).
+    if (compose.edms) {
+      setTemplate({
+        accountId: accountFilter || accounts[0]?.id || "",
+        mode: "new",
+        inReplyToEmailId: null,
+        subject: compose.edms.subject,
+        bodyHtml: "<p>" + escapeHtml(compose.edms.bodyText).replace(/\n/g, "<br>") + "</p>",
+        bodyText: compose.edms.bodyText,
+        to: [],
+        cc: [],
+        bcc: [],
+        attachments: []
+      } as unknown as ComposeTemplate);
       return;
     }
     /**
