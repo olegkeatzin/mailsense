@@ -1,6 +1,6 @@
 import express from "express";
 import http from "node:http";
-import { createDocflowProxy } from "./proxy.js";
+import { createDocflowProxy, isProxiedPath } from "./proxy.js";
 import { listen, request, sleep, stillAlive, type RunningApp } from "./testing/harness.js";
 
 /**
@@ -134,5 +134,30 @@ describe("прокси к серверу документооборота", () =
       await app.close();
       await upstream.close();
     }
+  });
+});
+
+/**
+ * Режим клиента: что уходит на сервер, а что остаётся личным.
+ *
+ * Живая жалоба заказчика: умолчания почтового сервера не доходили до работника на другом
+ * компьютере — путь не был в списке прокси, и каждый экземпляр приложения хранил их локально.
+ */
+describe("какие пути в режиме клиента обслуживает сервер", () => {
+  it("умолчания почты — настройка предприятия, значит сервер", () => {
+    expect(isProxiedPath("/api/mail-defaults")).toBe(true);
+  });
+
+  it("личные вещи работника остаются локальными", () => {
+    // Профиль почты, черновики и шаблоны вводит сам человек — на сервер они не уезжают.
+    expect(isProxiedPath("/api/mail-profile")).toBe(false);
+    expect(isProxiedPath("/api/drafts")).toBe(false);
+    expect(isProxiedPath("/api/templates")).toBe(false);
+  });
+
+  it("префикс не ловит чужие пути по началу строки", () => {
+    // /api/mail-profile не должен считаться продолжением /api/emails и наоборот.
+    expect(isProxiedPath("/api/emails")).toBe(true);
+    expect(isProxiedPath("/api/mail-profile-extra")).toBe(false);
   });
 });
