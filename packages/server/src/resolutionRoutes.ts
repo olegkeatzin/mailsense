@@ -312,11 +312,27 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const documentId = String(b.documentId ?? "");
       if (!documentId) throw new AppError("Не указан документ", 400, "no_document");
 
+      // Получателя можно ВПИСАТЬ: у части сотрудников в каталоге нет почты, и требовать
+      // адрес из LDAP значит запретить им быть руководителем (жалоба заказчика, п. 7).
+      const typedEmail = b.toEmail ? String(b.toEmail).trim() : "";
       const toUserId = b.toUserId ? String(b.toUserId) : "";
-      if (!toUserId) throw new AppError("Не указано, кому направить письмо", 400, "no_recipient");
-      const recipient = await getUser(toUserId);
-      if (!recipient) throw new AppError("Получатель не найден", 404, "not_found");
-      if (!recipient.email) throw new AppError("У получателя не заполнен адрес в каталоге", 400, "no_email");
+      let recipientEmail = typedEmail;
+      let recipientName = "";
+      if (toUserId) {
+        const user = await getUser(toUserId);
+        if (!user) throw new AppError("Получатель не найден", 404, "not_found");
+        recipientName = user.fullName ?? "";
+        recipientEmail = typedEmail || (user.email ?? "");
+      }
+      if (!recipientEmail) {
+        throw new AppError("Не указано, кому направить письмо", 400, "no_recipient");
+      }
+      if (!/^[^@\s]+@[^@\s]+$/.test(recipientEmail)) {
+        throw new AppError("Адрес получателя заполнен неверно", 400, "bad_email");
+      }
+      // Письмо уже отправлено человеком из окна письма — тогда НЕ ШЛЁМ и не строим текст:
+      // записываем связь с письмом (жалоба «отправляете молча, без окна»).
+      const providedEmailId = b.emailId ? String(b.emailId) : "";
 
       const doc = await getDocument(documentId);
       if (!doc) throw new AppError("Документ не найден", 404, "not_found");
@@ -337,7 +353,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         : "Письмо " + (doc.regNumber || "без номера") + " — прошу наложить резолюцию";
 
       const bodyText = [
-        (recipient.fullName || "Коллега") + ", добрый день!",
+        (recipientName || recipientEmail) + ", добрый день!",
         "",
         "Направляю поступившее письмо для наложения резолюции.",
         doc.regNumber ? "Регистрационный номер: " + doc.regNumber + "." : "",
@@ -355,14 +371,20 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       // руководителю ДВА письма, а записывалось одно: человек видел ошибку и был уверен,
       // что не отправилось.
       const created = await forwardToManager(documentId, actorOf(req), {
-        comment: b.comment ? String(b.comment) : "Письмо направлено: " + recipient.fullName
+        comment: b.comment ? String(b.comment) : "Письмо направлено: " + (recipientName || recipientEmail)
       });
+
+      // Письмо отправил человек из окна: привязываем его к поручению и выходим.
+      if (providedEmailId) {
+        const withEmail = await attachRequestEmail(created.id, providedEmailId, actorOf(req));
+        return res.status(201).json({ ...withEmail, sentTo: recipientEmail, sentEmailId: providedEmailId });
+      }
 
       let sent: { emailId: string };
       try {
         sent = await sendEmail({
           accountId: account.id,
-          to: [{ address: recipient.email, name: recipient.fullName }],
+          to: [{ address: recipientEmail, name: recipientName || undefined }],
           subject,
           bodyText,
           inReplyToEmailId: source?.id ?? null,
@@ -389,7 +411,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       // пуст, и ответ руководителя письмом не сопоставляется с поручением: кандидатов
       // listReplyCandidates ищет именно по нему, а шаг истории остаётся «manual».
       const withEmail = await attachRequestEmail(created.id, sent.emailId, actorOf(req));
-      res.status(201).json({ ...withEmail, sentTo: recipient.email, sentEmailId: sent.emailId });
+      res.status(201).json({ ...withEmail, sentTo: recipientEmail, sentEmailId: sent.emailId });
     })
   );
 

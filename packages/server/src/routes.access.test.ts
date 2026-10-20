@@ -737,6 +737,30 @@ describe("пересылка руководителю: сначала захва
     expect(res.body).toMatchObject({ requestEmailId: "sent-1" });
   });
 
+  /**
+   * Жалоба заказчика: «отправляете молча, без окна письма». Теперь письмо отправляет
+   * человек из окна, а сервер только записывает связь — и адрес можно ВПИСАТЬ,
+   * даже если в каталоге почты у человека нет.
+   */
+  it("письмо из окна: сервер ничего не шлёт, связь записывается, адрес — вписанный", async () => {
+    mockedDocflow.forwardToManager.mockImplementationOnce(async () => ({ id: "res-9", status: "pending_approval" }));
+    mockedDocflow.attachRequestEmail.mockImplementationOnce(async (id: string, emailId: string) => ({
+      id,
+      status: "pending_approval",
+      requestEmailId: emailId
+    }));
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", emailId: "mail-out-1", toEmail: "boss@outside.test" }
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
+    expect(mockedDocflow.attachRequestEmail).toHaveBeenCalledWith("res-9", "mail-out-1", expect.anything());
+    expect(res.body).toMatchObject({ sentEmailId: "mail-out-1", sentTo: "boss@outside.test" });
+  });
+
   it("после сбоя отправки пересылку можно повторить — захват откатился", async () => {
     mockedCore.sendEmail.mockRejectedValueOnce(new Error("SMTP 550: ящик отверг письмо"));
 
