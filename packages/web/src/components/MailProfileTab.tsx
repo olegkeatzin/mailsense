@@ -9,16 +9,13 @@ import type { MailProfile } from "../types";
 /**
  * Личные настройки почты работника (T36).
  *
- * Своё имя подписи и своя подпись. Подпись ЯЩИКА при этом не подставляется: шаблон
- * запрашивается с useAccountSignature=false, а тело письма дополняет клиент по этим настройкам.
+ * Имя отправителя и правила ответа. Подпись здесь НЕ редактируется — она живёт у ящика:
+ * заказчик решил «подпись настраивается в ящике, а в личных настройках выбирается из почты для СЭД».
  * Доступно любому вошедшему — это свои данные, право settings.manage здесь не нужно.
  */
 export function MailProfileTab() {
   const [profile, setProfile] = useState<MailProfile | null>(null);
   const [displayName, setDisplayName] = useState("");
-  const [signatureText, setSignatureText] = useState("");
-  const [signatureEnabled, setSignatureEnabled] = useState(true);
-  const [signaturePosition, setSignaturePosition] = useState<"above" | "below">("below");
   const [replyQuote, setReplyQuote] = useState(true);
   const [replyAttribution, setReplyAttribution] = useState<"ru" | "en">("ru");
   const [loading, setLoading] = useState(true);
@@ -28,9 +25,6 @@ export function MailProfileTab() {
   const apply = useCallback((p: MailProfile) => {
     setProfile(p);
     setDisplayName(p.displayName ?? "");
-    setSignatureText(p.signatureText ?? "");
-    setSignatureEnabled(p.signatureEnabled !== false);
-    setSignaturePosition(p.signaturePosition === "above" ? "above" : "below");
     setReplyQuote(p.replyQuote !== false);
     setReplyAttribution(p.replyAttribution === "en" ? "en" : "ru");
   }, []);
@@ -58,9 +52,6 @@ export function MailProfileTab() {
       // но так состояние формы и сохранённый профиль не расходятся.
       const saved = await api.saveMailProfile({
         displayName: displayName.trim(),
-        signatureText,
-        signatureEnabled,
-        signaturePosition,
         replyQuote,
         replyAttribution
       });
@@ -96,8 +87,9 @@ export function MailProfileTab() {
   return (
     <div>
       <Typography.Text type="secondary" style={{ fontSize: 12, display: "block", marginBottom: 12 }}>
-        Это ваши личные настройки: имя, которым вы подписываетесь, и ваша подпись. Подпись ящика не
-        используется — в письмо попадает только то, что задано здесь.
+        Это личные настройки отправки: имя, которым вы подписываетесь, и правила ответа.
+        Подпись письма задаётся у самого ящика («Настройки → Почта» → ящик → подпись) — здесь
+        второй раз её не спрашиваем, иначе подписи расходились бы.
       </Typography.Text>
 
       {empty ? (
@@ -105,8 +97,8 @@ export function MailProfileTab() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Подпись не задана"
-          description="Пока профиль пуст, в окне письма подпись не подставляется. Заполните имя подписи и текст — они появятся в новых письмах."
+          message="Имя отправителя не задано"
+          description="Пока имя не заполнено, письма уходят от имени ящика. Задайте имя — оно попадёт в поле «от кого»."
         />
       ) : null}
 
@@ -125,37 +117,13 @@ export function MailProfileTab() {
         </Typography.Text>
       </div>
 
-      <div style={{ marginBottom: 12 }}>
-        <Typography.Text style={{ display: "block", marginBottom: 4 }}>Текст подписи</Typography.Text>
-        <Input.TextArea
-          rows={4}
-          value={signatureText}
-          onChange={(e) => setSignatureText(e.target.value)}
-          maxLength={4000}
-          showCount
-          placeholder="С уважением, Мария Петрова, отдел делопроизводства"
-          aria-label="Текст подписи"
-        />
-      </div>
-
-      <div style={{ marginBottom: 12 }}>
-        <Switch checked={signatureEnabled} onChange={setSignatureEnabled} />{" "}
-        <Typography.Text>Подставлять подпись в письма</Typography.Text>
-      </div>
-
-      <div style={{ marginBottom: 12 }}>
-        <Typography.Text style={{ display: "block", marginBottom: 4 }}>Положение подписи</Typography.Text>
-        <Select
-          style={{ width: 260 }}
-          value={signaturePosition}
-          onChange={(v) => setSignaturePosition(v === "above" ? "above" : "below")}
-          aria-label="Положение подписи"
-          options={[
-            { value: "above", label: "До цитаты письма" },
-            { value: "below", label: "После цитаты письма" }
-          ]}
-        />
-      </div>
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 12 }}
+        message="Подпись задаётся в настройках ящика"
+        description="В письмо подставляется подпись того ящика, с которого оно уходит: «Настройки → Почта» → выберите ящик → «Подпись». Для писем СЭД берётся подпись ящика, выбранного в разделе «Почта для СЭД» ниже."
+      />
 
       <div style={{ marginBottom: 12 }}>
         <Switch checked={replyQuote} onChange={setReplyQuote} />{" "}

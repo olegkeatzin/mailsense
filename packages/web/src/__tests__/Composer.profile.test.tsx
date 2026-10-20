@@ -111,19 +111,21 @@ describe("окно письма: личное имя и личная подпи�
     (api.mailProfile as jest.Mock).mockResolvedValue(profile);
   });
 
-  it("шаблон запрашивается без подписи ящика (useAccountSignature=false)", async () => {
+  it("шаблон запрашивается С подписью ящика (useAccountSignature=true)", async () => {
+    // Решение заказчика: подпись настраивается у ящика, второй раз её не спрашиваем.
     render(<Composer />);
 
     await waitFor(() => expect(api.composeTemplate).toHaveBeenCalledTimes(1));
-    expect(api.composeTemplate).toHaveBeenCalledWith("acc-1", "new", null, { useAccountSignature: false });
+    expect(api.composeTemplate).toHaveBeenCalledWith("acc-1", "new", null, { useAccountSignature: true });
   });
 
-  it("в тело письма попадает ЛИЧНАЯ подпись, а подписи ящика там нет", async () => {
+  it("клиент свою подпись не дописывает: в теле только то, что пришло с шаблоном", async () => {
     render(<Composer />);
 
     const editor = await screen.findByTestId("editor-body");
-    await waitFor(() => expect(editor.textContent).toContain("Мария Петрова"));
-    expect(editor.textContent).not.toContain("ПОДПИСЬ ЯЩИКА");
+    await waitFor(() => expect(editor.innerHTML).toContain("</p>"));
+    expect(editor.textContent ?? "").not.toContain("Мария Петрова");
+    expect(editor.innerHTML).not.toContain("mailsense-signature");
   });
 
   it("отправка несёт fromName из личного профиля; у нового письма replyTo нет", async () => {
@@ -231,33 +233,32 @@ describe("ответ: подпись ставится ПОСЛЕ сборки т
     (api.mailProfile as jest.Mock).mockResolvedValue(profile);
   });
 
-  it("в ответе есть и цитата, и личная подпись, причём подпись ПОСЛЕ цитаты", async () => {
+  it("в ответе есть цитата, но личную подпись клиент не добавляет", async () => {
     render(<Composer />);
 
     const editor = await screen.findByTestId("editor-body");
-    await waitFor(() => expect(editor.innerHTML).toContain("mailsense-signature"));
-    expect(editor.textContent).toContain("Мария Петрова");
-    expect(editor.innerHTML).toContain("<blockquote");
-    expect(editor.innerHTML.indexOf("mailsense-signature")).toBeGreaterThan(editor.innerHTML.indexOf("</blockquote>"));
-    expect(editor.innerHTML).not.toContain("ПОДПИСЬ ЯЩИКА");
+    await waitFor(() => expect(editor.innerHTML).toContain("<blockquote"));
+    // Подпись придёт в шаблоне от сервера (подпись ящика), клиент вторую не рисует.
+    expect(editor.innerHTML).not.toContain("mailsense-signature");
+    expect(editor.textContent ?? "").not.toContain("Мария Петрова");
   });
 
-  it("положение «до цитаты» ставит подпись ПЕРЕД цитатой", async () => {
+  it("положение подписи в личном профиле больше ни на что не влияет", async () => {
     (api.mailProfile as jest.Mock).mockResolvedValue({ ...profile, signaturePosition: "above" });
     render(<Composer />);
 
     const editor = await screen.findByTestId("editor-body");
-    await waitFor(() => expect(editor.innerHTML).toContain("mailsense-signature"));
-    expect(editor.innerHTML.indexOf("mailsense-signature")).toBeLessThan(editor.innerHTML.indexOf("<blockquote"));
+    await waitFor(() => expect(editor.innerHTML).toContain("<blockquote"));
+    expect(editor.innerHTML).not.toContain("mailsense-signature");
   });
 
-  it("выключенная цитата: её нет, а подпись остаётся", async () => {
+  it("выключенная цитата убирает цитату и не добавляет подпись", async () => {
     (api.mailProfile as jest.Mock).mockResolvedValue({ ...profile, replyQuote: false });
     render(<Composer />);
 
     const editor = await screen.findByTestId("editor-body");
-    await waitFor(() => expect(editor.innerHTML).toContain("mailsense-signature"));
-    expect(editor.innerHTML).not.toContain("<blockquote");
+    await waitFor(() => expect(editor.innerHTML).not.toContain("<blockquote"));
+    expect(editor.innerHTML).not.toContain("mailsense-signature");
   });
 
   it("профиль без подписи: ни подписи, ни цитаты (при выключенной цитате)", async () => {
@@ -319,7 +320,7 @@ describe("ответ: ящик из письма и replyTo (Р19)", () => {
     render(<Composer />);
 
     await waitFor(() => expect(api.composeTemplate).toHaveBeenCalledTimes(1));
-    expect(api.composeTemplate).toHaveBeenCalledWith("acc-intake", "reply", "mail-1", { useAccountSignature: false });
+    expect(api.composeTemplate).toHaveBeenCalledWith("acc-intake", "reply", "mail-1", { useAccountSignature: true });
   });
 
   it("ответ уходит с личным именем и replyTo = адрес ящика, куда пришло письмо", async () => {

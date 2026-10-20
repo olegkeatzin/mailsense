@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Button, Input, Modal, Select, Space, Spin, Switch, Typography, message } from "antd";
 import { DeleteOutlined, PaperClipOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { useStore } from "../store";
-import { applyPersonalSignature, withoutQuote } from "../utils/personalSignature";
+import { withoutQuote } from "../utils/personalSignature";
 import type { MailProfile } from "../types";
 import { api, attachmentBase64, materializeAttachments, type ComposerAttachment } from "../api";
 import type {
@@ -371,7 +371,9 @@ function ComposerForm({
       bodyTouched.current = false;
     }
     if (!profileReady || bodyTouched.current) return;
-    const next = applyPersonalSignature(withoutQuote(base, profile), profile);
+    // ⚠️ Подпись в письмо приходит ОТ ЯЩИКА (шаблон запрашивается с useAccountSignature=true):
+    // заказчик решил, что подпись настраивается в ящике, а не второй раз в личных настройках.
+    const next = withoutQuote(base, profile);
     lastWritten.current = next;
     composedOnce.current = true;
     // Идемпотентно: то же значение не вызовет лишний рендер.
@@ -776,8 +778,8 @@ export default function Composer() {
       return;
     }
     api
-      // useAccountSignature=false: подпись ЯЩИКА не подставляется — свою добавит клиент (T36).
-      .composeTemplate(accountId, compose.mode, compose.emailId, { useAccountSignature: false })
+      // Подпись берём у ЯЩИКА: одно место настройки, без двойной подписи (решение заказчика).
+      .composeTemplate(accountId, compose.mode, compose.emailId, { useAccountSignature: true })
       .then((t) => {
         if (alive) setTemplate(t);
       })

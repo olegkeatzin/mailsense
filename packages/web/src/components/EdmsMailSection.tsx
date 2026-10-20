@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Divider, Select, Skeleton, Typography, message } from "antd";
 import { resolutionApi } from "../api";
+import { useStore } from "../store";
 import { humanError } from "../utils/humanError";
 import { edmsMailOptionTitle, edmsMailProblem, edmsMailWarning, edmsSendErrorText, useEdmsMail } from "./edmsMail";
 
@@ -12,6 +13,8 @@ import { edmsMailOptionTitle, edmsMailProblem, edmsMailWarning, edmsSendErrorTex
  */
 export function EdmsMailSection() {
   const { settings, loading, error, reload, setSettings } = useEdmsMail(true);
+  // Подпись берём у ЯЩИКА (решение заказчика): здесь только показываем её выбранного.
+  const accounts = useStore((st) => st.accounts);
   const [value, setValue] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -37,6 +40,8 @@ export function EdmsMailSection() {
     );
   }
 
+  const selectedAccount = accounts.find((a) => a.id === value) ?? null;
+  const selectedSignature = selectedAccount ? String(selectedAccount.settings?.signature ?? "").trim() : "";
   const problem = settings ? edmsMailProblem(settings) : "";
   // Ящик без настроенной отправки: не запрет, а предупреждение (контракт T58).
   const warning = settings ? edmsMailWarning(settings) : "";
@@ -93,6 +98,17 @@ export function EdmsMailSection() {
                 : [])
             ]}
           />
+          {selectedAccount ? (
+            <div style={{ marginBottom: 8 }}>
+              <Typography.Text type="secondary" style={{ display: "block", fontSize: 12 }}>
+                Подпись выбранного ящика
+              </Typography.Text>
+              <Typography.Paragraph style={{ margin: 0, fontSize: 12, whiteSpace: "pre-wrap" }}>
+                {selectedSignature ||
+                  "не задана — задаётся в «Настройки → Почта» → выберите ящик → «Подпись»"}
+              </Typography.Paragraph>
+            </div>
+          ) : null}
           {problem || warning ? (
             <Alert type="warning" showIcon style={{ marginBottom: 8 }} message={problem || warning} />
           ) : (

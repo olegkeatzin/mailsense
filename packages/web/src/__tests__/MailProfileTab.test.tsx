@@ -49,9 +49,10 @@ describe("личные настройки почты (T36)", () => {
     render(<MailProfileTab />);
 
     await waitFor(() => expect((screen.getByLabelText("Имя подписи") as HTMLInputElement).value).toBe("Петрова Мария"));
-    expect((screen.getByLabelText("Текст подписи") as HTMLTextAreaElement).value).toContain("Мария Петрова");
-    // Положение подписи «до цитаты» и английская атрибуция видны в форме.
-    expect(screen.getByText("До цитаты письма")).not.toBeNull();
+    // Подпись здесь больше НЕ редактируется: она живёт у ящика (решение заказчика).
+    expect(screen.queryByLabelText("Текст подписи")).toBeNull();
+    expect(screen.getByText("Подпись задаётся в настройках ящика")).not.toBeNull();
+    // Английская атрибуция видна в форме.
     expect(screen.getByText(/Английская/)).not.toBeNull();
   });
 
@@ -63,23 +64,21 @@ describe("личные настройки почты (T36)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
 
     await waitFor(() =>
+      // Подписи в запросе нет: личные настройки её больше не хранят.
       expect(mockPut).toHaveBeenCalledWith({
         displayName: "Иванов И.И.",
-        signatureText: "С уважением,\nМария Петрова",
-        signatureEnabled: true,
-        signaturePosition: "above",
         replyQuote: false,
         replyAttribution: "en"
       })
     );
   });
 
-  it("пустой профиль честно говорит, что подпись не задана", async () => {
+  it("пустой профиль честно говорит, что имя отправителя не задано", async () => {
     mockGet.mockResolvedValue(empty);
     render(<MailProfileTab />);
 
-    expect(await screen.findByText("Подпись не задана")).not.toBeNull();
-    expect(screen.getByText(/в окне письма подпись не подставляется/)).not.toBeNull();
+    expect(await screen.findByText("Имя отправителя не задано")).not.toBeNull();
+    expect(screen.getByText(/письма уходят от имени ящика/)).not.toBeNull();
   });
 
   it("недоступный профиль показывает русское объяснение с повтором", async () => {
