@@ -420,9 +420,11 @@ describe("выгрузка профилей сотрудников", () => {
     await expect(ldapListProfiles(settings({ baseDn: "" }), "svc", "п")).rejects.toThrow(/Base DN/);
   });
 
-  test("в фильтр добавляется требование почты", async () => {
+  test("выгрузка сотрудников НЕ требует почты в каталоге", async () => {
+    // ⚠️ Раньше здесь стояло (mail=*): сотрудник без адреса исчезал из выгрузки,
+    // и синхронизация объявляла его уволенным (живая жалоба заказчика).
     await ldapListProfiles(settings(), "svc", "п");
-    expect(mockSearch.mock.calls[0][1].filter).toContain("(mail=*)");
+    expect(mockSearch.mock.calls[0][1].filter).not.toContain("(mail=*)");
   });
 
   test("признак отключённой учётки читается из userAccountControl", async () => {
@@ -455,12 +457,15 @@ describe("выгрузка профилей сотрудников", () => {
     expect((await ldapListProfiles(settings(), "svc", "п")).profiles[0].managerDn).toBeNull();
   });
 
-  test("записи без логина или почты отбрасываются", async () => {
+  test("без логина отбрасываем, без почты — оставляем", async () => {
     mockSearch.mockResolvedValue({
       searchEntries: [profile(), profile({ sAMAccountName: "" }), profile({ mail: "" })]
     });
-    // Такие учётные записи бесполезны для входа и уведомлений.
-    expect((await ldapListProfiles(settings(), "svc", "п")).profiles).toHaveLength(1);
+    // Без sAMAccountName войти нельзя — такой записи нет смысла. А без почты сотрудник
+    // остаётся сотрудником: выкинув его, синхронизация объявит его уволенным.
+    const profiles = (await ldapListProfiles(settings(), "svc", "п")).profiles;
+    expect(profiles).toHaveLength(2);
+    expect(profiles.some((p) => p.email === "")).toBe(true);
   });
 
   test("полное имя подставляется из cn, если нет displayName", async () => {
@@ -588,13 +593,14 @@ describe("постраничная выгрузка каталога", () => {
     }
   });
 
-  test("страницы не отменяют отбрасывание записей без логина и почты", async () => {
+  test("страницы не отменяют отбор: без логина — отбрасываем, без почты — оставляем", async () => {
     // Усечённые записи приходят с любой страницы — фильтр должен работать после обхода.
     mockSearch.mockResolvedValue({
       searchEntries: [person(1), { ...person(2), mail: "" }, { ...person(3), sAMAccountName: "" }]
     });
     const { profiles } = await ldapListProfiles(settings(), "svc", "п");
-    expect(profiles.map((p) => p.ldapUid)).toEqual(["user1"]);
+    expect(profiles.map((p) => p.ldapUid)).toEqual(["user1", "user2"]);
+    expect(profiles[1].email).toBe("");
   });
 });
 
@@ -711,5 +717,41 @@ describe("служебная учётная запись каталога (пр�
     expect(failure).toBeInstanceOf(LdapError);
     expect(failure.kind).toBe("invalid_credentials");
     expect(failure.message).toContain("Неверный логин или пароль");
+  });
+});
+
+/**
+ * Живая жалоба заказчика: сотрудник без почты в каталоге исчезал из выгрузки, и
+ * синхронизация объявляла его уволенным. Фильтр выгрузки не должен требовать mail.
+ */
+describe("выгрузка сотрудников без почты в каталоге", () => {
+  test("человек без mail попадает в список и не выглядит исчезнувшим", async () => {
+    mockBind.mockResolvedValue(undefined);
+    mockSearch.mockResolvedValue({
+      searchEntries: [
+        { dn: "CN=User1,OU=K,DC=test", sAMAccountName: "user1", mail: "user1@test.local", displayName: "С почтой", userAccountControl: "512" },
+        { dn: "CN=User2,OU=K,DC=test", sAMAccountName: "user2", displayName: "Без почты", userAccountControl: "512" }
+      ]
+    });
+
+    const result = await ldapListProfiles(settings(), "ldap-bind@test", "pass");
+
+    expect(mockSearch.mock.calls[0][1].filter).not.toContain("mail=*");
+    expect(result.profiles.map((p) => p.ldapUid)).toEqual(["user1", "user2"]);
+    expect(result.profiles[1].email).toBe("");
+  });
+
+  test("отключённая учётка видна с признаком disabled, а не пропадает", async () => {
+    mockBind.mockResolvedValue(undefined);
+    mockSearch.mockResolvedValue({
+      searchEntries: [
+        { dn: "CN=Gone,OU=K,DC=test", sAMAccountName: "gone", displayName: "Уволен", userAccountControl: "514" }
+      ]
+    });
+
+    const result = await ldapListProfiles(settings(), "ldap-bind@test", "pass");
+
+    expect(result.profiles).toHaveLength(1);
+    expect(result.profiles[0].disabled).toBe(true);
   });
 });

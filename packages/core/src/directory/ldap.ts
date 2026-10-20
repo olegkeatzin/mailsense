@@ -37,6 +37,16 @@ const PROFILE_ATTRIBUTES = [
 const DEFAULT_FILTER =
   "(&(objectCategory=person)(objectClass=user)(mail=*)(!(userAccountControl:1.2.840.113556.1.4.803:=2)))";
 
+/**
+ * Фильтр ПОЛНОЙ выгрузки сотрудников — без «есть mail» и без исключения отключённых.
+ *
+ * ⚠️ Выгрузка брала DEFAULT_FILTER, а в нём `(mail=*)`: сотрудник без адреса в каталоге
+ * не попадал в список, и синхронизация считала его УВОЛЕННЫМ (живая жалоба: выдали роль —
+ * человек «уволен», вернуть нельзя). Отключённые тоже исключались, поэтому признак
+ * `disabled` из каталога никогда не доходил до базы.
+ */
+const PROFILE_FILTER = "(&(objectCategory=person)(objectClass=user))";
+
 /** Причина отказа аутентификации — чтобы UI показал понятный текст, а не дамп LDAP. */
 export type LdapFailure =
   | "invalid_credentials"
@@ -300,10 +310,11 @@ export async function ldapListProfiles(
     await bindServiceAccount(c, login, password, s);
     const base = s.baseDn && s.baseDn.trim() ? s.baseDn.trim() : "";
     if (!base) throw new Error("Не задан Base DN каталога");
-    const filter = s.userFilter && s.userFilter.trim() ? s.userFilter.trim() : DEFAULT_FILTER;
+    // Свой фильтр администратора уважаем; иначе берём PROFILE_FILTER (без mail=*).
+    const filter = s.userFilter && s.userFilter.trim() ? s.userFilter.trim() : PROFILE_FILTER;
     const { searchEntries } = await c.search(base, {
       scope: "sub",
-      filter: `(&${filter}(mail=*))`,
+      filter,
       // ⚠️ Предел серверу НЕ отдаём (0 = без предела). Вместе с постраничной
       // выдачей sizeLimit режет результат по всему поиску: AD вернёт
       // sizeLimitExceeded и часть записей, а вызывающий снова посчитает список
@@ -329,7 +340,9 @@ export async function ldapListProfiles(
           disabled: (uac & 0x2) !== 0
         };
       })
-      .filter((p) => p.ldapUid && p.email);
+      // Человек без адреса в каталоге — всё равно сотрудник: его нельзя терять,
+      // иначе синхронизация объявит его уволенным. Пустой email — законное состояние.
+      .filter((p) => p.ldapUid);
 
     const total = profiles.length;
     // Обрезали — значит, кого-то в синхронизации не увидят. Молчать нельзя:
