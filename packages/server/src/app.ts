@@ -1536,7 +1536,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   // -------- Документооборот: журнал регистрации (этап 2) --------
   mountJournalRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
-  mountResolutionRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });
+  mountResolutionRoutes(app, {
+    requireDocflowDb,
+    requirePermission,
+    requireAnyPermission,
+    asyncHandler,
+    ownedAccountIds: (req) => myAccountIds(req)
+  });
   // Центр уведомлений и правила автосортировки (этап 5). Служебные пути внутри модуля
   // объявлены до /:id — иначе Express примет «count» и «settings» за идентификатор.
   mountNotificationRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });

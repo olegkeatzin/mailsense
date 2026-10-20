@@ -6,6 +6,7 @@ import { selectSendAccount, type SendAccountLike } from "./serviceAccount.js";
 import {
   draftResolution,
   getAiConfig,
+  findEmailCopy,
   getEmailView,
   listAccounts,
   listAttachments,
@@ -70,6 +71,11 @@ export interface ResolutionDeps {
   asyncHandler: (
     fn: (req: express.Request, res: express.Response) => Promise<unknown>
   ) => express.RequestHandler;
+  /**
+   * Идентификаторы ящиков работника. Нужны, чтобы найти ЕГО копию письма о поручении:
+   * поиск копии не должен заглядывать в чужие ящики (решает сервер, а не docflow).
+   */
+  ownedAccountIds: (req: express.Request) => string[];
 }
 
 function actorOf(req: express.Request): Actor {
@@ -541,6 +547,12 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const { detail, emailId } = await sourceEmailOf(req);
       const mail = getEmailView(emailId);
       if (!mail) throw new AppError("Письмо не найдено", 404, "not_found");
+      // Копия письма о ПОРУЧЕНИИ в ящиках самого работника: по ней из «Моих задач»
+      // открывается настоящее письмо, а не снимок чужого ящика.
+      const dispatchMail = detail.dispatchEmailId ? getEmailView(String(detail.dispatchEmailId)) : null;
+      const ownCopy = dispatchMail?.messageId
+        ? findEmailCopy(dispatchMail.messageId, deps.ownedAccountIds(req))
+        : null;
       // ⚠️ Отдаём только то, что нужно по делу: ни accountId, ни uid/папки, ни путей к файлам —
       // иначе маршрут стал бы обходным путём к служебному ящику.
       res.json({
@@ -553,6 +565,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         date: mail.date,
         bodyText: mail.bodyText,
         bodyHtml: mail.bodyHtml,
+        // Идентификатор СВОЕЙ копии письма о поручении (если она уже доставлена).
+        ownEmailId: ownCopy?.id ?? null,
         attachments: listAttachments(emailId).map((a) => ({
           id: a.id,
           filename: a.filename,

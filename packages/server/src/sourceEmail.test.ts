@@ -120,6 +120,18 @@ describe("письмо-источник своей задачи доступно
     });
   });
 
+  /**
+   * ownEmailId — копия письма о ПОРУЧЕНИИ в ящике работника. По ней из «Моих задач»
+   * открывается настоящее письмо. Пока поручение не отправлено — копии нет, и это
+   * законный null, а не ошибка.
+   */
+  it("без отправленного поручения ownEmailId пустой", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/tasks/" + OURS + "/source-email", { token: TOKENS.executor });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveProperty("ownEmailId", null);
+  });
+
   it("служебные поля ящика наружу НЕ уходят", async () => {
     const res = await request(app.baseUrl, "GET", "/api/docflow/tasks/" + OURS + "/source-email", { token: TOKENS.executor });
 
