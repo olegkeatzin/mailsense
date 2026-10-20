@@ -119,8 +119,8 @@ services:
       - MAILSENSE_ADMIN_EMAIL=${MAILSENSE_ADMIN_EMAIL:-}
       - MAILSENSE_ADMIN_NAME=${MAILSENSE_ADMIN_NAME:-}
       # Сколько писем разбирать одновременно (1 — бережно к слабому серверу ИИ).
-      - MAILSENSE_AI_CONCURRENCY=${MAILSENSE_AI_CONCURRENCY:-}
-      - MAILSENSE_OCR_CONCURRENCY=${MAILSENSE_OCR_CONCURRENCY:-}
+      - MAILSENSE_AI_CONCURRENCY=${MAILSENSE_AI_CONCURRENCY:-1}
+      - MAILSENSE_OCR_CONCURRENCY=${MAILSENSE_OCR_CONCURRENCY:-3}
       # Засев ОДНОГО тестового ящика — только стенд и разработка, в проде выключено
       - MAILSENSE_SEED_ACCOUNT=${MAILSENSE_SEED_ACCOUNT:-false}
       - MAILSENSE_MAIL_USER=${MAILSENSE_MAIL_USER:-}
