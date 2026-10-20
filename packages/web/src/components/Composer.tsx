@@ -579,7 +579,12 @@ function ComposerForm({
   const send = async () => {
     // Отправка закрыта правом mail.send (T39/T44): объясняем, а не молча не отправляем.
     if (!canSendMail) return message.warning("Недостаточно прав для отправки");
-    if (!accountId) return message.warning("Выберите аккаунт");
+    if (!accountId) {
+      // Нет ни одного ящика — человеку нужно не «выберите аккаунт», а что именно сделать.
+      return message.warning(
+        "У вас нет почтового ящика: добавьте его в «Настройки → Почта» — тогда сможете писать письма"
+      );
+    }
     if (to.length === 0) return message.warning("Укажите получателя");
     setSending(true);
     try {

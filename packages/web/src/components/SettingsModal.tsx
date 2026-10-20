@@ -1231,7 +1231,10 @@ export default function SettingsModal() {
    * раздел, забытый в категориях, попадает в «Прочее» и не теряется.
    */
   const settingsTabs: Array<{ key: string; label: string; children: ReactNode }> = [
-    // Вкладка «Почта» читает список ящиков — показываем её только с правом mail.view.
+    // ⚠️ «Общие» — первым: это настройки предприятия в целом, заказчик ждёт их сверху,
+    // а не последним пунктом списка.
+    ...(canManageSettings ? [{ key: "general", label: "Общие", children: <GeneralTab /> }] : []),
+    // Вкладка «Почта» — свои ящики работника; права роли для неё не нужны.
     ...(canUseMail ? [{ key: "mail", label: "Почта", children: <AccountTab /> }] : []),
     // Личные настройки: свои данные, поэтому доступны ЛЮБОМУ вошедшему (не settings.manage).
     { key: "profile", label: "Личные настройки", children: <MailProfileTab key={reloadKey} /> },
@@ -1262,7 +1265,6 @@ export default function SettingsModal() {
     ...(canManageSettings ? [{ key: "ai", label: "ИИ", children: <AiTab /> }] : []),
     { key: "templates", label: "Шаблоны", children: <TemplatesTab key={reloadKey} /> },
     { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> },
-    ...(canManageSettings ? [{ key: "general", label: "Общие", children: <GeneralTab /> }] : [])
   ];
 
   const SETTINGS_CATEGORIES: Array<{ group: string; keys: string[] }> = [
