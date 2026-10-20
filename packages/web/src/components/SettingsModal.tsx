@@ -1347,20 +1347,22 @@ export default function SettingsModal() {
       width="min(1100px, 94vw)"
       title="Настройки"
     >
-      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+      {/* ⚠️ Высота задаётся КОНТЕЙНЕРУ, а содержимое тянется на 100%: раньше контейнер был
+          62vh, окно — выше, и внизу оставалась белая полоса (жалоба заказчика). */}
+      <div style={{ display: "flex", gap: 16, alignItems: "stretch", height: "min(72vh, 760px)" }}>
         <Menu
           mode="inline"
           selectedKeys={currentTab ? [currentTab.key] : []}
           onSelect={({ key }: { key: string }) => setActiveTab(key)}
           items={settingsMenu}
-          style={{ width: 236, flex: "0 0 236px", borderInlineEnd: "none" }}
+          style={{ width: 236, flex: "0 0 236px", borderInlineEnd: "none", height: "100%", overflowY: "auto" }}
         />
         {/* Высота фиксирована, прокрутка — вертикальная: окно настроек не прыгает
             при переходе между разделами (жалоба заказчика). */}
         {/* Разделы монтируем при первом открытии и дальше только прячем — как делал antd Tabs:
             иначе каждый переход пересоздавал экран и заново тянул данные (и тесты в jsdom
             переставали укладываться в таймаут). */}
-        <div style={{ flex: 1, minWidth: 0, height: "62vh", overflowY: "auto", paddingRight: 4 }}>
+        <div style={{ flex: 1, minWidth: 0, height: "100%", overflowY: "auto", paddingRight: 4 }}>
           {settingsTabs
             .filter((t) => mountedTabs.includes(t.key))
             .map((t) => (

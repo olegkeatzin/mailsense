@@ -161,7 +161,10 @@ export function UsersTab() {
         loading={loading}
         dataSource={users}
         pagination={{ pageSize: 20, showSizeChanger: false }}
-        scroll={{ x: 900 }}
+        // ⚠️ Без scroll.y таблица растягивается на все строки, и горизонтальная полоса
+      // оказывается далеко внизу: чтобы уехать вправо, приходилось листать в самый конец
+      // (жалоба заказчика). Фиксированная высота тела держит обе полосы на виду.
+      scroll={{ x: 900, y: 420 }}
         columns={[
           {
             title: "ФИО",
