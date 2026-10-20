@@ -75,8 +75,22 @@ export function UsersTab() {
 
   const toggleBlocked = async (user: User) => {
     try {
-      await api.updateUser(user.id, { isActive: user.blocked });
+      // ⚠️ Меняем ИМЕННО blocked: isActive — признак каталога (уволен), и раньше кнопка
+      // «Заблокировать» переключала не то поле, из-за чего человек выглядел уволенным.
+      await api.updateUser(user.id, { blocked: !user.blocked });
       message.success(user.blocked ? "Доступ восстановлен" : "Пользователь заблокирован");
+      await load();
+    } catch (err) {
+      message.error(humanError(err));
+    }
+  };
+
+  const restoreUser = async (user: User) => {
+    try {
+      // Ошибочную деактивацию синхронизацией надо уметь исправить из интерфейса:
+      // раньше у «Уволен (AD)» кнопки были недоступны, и вернуть человека было нечем.
+      await api.updateUser(user.id, { isActive: true });
+      message.success("Пользователь возвращён в работу");
       await load();
     } catch (err) {
       message.error(humanError(err));
@@ -224,7 +238,18 @@ export function UsersTab() {
           {
             title: "",
             width: 130,
-            render: (_v, u) => (
+            render: (_v, u) =>
+              !u.isActive ? (
+                <Popconfirm
+                  title="Вернуть пользователя в работу?"
+                  description="Сотрудник снова сможет войти. Если в каталоге он всё ещё уволен, следующая синхронизация деактивирует его снова."
+                  okText="Да"
+                  cancelText="Нет"
+                  onConfirm={() => void restoreUser(u)}
+                >
+                  <Button size="small">Вернуть в работу</Button>
+                </Popconfirm>
+              ) : (
               <Popconfirm
                 title={u.blocked ? "Восстановить доступ?" : "Заблокировать пользователя?"}
                 description={
@@ -236,11 +261,11 @@ export function UsersTab() {
                 cancelText="Нет"
                 onConfirm={() => void toggleBlocked(u)}
               >
-                <Button size="small" danger={!u.blocked} disabled={!u.isActive}>
+                <Button size="small" danger={!u.blocked}>
                   {u.blocked ? "Разблокировать" : "Заблокировать"}
                 </Button>
               </Popconfirm>
-            )
+              )
           }
         ]}
       />
