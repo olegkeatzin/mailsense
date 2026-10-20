@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, message } from "antd";
+import { Alert, Button, DatePicker, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, message } from "antd";
 import { SaveOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api, resolutionApi } from "../api";
@@ -278,10 +278,15 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
             </Descriptions.Item>
             <Descriptions.Item label="Дата документа">
               {editable ? (
-                <Input
-                  placeholder="ГГГГ-ММ-ДД"
-                  value={String(draft.docDate ?? "")}
-                  onChange={(e) => setDraft({ ...draft, docDate: e.target.value || null })}
+                // ⚠️ Дата — формой даты, а не текстом: «ГГГГ-ММ-ДД» руками набирали с опечатками
+                // (жалоба заказчика). В базе по-прежнему YYYY-MM-DD.
+                <DatePicker
+                  style={{ width: "100%" }}
+                  format="DD.MM.YYYY"
+                  placeholder="ДД.ММ.ГГГГ"
+                  allowClear
+                  value={draft.docDate ? dayjs(String(draft.docDate)) : null}
+                  onChange={(d) => setDraft({ ...draft, docDate: d ? d.format("YYYY-MM-DD") : null })}
                 />
               ) : (
                 fmtDate(doc.docDate) || "—"

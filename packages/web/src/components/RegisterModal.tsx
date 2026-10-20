@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Card, Form, Input, InputNumber, Select, Space, Spin, message } from "antd";
+import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Select, Space, Spin, message } from "antd";
+import dayjs from "dayjs";
 import { api } from "../api";
 import type { CaseRecord, DuplicateMatch, RegisterSuggest } from "../types";
 import { humanError } from "../utils/humanError";
@@ -97,7 +98,7 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
         setNextNumber(n?.regNumber ?? null);
         form.setFieldsValue({
           docNumber: s.docNumber,
-          docDate: s.docDate,
+          docDate: s.docDate ? dayjs(s.docDate) : null,
           sender: s.sender,
           summary: s.summary,
           sheetsCount: s.sheetsCount,
@@ -116,7 +117,8 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
       const doc = await api.registerDocument({
         emailId,
         docNumber: values.docNumber ?? "",
-        docDate: values.docDate || null,
+        // Из формы приходит объект даты — в API уходит строка YYYY-MM-DD.
+        docDate: values.docDate ? dayjs(values.docDate).format("YYYY-MM-DD") : null,
         sender: values.sender ?? "",
         summary: values.summary ?? "",
         sheetsCount: values.sheetsCount ?? null,
@@ -187,8 +189,9 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
                   onBlur={(e) => void checkDuplicates({ docNumber: e.target.value, summary: form.getFieldValue("summary") })}
                 />
               </Form.Item>
-              <Form.Item label="Дата документа" name="docDate" style={{ width: 160 }}>
-                <Input placeholder="ГГГГ-ММ-ДД" />
+              {/* Дата — формой даты: набранное руками «ГГГГ-ММ-ДД» давало опечатки. */}
+              <Form.Item label="Дата документа" name="docDate" style={{ width: 170 }}>
+                <DatePicker format="DD.MM.YYYY" placeholder="ДД.ММ.ГГГГ" style={{ width: "100%" }} />
               </Form.Item>
               <Form.Item label="Количество листов" name="sheetsCount" style={{ width: 160 }}>
                 <InputNumber min={0} style={{ width: "100%" }} placeholder="из PDF или вручную" />

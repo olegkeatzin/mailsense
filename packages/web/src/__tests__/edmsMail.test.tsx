@@ -77,7 +77,7 @@ describe("ящик для СЭД: правила выбора (T53)", () => {
   it("ничего не выбрано и служебный не настроен — говорим причину, а не берём первый", () => {
     expect(edmsMailProblem(null)).toMatch(/Не удалось получить список ящиков/);
     expect(edmsMailProblem({ accountId: null, account: null, allowed: [], defaultAccountId: null })).toMatch(
-      /Нет доступных ящиков/
+      /Нет подходящих ящиков/
     );
     // Ящик без настроенной отправки выбрать МОЖНО (T58): это не запрет, а предупреждение —
     // попытка уходит на сервер, отказ приходит кодом smtp_not_configured.
@@ -449,7 +449,7 @@ describe("действия СЭД передают выбранный ящик (
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
-    await waitFor(() => expect((document.body.textContent ?? "").match(/Нет доступных ящиков/)).not.toBeNull());
+    await waitFor(() => expect((document.body.textContent ?? "").match(/Нет подходящих ящиков/)).not.toBeNull());
     expect(resolutionApi.forward).not.toHaveBeenCalled();
   });
 
