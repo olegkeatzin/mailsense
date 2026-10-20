@@ -8,6 +8,7 @@ jest.mock("../api", () => ({
     accounts: jest.fn(),
     users: jest.fn(),
     journal: jest.fn(),
+    roles: jest.fn(),
     auditExportUrl: () => ""
   },
   resolutionApi: { get: jest.fn() }
@@ -69,6 +70,7 @@ describe("аудит: значения-идентификаторы разреш
     (api.users as jest.Mock).mockResolvedValue([{ id: USER_ID, fullName: "Мария Петрова", email: "p@mail.test" }]);
     (api.journal as jest.Mock).mockResolvedValue({ items: [{ id: DOC_ID, regNumber: "вх38" }], total: 1 });
     (resolutionApi.get as jest.Mock).mockResolvedValue({ documentNumber: "вх38" });
+    (api.roles as jest.Mock).mockResolvedValue([]);
     useStore.setState({
       ...initial,
       docflowUnavailable: false,
@@ -155,4 +157,59 @@ describe("аудит: значения-идентификаторы разреш
     // И функция вообще способна вернуть идентификаторы: иначе проверка выше была бы пустой.
     expect(collectUnresolvedIds(entries, new Set(), new Set(), 40).sort()).toEqual([...asked].sort());
   }, 20000);
+});
+
+/**
+ * Живая жалоба: «Поле: «—» → «изменено (не удалось расшифровать)»» на смене ролей.
+ * Причина — справочник ролей не загружался, и идентификаторы ролей оставались немами.
+ */
+describe("аудит: смена ролей показывает названия ролей", () => {
+  beforeAll(installDomEnvironment);
+  afterEach(cleanup);
+
+  const ROLE_A = "11111111-1111-4111-8111-111111111111";
+  const ROLE_B = "22222222-2222-4222-8222-222222222222";
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (api.audit as jest.Mock).mockResolvedValue({
+      entries: [
+        {
+          id: "a-roles",
+          userId: USER_ID,
+          userName: "Иванов И.И.",
+          action: "user.roles",
+          entityType: "user",
+          entityId: USER_ID,
+          oldValue: JSON.stringify({ roles: [ROLE_A] }),
+          newValue: JSON.stringify({ roles: [ROLE_B] }),
+          createdAt: "2026-10-19T10:00:00.000Z"
+        }
+      ],
+      total: 1
+    });
+    (api.accounts as jest.Mock).mockResolvedValue([]);
+    (api.users as jest.Mock).mockResolvedValue([{ id: USER_ID, fullName: "Иванов И.И.", email: "i@mail.test" }]);
+    (api.journal as jest.Mock).mockResolvedValue({ items: [], total: 0 });
+    (api.roles as jest.Mock).mockResolvedValue([
+      { id: ROLE_A, name: "Исполнитель" },
+      { id: ROLE_B, name: "Руководитель" }
+    ]);
+    (resolutionApi.get as jest.Mock).mockRejectedValue(new Error("404"));
+    useStore.setState({
+      ...initial,
+      docflowUnavailable: false,
+      authStatus: { docflowEnabled: true } as unknown as AuthStatus,
+      authUser: { permissions: ["audit.view", "users.manage"], roles: ["admin"] } as unknown as AuthUser
+    });
+  });
+
+  it("роли показаны названиями, а не «не удалось расшифровать»", async () => {
+    render(<AuditTab />);
+    expect(await screen.findByText(/Исполнитель/)).not.toBeNull();
+    expect(screen.getByText(/Руководитель/)).not.toBeNull();
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/не удалось расшифровать/);
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  });
 });

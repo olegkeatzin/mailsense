@@ -111,6 +111,7 @@ export const FIELD_TITLES: Record<string, string> = {
   dueSoonDays: "За дней до срока",
   holidays: "Праздничные дни",
   roles: "Роли",
+  login: "Логин",
   fullName: "ФИО",
   isBlocked: "Блокировка",
   // Поля-ссылки: их значения — идентификаторы, которые надо разрешать в человеческое.

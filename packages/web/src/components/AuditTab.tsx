@@ -74,6 +74,24 @@ function diffText(entry: AuditEntry, refs: ValueRefs): { text: string; rawIds: s
 }
 
 /**
+ * Поля, которые менялись: по ключам JSON из записи аудита, человеческими названиями.
+ * JSON наружу не отдаём (правило аудита), но перечень полей полезнее заглушки.
+ */
+function changedFields(raw: string): string {
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const names = Object.keys(parsed)
+      // «field» — технический контейнер аудита, а не поле объекта: в перечне он бесполезен.
+      .filter((k) => !["updatedAt", "createdAt", "id", "field"].includes(k))
+      .map((k) => fieldTitle(k))
+      .filter(Boolean);
+    return [...new Set(names)].slice(0, 4).join(", ");
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Какие идентификаторы из записей аудита ещё нужно спросить у сервера.
  *
  * Чистая функция без React: её проверяет тест D8. Смысл — уже спрошенные (attempted)
@@ -172,7 +190,10 @@ export default function AuditTab() {
     void Promise.allSettled([
       api.accounts().then((list) => list.forEach((a) => map.set(a.id, a.username))),
       api.users({ includeInactive: true }).then((list) => list.forEach((u) => map.set(u.id, u.fullName || u.email))),
-      api.journal({ limit: 300 }).then((page) => page.items.forEach((d) => map.set(d.id, d.regNumber)))
+      api.journal({ limit: 300 }).then((page) => page.items.forEach((d) => map.set(d.id, d.regNumber))),
+      // ⚠️ Без ролей идентификаторы в диффе «Смена ролей» не разрешались, и запись выглядела
+      // как «Поле: «—» → «изменено (не удалось расшифровать)» (жалоба заказчика).
+      api.roles().then((list) => list.forEach((r) => map.set(r.id, r.name)))
     ]).then(() => {
       if (!alive) return;
       setRefs(new Map(map));
@@ -246,6 +267,8 @@ export default function AuditTab() {
       title: "Что изменилось",
       key: "diff",
       render: (_v, r) => {
+        // Вход — не изменение полей: в колонке «Действие» уже написано «Вход в систему».
+        if (r.action === "login") return <span style={{ color: "#767676" }}>—</span>;
         const d = diffText(r, valueRefs);
         // Сырой идентификатор доступен только в подсказке — в тексте его быть не должно.
         if (d.text) {
@@ -255,8 +278,12 @@ export default function AuditTab() {
             </span>
           );
         }
-        // JSON в интерфейс не показываем никогда: либо «—», либо честное «изменение записано».
-        if (r.newValue) return <span style={{ fontSize: 12, color: "#555" }}>Изменение записано в аудите</span>;
+        // JSON в интерфейс не показываем, но и заглушка «изменение записано в аудите» бесполезна:
+        // человек и так в журнале. Показываем, КАКИЕ поля менялись.
+        if (r.newValue) {
+          const fields = changedFields(r.newValue);
+          if (fields) return <span style={{ fontSize: 12, color: "#555" }}>Изменены поля: {fields}</span>;
+        }
         return <span style={{ color: "#767676" }}>—</span>;
       }
     }
