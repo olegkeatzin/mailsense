@@ -59,6 +59,8 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
   const [resolutionOpen, setResolutionOpen] = useState(false);
   const [editing, setEditing] = useState<Resolution | null>(null);
   const [forwardOpen, setForwardOpen] = useState(false);
+  /** Поиск руководителя: список не показываем целиком — только совпадения по вводу. */
+  const [signerQuery, setSignerQuery] = useState("");
   const [forwardTo, setForwardTo] = useState<string | null>(null);
   const [forwardBusy, setForwardBusy] = useState(false);
   /** Кандидаты на получение письма: только те, кто вправе подписывать. */
@@ -574,15 +576,35 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
             loading={edms.loading}
           />
         </div>
+        {/*
+          ⚠️ Автокомплит, а не список всех сотрудников: на предприятии их сотни, и открытый
+          список не давал ничего выбрать (жалоба заказчика). Пока не начали печатать —
+          подсказка; совпадения ограничены 50, чтобы окно не тормозило.
+        */}
         <Select
           style={{ width: "100%" }}
           aria-label="Кому направить"
-          placeholder="Кому направить"
+          showSearch
+          placeholder="Начните вводить фамилию или адрес"
           value={forwardTo ?? undefined}
           onChange={(v) => setForwardTo(v)}
-          optionFilterProp="label"
-          options={signers.map((u) => ({ value: u.id, label: u.fullName || u.email }))}
-          notFoundContent="Нет пользователей с правом подписи — назначьте роль «Подписант»"
+          onSearch={setSignerQuery}
+          filterOption={(input, option) =>
+            String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+          }
+          options={
+            signerQuery.trim()
+              ? signers
+                  .filter((u) => (u.fullName || u.email).toLowerCase().includes(signerQuery.trim().toLowerCase()))
+                  .slice(0, 50)
+                  .map((u) => ({ value: u.id, label: u.fullName || u.email }))
+              : []
+          }
+          notFoundContent={
+            signerQuery.trim()
+              ? "Никого не нашли — проверьте фамилию"
+              : "Начните вводить фамилию или адрес — список появится по совпадению"
+          }
         />
       </Modal>
 

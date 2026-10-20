@@ -329,7 +329,9 @@ describe("действия СЭД передают выбранный ящик (
     render(<DocumentCard documentId="doc-1" onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Кому направить" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
@@ -348,7 +350,9 @@ describe("действия СЭД передают выбранный ящик (
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
     // Предупреждение видно в окне направления, но кнопка не заблокирована.
     expect(await screen.findByText(/не настроена отправка/)).not.toBeNull();
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Кому направить" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
@@ -363,7 +367,9 @@ describe("действия СЭД передают выбранный ящик (
     render(<DocumentCard documentId="doc-1" onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Кому направить" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
@@ -383,7 +389,9 @@ describe("действия СЭД передают выбранный ящик (
     render(<DocumentCard documentId="doc-1" onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Кому направить" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
@@ -405,7 +413,9 @@ describe("действия СЭД передают выбранный ящик (
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
     // В списке действия такого ящика нет — показываем словами, а не идентификатором.
     expect(await screen.findByText(/Выбранный ящик больше не существует/)).not.toBeNull();
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Кому направить" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
@@ -424,7 +434,9 @@ describe("действия СЭД передают выбранный ящик (
     render(<DocumentCard documentId="doc-1" onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Кому направить" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
@@ -445,7 +457,9 @@ describe("действия СЭД передают выбранный ящик (
     render(<DocumentCard documentId="doc-1" onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
-    fireEvent.mouseDown(await screen.findByRole("combobox", { name: "Кому направить" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
     fireEvent.click(await screen.findByText("Мария Петрова"));
     fireEvent.click(await screen.findByRole("button", { name: "Направить" }));
 
