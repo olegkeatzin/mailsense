@@ -135,6 +135,11 @@ export interface TaskSourceEmail {
   bodyText: string;
   bodyHtml: string | null;
   attachments: Array<{ id: string; filename: string; mimeType: string; size: number }>;
+  /**
+   * Своя копия письма о ПОРУЧЕНИИ (если поручение уже отправлено и оно дошло до ящика).
+   * По ней открывается настоящее письмо, а не снимок чужого ящика.
+   */
+  ownEmailId?: string | null;
 }
 
 /**

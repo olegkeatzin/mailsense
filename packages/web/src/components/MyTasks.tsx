@@ -86,6 +86,13 @@ function TaskAttachmentButton({
 export function MyTasks() {
   const can = useStore((s) => s.can);
   /**
+   * Есть ли у работника почта. Исполнителю она обычно закрыта (D-4), и тогда «Открыть в почте»
+   * не показываем — у него остаётся просмотр письма по поручению.
+   */
+  const canUseMail = useStore((s) => s.canUseMail());
+  /** Без своего ящика открывать нечего: кнопка вела бы в пустой почтовый раздел. */
+  const hasAccounts = useStore((s) => s.accounts.length > 0);
+  /**
    * Письмо-источник (T41): открывается ПОРУЧЕНИЕМ, а не почтовым разделом.
    * У исполнителя нет права mail.view, поэтому общий почтовый экран ему закрыт,
    * но предмет поручения он видеть обязан — сервер отдаёт урезанный вид письма.
@@ -328,6 +335,21 @@ export function MyTasks() {
         {sourceError ? <Alert type="error" showIcon message={sourceError} /> : null}
         {sourceLetter ? (
           <div>
+            {sourceLetter.ownEmailId && canUseMail && hasAccounts ? (
+              <Button
+                type="primary"
+                style={{ marginBottom: 12 }}
+                onClick={() => {
+                  // Настоящее письмо из СВОЕГО ящика: с форматированием, вложениями и ответом.
+                  const store = useStore.getState();
+                  setSourceOpen(false);
+                  store.setSection("mail");
+                  void store.select(sourceLetter.ownEmailId as string);
+                }}
+              >
+                Открыть в почте
+              </Button>
+            ) : null}
             <div style={{ color: "#595959", fontSize: 12, marginBottom: 8 }}>
               От: {(sourceLetter.from?.name || sourceLetter.from?.address) ?? "не указан"} ·{" "}
               {sourceLetter.date ? dayjs(sourceLetter.date).format("DD.MM.YYYY HH:mm") : "без даты"}

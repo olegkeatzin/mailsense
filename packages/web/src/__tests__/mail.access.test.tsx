@@ -261,3 +261,65 @@ describe("доступ к почте по правам (T44)", () => {
     await waitFor(() => expect(saveBlob).toHaveBeenCalled());
   });
 });
+
+/**
+ * Исполнитель с собственной почтой открывает НАСТОЯЩЕЕ письмо из своего ящика:
+ * сервер отдаёт ownEmailId — копию письма о поручении.
+ */
+describe("задача: открыть письмо в почте", () => {
+  beforeAll(installDomEnvironment);
+
+  const letter = {
+    resolutionId: "res-1",
+    emailId: "mail-1",
+    subject: "Поручение по документу вх38",
+    from: { address: "apparat@mail.test" },
+    to: [],
+    cc: [],
+    date: "2026-10-20T10:00:00.000Z",
+    bodyText: "текст",
+    bodyHtml: null,
+    attachments: [],
+    ownEmailId: "mail-own-1"
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (resolutionApi.sourceEmail as jest.Mock).mockResolvedValue(letter);
+    (resolutionApi.myTasks as jest.Mock).mockResolvedValue([
+      {
+        resolutionId: "res-1",
+        documentId: "doc-1",
+        documentNumber: "вх38",
+        emailId: "mail-1",
+        text: "Подготовить ответ",
+        kind: "executor",
+        priority: "normal",
+        deadline: null,
+        daysLeft: null,
+        overdue: false,
+        dueSoon: false,
+        receivedAt: null,
+        reportAt: null,
+        reportText: null
+      } as unknown as TaskItem
+    ]);
+    useStore.setState({
+      ...useStore.getState(),
+      accounts: [{ id: "acc-1", username: "executor@mail.test", settings: {} } as never],
+      docflowUnavailable: false,
+      authUser: { permissions: ["task.view"], roles: ["executor"], fullName: "Петрова М." } as never
+    });
+    (api.email as jest.Mock).mockResolvedValue({ id: "mail-own-1" });
+  });
+
+  it("кнопка открывает письмо из своего ящика", async () => {
+    render(<MyTasks />);
+    fireEvent.click(await screen.findByRole("button", { name: "Письмо" }));
+    const open = await screen.findByRole("button", { name: "Открыть в почте" });
+    fireEvent.click(open);
+
+    await waitFor(() => expect(api.email).toHaveBeenCalledWith("mail-own-1", expect.anything()));
+    expect(useStore.getState().section).toBe("mail");
+  });
+});
