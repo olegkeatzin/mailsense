@@ -61,7 +61,7 @@ describe("выдача ящиков для СЭД администратором
 
     await waitFor(() => expect(resolutionApi.userEdmsMailAllowance).toHaveBeenCalledWith("u-1"));
     expect(
-      await screen.findByText(/Работник сможет выбрать для писем СЭД только ящики с этими адресами/)
+      await screen.findByText(/Работник выбирает ящик для СЭД САМ/)
     ).not.toBeNull();
     expect((await screen.findAllByText(/petrova@mail\.test/)).length).toBeGreaterThan(0);
   });
@@ -140,7 +140,7 @@ describe("выдача ящиков для СЭД администратором
     // Явные ожидания: список пользователей и открытие модалки в jsdom не мгновенны.
     fireEvent.click(await screen.findByRole("button", { name: "Настроить" }, { timeout: 20000 }));
 
-    expect(await screen.findByText("Ящики для СЭД: Мария Петрова", {}, { timeout: 20000 })).not.toBeNull();
+    expect(await screen.findByText("Почта для СЭД: Мария Петрова", {}, { timeout: 20000 })).not.toBeNull();
     await waitFor(() => expect(resolutionApi.userEdmsMailAllowance).toHaveBeenCalledWith("u-1"));
   });
 });
