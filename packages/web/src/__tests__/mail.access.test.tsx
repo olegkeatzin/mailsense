@@ -29,10 +29,14 @@ jest.mock("../api", () => ({
     myEdmsMail: jest.fn(),
     saveMyEdmsMail: jest.fn()
   },
-  notificationApi: { list: jest.fn(), sortRules: jest.fn(), settings: jest.fn() }
+  notificationApi: { list: jest.fn(), sortRules: jest.fn(), settings: jest.fn() },
+  // Вложения письма-источника в задаче: файл берётся маршрутом по поручению.
+  taskSourceAttachment: jest.fn(),
+  saveBlob: jest.fn(),
+  bytesToBase64: jest.fn(() => "AA==")
 }));
 
-import { api, resolutionApi } from "../api";
+import { api, resolutionApi, saveBlob, taskSourceAttachment } from "../api";
 import { MailUnavailable } from "../components/MailUnavailable";
 import { MyTasks } from "../components/MyTasks";
 import SettingsModal from "../components/SettingsModal";
@@ -218,8 +222,8 @@ describe("доступ к почте по правам (T44)", () => {
       date: "2026-10-07T09:00:00.000Z",
       bodyText: "текст письма",
       bodyHtml: null,
-      attachments: []
-    };
+      attachments: [{ id: "a-1", filename: "приказ.pdf", mimeType: "application/pdf", size: 1024 }]
+    } as unknown as TaskSourceEmail;
     (resolutionApi.sourceEmail as jest.Mock).mockResolvedValue(letter);
     (resolutionApi.myTasks as jest.Mock).mockResolvedValue([
       {
@@ -248,5 +252,12 @@ describe("доступ к почте по правам (T44)", () => {
     expect(api.email).not.toHaveBeenCalled();
     expect(await screen.findByText("Вопрос о поставке")).not.toBeNull();
     expect(await screen.findByText("текст письма")).not.toBeNull();
+
+    // Вложения: не просто имена — их можно открыть и скачать (маршрут по поручению).
+    expect(await screen.findByText("приказ.pdf")).not.toBeNull();
+    (taskSourceAttachment as jest.Mock).mockResolvedValue(new Blob(["данные"]));
+    fireEvent.click(screen.getByRole("button", { name: /Скачать/ }));
+    await waitFor(() => expect(taskSourceAttachment).toHaveBeenCalledWith("res-1", "a-1"));
+    await waitFor(() => expect(saveBlob).toHaveBeenCalled());
   });
 });

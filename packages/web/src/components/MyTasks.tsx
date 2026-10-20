@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
-import { Alert, Badge, Button, Empty, Input, Modal, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { Alert, Badge, Button, Empty, Input, List, Modal, Space, Spin, Table, Tag, Tooltip, Typography, message } from "antd";
+import { DownloadOutlined, EyeOutlined } from "@ant-design/icons";
+import { bytesToBase64, saveBlob, taskSourceAttachment } from "../api";
+import { serverBridge } from "../ipc";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
 import { resolutionApi } from "../api";
@@ -20,6 +23,66 @@ import { humanError } from "../utils/humanError";
  * Открытие списка фиксирует «расписку» (графа 8 журнала): важно, когда человек
  * получил документ, а не когда открыл его в последний раз.
  */
+/**
+ * Кнопка вложения письма-источника.
+ *
+ * Файл лежит в ящике аппарата, поэтому берём его маршрутом по поручению (право — участие),
+ * а не обычным маршрутом вложения. «Открыть» в Electron передаёт файл системе, в браузере —
+ * открывает вкладку из памяти.
+ */
+function TaskAttachmentButton({
+  resolutionId,
+  attachmentId,
+  filename,
+  mode
+}: {
+  resolutionId: string;
+  attachmentId: string;
+  filename: string;
+  mode: "open" | "save";
+}) {
+  const [busy, setBusy] = useState(false);
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const blob = await taskSourceAttachment(resolutionId, attachmentId);
+      if (mode === "save") {
+        saveBlob(blob, filename);
+        return;
+      }
+      const bridge = serverBridge();
+      if (bridge?.openFile) {
+        const base64 = bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
+        const res = await bridge.openFile(filename, base64);
+        if (!res?.ok) message.error("Не удалось открыть файл: " + (res?.error ?? "неизвестная причина"));
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      if (!window.open(url, "_blank")) {
+        saveBlob(blob, filename);
+        message.info("Браузер не дал открыть вкладку — файл сохранён на диск");
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button
+      size="small"
+      icon={mode === "open" ? <EyeOutlined /> : <DownloadOutlined />}
+      loading={busy}
+      onClick={() => void run()}
+    >
+      {mode === "open" ? "Открыть" : "Скачать"}
+    </Button>
+  );
+}
+
 export function MyTasks() {
   const can = useStore((s) => s.can);
   /**
@@ -277,8 +340,34 @@ export function MyTasks() {
             {sourceLetter.attachments.length ? (
               <div style={{ marginTop: 12 }}>
                 <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                  Вложения: {sourceLetter.attachments.map((a) => a.filename).join(", ")}
+                  Вложения письма (доступны по поручению)
                 </Typography.Text>
+                <List
+                  size="small"
+                  dataSource={sourceLetter.attachments}
+                  renderItem={(a) => (
+                    <List.Item
+                      actions={[
+                        <TaskAttachmentButton
+                          key="open"
+                          resolutionId={sourceLetter.resolutionId}
+                          attachmentId={a.id}
+                          filename={a.filename}
+                          mode="open"
+                        />,
+                        <TaskAttachmentButton
+                          key="save"
+                          resolutionId={sourceLetter.resolutionId}
+                          attachmentId={a.id}
+                          filename={a.filename}
+                          mode="save"
+                        />
+                      ]}
+                    >
+                      <Typography.Text style={{ fontSize: 12 }}>{a.filename}</Typography.Text>
+                    </List.Item>
+                  )}
+                />
               </div>
             ) : null}
           </div>

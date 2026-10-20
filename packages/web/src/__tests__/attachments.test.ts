@@ -1,4 +1,4 @@
-import { attachmentBase64, attachmentBlob, bytesToBase64, materializeAttachments, type ComposerAttachment } from "../api";
+import { attachmentBase64, attachmentBlob, bytesToBase64, materializeAttachments, taskSourceAttachment, type ComposerAttachment } from "../api";
 
 /**
  * Вложения окна письма. Шаблон пересылки больше не несёт данных: в нём только ссылка
@@ -212,5 +212,37 @@ describe("вложение как Blob (открытие и скачивание
     jest.spyOn(globalThis, "fetch").mockImplementation(fetchMock as unknown as typeof fetch);
 
     await expect(attachmentBlob("e-1", "a-1")).rejects.toThrow("Файл вложения не найден");
+  });
+});
+
+/**
+ * Вложение письма-источника поручения: файл лежит в чужом ящике, поэтому обычный маршрут
+ * недоступен — берём маршрутом по поручению, где право проверяется по участию.
+ */
+describe("вложение письма-источника (по поручению)", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("идёт на маршрут поручения с cookie сессии", async () => {
+    const blob = new Blob(["данные"], { type: "application/pdf" });
+    const fetchMock = jest.fn(async () => ({ ok: true, blob: async () => blob }));
+    jest.spyOn(globalThis, "fetch").mockImplementation(fetchMock as unknown as typeof fetch);
+
+    await taskSourceAttachment("r-1", "a-1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/docflow/tasks/r-1/source-email/attachments/a-1");
+    expect(fetchMock.mock.calls[0][1]).toEqual({ credentials: "include" });
+  });
+
+  it("отказ объясняется текстом сервера", async () => {
+    const fetchMock = jest.fn(async () => ({
+      ok: false,
+      statusText: "Forbidden",
+      json: async () => ({ error: "Нет доступа к этому поручению" })
+    }));
+    jest.spyOn(globalThis, "fetch").mockImplementation(fetchMock as unknown as typeof fetch);
+
+    await expect(taskSourceAttachment("r-1", "a-1")).rejects.toThrow("Нет доступа к этому поручению");
   });
 });

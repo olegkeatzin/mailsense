@@ -944,6 +944,35 @@ export async function attachmentBlob(emailId: string, attachmentId: string): Pro
   return res.blob();
 }
 
+/**
+ * Вложение письма-источника поручения.
+ *
+ * ⚠️ Файл лежит в чужом ящике (аппарата), поэтому обычный маршрут вложения для исполнителя
+ * недоступен. Здесь право проверяется по УЧАСТИЮ В ПОРУЧЕНИИ — сервер уже умеет это для
+ * текста письма (tasks/:id/source-email), добавлен и для файлов.
+ */
+export async function taskSourceAttachment(resolutionId: string, attachmentId: string): Promise<Blob> {
+  const res = await fetch(
+    BASE +
+      "/api/docflow/tasks/" +
+      encodeURIComponent(resolutionId) +
+      "/source-email/attachments/" +
+      encodeURIComponent(attachmentId),
+    { credentials: "include" }
+  );
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) msg = body.error;
+    } catch {
+      /* тело не JSON — показываем статус */
+    }
+    throw new Error(msg);
+  }
+  return res.blob();
+}
+
 /** Сохранить Blob на диск под именем файла (кнопка «Скачать»). */
 export function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
