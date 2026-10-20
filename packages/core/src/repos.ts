@@ -1157,6 +1157,24 @@ export function findEmailByMessageId(accountId: string, messageId: string): Emai
   return null;
 }
 
+/**
+ * Копия письма в ЛЮБОМ из ящиков человека.
+ *
+ * Поручение уходит исполнителю письмом: у него в ящике лежит копия с тем же Message-ID.
+ * По ней из «Моих задач» открывается настоящее письмо, а не снимок чужого ящика.
+ * Ящики передаёт вызывающий — здесь нет понятия «кто спрашивает».
+ */
+export function findEmailCopy(
+  messageId: string,
+  accountIds: string[]
+): { id: string; accountId: string; folder: string } | null {
+  for (const accountId of accountIds) {
+    const found = findEmailByMessageId(accountId, messageId);
+    if (found) return { id: found.id, accountId: found.accountId, folder: found.folder };
+  }
+  return null;
+}
+
 // ---------------- Drafts ----------------
 
 function mapDraft(row: typeof drafts.$inferSelect): Draft {
