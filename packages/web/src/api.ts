@@ -646,11 +646,16 @@ export const resolutionApi = {
     });
   },
 
-  dispatch(id: string, accountId?: string) {
+  dispatch(
+    id: string,
+    accountId?: string,
+    opts?: { emailId?: string; bodyText?: string }
+  ) {
+    // emailId — письмо уже отправлено человеком из окна: сервер не шлёт второй раз,
+    // только фиксирует связь (иначе исполнители получили бы дубль).
     return request<Resolution>("/api/docflow/resolutions/" + id + "/dispatch", {
       method: "POST",
-      // Ящик отправки (T53): без него сервер возьмёт личную настройку работника.
-      body: JSON.stringify(accountId ? { accountId } : {})
+      body: JSON.stringify({ ...(accountId ? { accountId } : {}), ...opts })
     });
   },
 

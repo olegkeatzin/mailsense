@@ -604,11 +604,18 @@ function ComposerForm({
       const edms = useStore.getState().compose.edms;
       if (edms) {
         try {
-          await resolutionApi.forward(edms.documentId, "", undefined, {
-            emailId: sent.emailId,
-            ...(to[0] ? { toEmail: to[0] } : {})
-          });
-          message.success("Письмо отправлено и связано с поручением");
+          if (edms.kind === "dispatch" && edms.resolutionId) {
+            // Поручение исполнителям: письмо отправлено человеком, сервер только фиксирует
+            // переход и связь — второй раз не шлёт.
+            await resolutionApi.dispatch(edms.resolutionId, accountId, { emailId: sent.emailId });
+            message.success("Письмо отправлено, поручение передано исполнителям");
+          } else {
+            await resolutionApi.forward(edms.documentId, "", undefined, {
+              emailId: sent.emailId,
+              ...(to[0] ? { toEmail: to[0] } : {})
+            });
+            message.success("Письмо отправлено и связано с поручением");
+          }
         } catch (e) {
           message.warning("Письмо ушло, но поручение не связалось: " + humanError(e));
         }

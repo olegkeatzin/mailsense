@@ -884,6 +884,14 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         comment: str(b.comment)
       });
 
+      // ⚠️ Письмо уже отправил человек из окна письма (emailId): второй раз НЕ шлём,
+      // только фиксируем связь. Иначе исполнители получали бы дубль, а человек —
+      // «отправлено дважды» (жалоба заказчика: молчаливая отправка без окна).
+      const providedEmailId = b.emailId ? String(b.emailId) : "";
+      if (providedEmailId) {
+        return res.json(await attachDispatchEmail(req.params.id, providedEmailId, actorOf(req)));
+      }
+
       let sent: { emailId: string };
       try {
         sent = await sendEmail({

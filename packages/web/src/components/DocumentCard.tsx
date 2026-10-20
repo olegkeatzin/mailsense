@@ -465,6 +465,34 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                             Отправить исполнителям
                           </Button>
                         ) : null}
+                        {/* То же письмо, но с правкой текста в обычном окне письма. */}
+                        {r.status === "approved" && can("resolution.dispatch") ? (
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              const head = r.documentNumber ? "Поручение " + r.documentNumber : "Поручение";
+                              const bodyText = [
+                                r.text || "",
+                                "",
+                                r.deadline ? "Срок: " + r.deadline.split("-").reverse().join(".") : "Срок не указан.",
+                                "",
+                                "—",
+                                "Аппарат"
+                              ]
+                                .filter((line) => line !== "")
+                                .join("\n");
+                              openEdmsCompose({
+                                documentId: documentId ?? "",
+                                subject: head + ": " + (r.text || "").slice(0, 60),
+                                bodyText,
+                                kind: "dispatch",
+                                resolutionId: r.id
+                              });
+                            }}
+                          >
+                            Открыть окно письма (править)
+                          </Button>
+                        ) : null}
                       </Space>
                     </Space>
                   </List.Item>

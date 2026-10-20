@@ -133,11 +133,25 @@ interface State extends FilterState {
      * Письмо по документу СЭД: тема и текст предзаполнены, человек их правит.
      * После отправки письмо связывается с поручением (заказчик: «отправляете молча»).
      */
-    edms?: { documentId: string; subject: string; bodyText: string } | null;
+    edms?: {
+      documentId: string;
+      subject: string;
+      bodyText: string;
+      /** «forward» — письмо руководителю, «dispatch» — поручение исполнителям. */
+      kind?: "forward" | "dispatch";
+      /** Для dispatch: к какому поручению привязать отправленное письмо. */
+      resolutionId?: string;
+    } | null;
   };
   openCompose: (mode: ComposeMode, emailId?: string | null) => void;
   /** Открыть окно письма с готовым текстом по документу (аппарат правит и отправляет сам). */
-  openEdmsCompose: (input: { documentId: string; subject: string; bodyText: string }) => void;
+  openEdmsCompose: (input: {
+    documentId: string;
+    subject: string;
+    bodyText: string;
+    kind?: "forward" | "dispatch";
+    resolutionId?: string;
+  }) => void;
   /** Открыть композер с уже сохранённым черновиком. */
   openDraftCompose: (draft: Draft) => void;
   closeCompose: () => void;

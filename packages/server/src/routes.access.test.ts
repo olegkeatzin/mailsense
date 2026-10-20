@@ -621,6 +621,28 @@ describe("отказ не доходит до изменения данных", 
 });
 
 describe("отправка поручения: захват → письмо → запись письма", () => {
+  /**
+   * Аппарат отправил письмо из окна (правил текст) — сервер не должен слать второй раз.
+   */
+  it("письмо из окна: сервер не шлёт, только записывает связь", async () => {
+    mockedDocflow.dispatchResolution.mockImplementationOnce(async () => ({ id: "res-1", status: "sent" }));
+    mockedDocflow.attachDispatchEmail.mockImplementationOnce(async (id: string, emailId: string) => ({
+      id,
+      status: "sent",
+      dispatchEmailId: emailId
+    }));
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
+      token: token("secretary"),
+      body: { emailId: "mail-out-2" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
+    expect(mockedDocflow.attachDispatchEmail).toHaveBeenCalledWith("res-1", "mail-out-2", expect.anything());
+    expect(res.body).toMatchObject({ dispatchEmailId: "mail-out-2" });
+  });
+
   it("шаги идут по порядку: переход, письмо, запись идентификатора", async () => {
     const order: string[] = [];
     mockedDocflow.dispatchResolution.mockImplementationOnce(async () => {
