@@ -93,6 +93,36 @@ function compose(over: Partial<ComposeInput> = {}): ComposeInput {
   };
 }
 
+/**
+ * Техническая метка СЭД уходит настоящим заголовком письма: по ней система на другом
+ * конце узнаёт документ и поручение, даже если тред переслали (просьба заказчика).
+ */
+describe("технические заголовки письма", () => {
+  it("метка СЭД передаётся в SMTP как заголовок", async () => {
+    mockSendSmtp.mockResolvedValueOnce({ raw: Buffer.from("raw"), messageId: "<m@test>" });
+    await sendEmail({
+      accountId,
+      to: [{ address: "boss@mail.test" }],
+      subject: "Письмо вх1",
+      bodyText: "текст",
+      headers: { "X-MailSense-EDMS": "doc=doc-7; res=res-3; kind=forward; v=1" }
+    });
+
+    const options = mockSendSmtp.mock.calls[0][2] as { headers?: Record<string, string> };
+    expect(options.headers).toEqual({ "X-MailSense-EDMS": "doc=doc-7; res=res-3; kind=forward; v=1" });
+  });
+
+  it("без метки заголовков не появляется", async () => {
+    mockSendSmtp.mockResolvedValueOnce({ raw: Buffer.from("raw"), messageId: "<m@test>" });
+    await sendEmail({ accountId, to: [{ address: "boss@mail.test" }], subject: "Без метки", bodyText: "текст" });
+
+    const options = mockSendSmtp.mock.calls[mockSendSmtp.mock.calls.length - 1][2] as {
+      headers?: Record<string, string>;
+    };
+    expect(options.headers).toBeUndefined();
+  });
+});
+
 describe("отправка", () => {
   test("несуществующий аккаунт — понятная ошибка", async () => {
     await expect(sendEmail(compose({ accountId: "нет-такого" }))).rejects.toThrow(/Аккаунт не найден/);

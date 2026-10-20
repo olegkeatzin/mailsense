@@ -24,6 +24,8 @@ export interface SmtpSendOptions {
   messageId?: string;
   /** Заголовок Reply-To: ответ должен уходить на ящик получения, а не на общий адрес. */
   replyTo?: string;
+  /** Технические заголовки (метка СЭД): по ним на другом конце узнают письмо. */
+  headers?: Record<string, string>;
 }
 
 /** Оборачивает Message-ID в угловые скобки (для заголовков In-Reply-To / References). */
@@ -80,6 +82,7 @@ export async function sendSmtp(
     inReplyTo: opts.inReplyTo,
     references: opts.references,
     messageId: opts.messageId,
+    ...(opts.headers ? { headers: opts.headers } : {}),
     replyTo: opts.replyTo
   };
 

@@ -17,6 +17,7 @@ import type {
   Template
 } from "../types";
 import { escapeHtml, htmlToPlainText } from "../utils/text";
+import { edmsMarkerHeader } from "../utils/edmsMarker";
 import RichTextEditor from "./RichTextEditor";
 import { humanError } from "../utils/humanError";
 
@@ -287,6 +288,8 @@ function ComposerForm({
   draftAttachments?: DraftAttachment[];
 }) {
   const closeCompose = useStore((s) => s.closeCompose);
+  /** Письмо по документу СЭД: к нему добавляется техническая метка. */
+  const edms = useStore((s) => s.compose.edms);
   const loadEmails = useStore((s) => s.loadEmails);
   const accounts = useStore((s) => s.accounts);
   /** Право на отправку (T39/T44): без него кнопка недоступна и есть понятный текст. */
@@ -499,7 +502,12 @@ function ComposerForm({
   };
 
   /** Тело запроса с данными вложений — то, что уходит на сервер. */
-  const outgoing = async () => ({ ...formState(), attachments: await outgoingAttachments() });
+  const outgoing = async () => ({
+    ...formState(),
+    attachments: await outgoingAttachments(),
+    // Метка СЭД: по ней система на другом конце узнаёт письмо (даже если тред переслали).
+    ...(edms ? { headers: edmsMarkerHeader(edms) } : {})
+  });
 
   // Автосохранение живёт в интервале с пустыми зависимостями: состояние берём через ref.
   const draftStateRef = useRef(draftState);

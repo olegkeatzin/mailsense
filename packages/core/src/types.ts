@@ -329,4 +329,10 @@ export interface ComposeInput {
   inReplyToEmailId?: string | null;
   inReplyToMessageId?: string | null;
   references?: string[];
+  /**
+   * Технические заголовки письма (метка СЭД: документ, поручение, вид письма).
+   * Уходят обычными заголовками и сохраняются у получателя — по ним система на другом
+   * конце понимает, что это за письмо, даже если тред переслали.
+   */
+  headers?: Record<string, string>;
 }

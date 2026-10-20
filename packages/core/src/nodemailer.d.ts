@@ -18,6 +18,8 @@ declare module "nodemailer" {
     inReplyTo?: string;
     references?: string;
     messageId?: string;
+    /** Дополнительные заголовки письма (например, техническая метка СЭД). */
+    headers?: Record<string, string>;
     raw?: string | Buffer;
   }
 

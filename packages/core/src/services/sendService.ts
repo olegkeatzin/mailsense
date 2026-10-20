@@ -162,7 +162,8 @@ export async function sendEmail(compose: ComposeInput): Promise<SendResult> {
     inReplyTo,
     references,
     messageId: headerMessageId,
-    replyTo: replyTo || undefined
+    replyTo: replyTo || undefined,
+    headers: compose.headers
   });
 
   const email = insertEmail({
