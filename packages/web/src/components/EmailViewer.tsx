@@ -8,7 +8,8 @@ import {
 } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { useStore } from "../store";
-import { api, attachmentUrl, previewUrl } from "../api";
+import { api, attachmentBase64, attachmentBlob, previewUrl, saveBlob } from "../api";
+import { serverBridge } from "../ipc";
 import type { Attachment, EmailView } from "../types";
 import { formatBytes, formatDate, statusColor, statusLabel } from "../utils";
 import AnalysisPanel from "./AnalysisPanel";
@@ -26,13 +27,57 @@ const FOLDER_OPTIONS = [
 
 function AttachmentItem({ view, a }: { view: EmailView; a: Attachment }) {
   const [showContent, setShowContent] = useState(false);
+  const [busy, setBusy] = useState<"open" | "save" | null>(null);
+
+  /**
+   * «Открыть» — файл открывает системное приложение (в Electron) или новая вкладка браузера.
+   * ⚠️ Ссылкой этого не сделать: внешний браузер не имеет сессии, и вместо файла открывался
+   * вход в систему (жалоба заказчика).
+   */
+  const open = async () => {
+    setBusy("open");
+    try {
+      const bridge = serverBridge();
+      if (bridge?.openFile) {
+        const base64 = await attachmentBase64(view.id, a.id);
+        const res = await bridge.openFile(a.filename, base64);
+        if (!res?.ok) message.error("Не удалось открыть файл: " + (res?.error ?? "неизвестная причина"));
+        return;
+      }
+      const blob = await attachmentBlob(view.id, a.id);
+      const url = URL.createObjectURL(blob);
+      const w = window.open(url, "_blank");
+      if (!w) {
+        // Всплывающее окно запрещено — не оставляем человека без результата: сохраняем файл.
+        saveBlob(blob, a.filename);
+        message.info("Браузер не дал открыть вкладку — файл сохранён на диск");
+      }
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const save = async () => {
+    setBusy("save");
+    try {
+      saveBlob(await attachmentBlob(view.id, a.id), a.filename);
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <List.Item
       actions={[
-        <Button key="open" size="small" icon={<EyeOutlined />} href={attachmentUrl(view.id, a.id, true)} target="_blank">
+        <Button key="open" size="small" icon={<EyeOutlined />} loading={busy === "open"} onClick={() => void open()}>
           Открыть
         </Button>,
-        <Button key="dl" size="small" icon={<DownloadOutlined />} href={attachmentUrl(view.id, a.id, false)}>
+        <Button key="dl" size="small" icon={<DownloadOutlined />} loading={busy === "save"} onClick={() => void save()}>
           Скачать
         </Button>
       ]}

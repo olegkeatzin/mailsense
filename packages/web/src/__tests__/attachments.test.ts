@@ -1,4 +1,4 @@
-import { attachmentBase64, bytesToBase64, materializeAttachments, type ComposerAttachment } from "../api";
+import { attachmentBase64, attachmentBlob, bytesToBase64, materializeAttachments, type ComposerAttachment } from "../api";
 
 /**
  * Вложения окна письма. Шаблон пересылки больше не несёт данных: в нём только ссылка
@@ -178,5 +178,39 @@ describe("materializeAttachments", () => {
       ref: "Договор_копия_.pdf",
       draftId: "draft-1"
     });
+  });
+});
+
+/**
+ * Живая жалоба: «Открыть» у вложения вело во ВНЕШНИЙ браузер на /api/... без сессии —
+ * «требуется вход в систему», а png перекрывал приложение. Теперь файл тянется запросом
+ * с cookie сессии и показывается/сохраняется из памяти.
+ */
+describe("вложение как Blob (открытие и скачивание)", () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it("тянет файл с cookie сессии", async () => {
+    const blob = new Blob(["данные"], { type: "application/pdf" });
+    const fetchMock = jest.fn(async () => ({ ok: true, blob: async () => blob }));
+    jest.spyOn(globalThis, "fetch").mockImplementation(fetchMock as unknown as typeof fetch);
+
+    const result = await attachmentBlob("e-1", "a-1");
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/emails/e-1/attachments/a-1/file");
+    expect(fetchMock.mock.calls[0][1]).toEqual({ credentials: "include" });
+    expect(result).toBe(blob);
+  });
+
+  it("отказ сервера объясняется его же текстом, а не статусом", async () => {
+    const fetchMock = jest.fn(async () => ({
+      ok: false,
+      statusText: "Not Found",
+      json: async () => ({ error: "Файл вложения не найден" })
+    }));
+    jest.spyOn(globalThis, "fetch").mockImplementation(fetchMock as unknown as typeof fetch);
+
+    await expect(attachmentBlob("e-1", "a-1")).rejects.toThrow("Файл вложения не найден");
   });
 });

@@ -58,7 +58,10 @@ const READ_ROUTES: Array<[string, string]> = [
 
 const SEND_ROUTES: Array<[string, string]> = [
   ["POST", "/api/emails/send"],
-  ["POST", "/api/import"]
+  ["POST", "/api/import"],
+  // Проверка SMTP СВОЕГО ящика — право владельца, а не предприятия: работник настраивает
+  // отправку сам (жалоба заказчика «SMTP есть право настроить не у всех»). Чужой ящик — 404.
+  ["POST", "/api/accounts/acc-1/test-smtp"]
 ];
 
 const MANAGE_ROUTES: Array<[string, string]> = [
@@ -70,7 +73,6 @@ const MANAGE_ROUTES: Array<[string, string]> = [
   ["GET", "/api/ai/prompt"],
   ["PUT", "/api/ai/prompt"],
   ["POST", "/api/ai/test"],
-  ["POST", "/api/accounts/acc-1/test-smtp"]
 ];
 
 const ALL_ROUTES = [...READ_ROUTES, ...SEND_ROUTES, ...MANAGE_ROUTES];

@@ -111,6 +111,30 @@ describe("изменение аккаунта", () => {
     expect(decryptPassword(updated)).toBe("секрет123");
   });
 
+  /**
+   * Жалоба заказчика: «настройки могут сброситься при редактировании почты».
+   * Причина — сохранение ЗАМЕНЯЛО объект настроек: частичный payload стирал остальное.
+   */
+  test("частичное сохранение не стирает прежние настройки", () => {
+    const acc = createAccount(
+      input({ settings: { signature: "С уважением", signatureHtml: "<p>С уважением</p>", pollIntervalSeconds: 120 } })
+    );
+
+    // Клиент прислал только одно поле — остальные обязаны остаться.
+    const updated = updateAccountById(acc.id, input({ settings: { displayName: "Петрова М.А." } }))!;
+
+    expect(updated.settings.signature).toBe("С уважением");
+    expect(updated.settings.signatureHtml).toBe("<p>С уважением</p>");
+    expect(updated.settings.pollIntervalSeconds).toBe(120);
+    expect(updated.settings.displayName).toBe("Петрова М.А.");
+  });
+
+  test("явно переданное значение перекрывает прежнее", () => {
+    const acc = createAccount(input({ settings: { signature: "старая" } }));
+    const updated = updateAccountById(acc.id, input({ settings: { signature: "новая" } }))!;
+    expect(updated.settings.signature).toBe("новая");
+  });
+
   test("несуществующий аккаунт даёт null", () => {
     expect(updateAccountById("нет-такого", input())).toBeNull();
   });

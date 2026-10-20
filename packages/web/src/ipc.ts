@@ -31,6 +31,11 @@ export interface MailsenseBridge {
   setServerUrl: (url: string) => Promise<ServerConfigWriteResult>;
   clearServerUrl: () => Promise<ServerConfigWriteResult>;
   relaunch?: () => Promise<void>;
+  /**
+   * Открыть файл системным приложением (Windows/Linux): Electron пишет его во временную
+   * папку и отдаёт оболочке. В браузере метода нет — там открываем файл в новой вкладке.
+   */
+  openFile?: (name: string, base64: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 declare global {

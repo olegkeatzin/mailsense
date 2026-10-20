@@ -949,7 +949,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.post(
     "/api/accounts/:id/test-smtp",
-    requirePermission("settings.manage"),
+    // ⚠️ Проверка SMTP СВОЕГО ящика — право владельца, а не администратора предприятия:
+    // работник настраивает отправку сам, и требовать settings.manage здесь неправильно
+    // (жалоба заказчика: «SMTP есть право настроить не у всех»). Чужой ящик отсекает ownAccount.
     asyncHandler(async (req, res) => {
       if (!ownAccount(req, req.params.id)) return res.status(404).json({ error: "Ящик не найден" });
       const result = await testSmtpConnection(req.params.id);

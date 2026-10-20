@@ -922,6 +922,40 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/**
+ * Файл вложения как Blob — с куками сессии.
+ *
+ * ⚠️ Раньше кнопки вложения были обычными ссылками на /api/...: из Electron такая ссылка
+ * уходила во ВНЕШНИЙ браузер (setWindowOpenHandler → shell.openExternal), где сессии нет —
+ * «требуется вход в систему» (жалоба заказчика). Тянем файл сами и показываем из памяти.
+ */
+export async function attachmentBlob(emailId: string, attachmentId: string): Promise<Blob> {
+  const res = await fetch(attachmentUrl(emailId, attachmentId), { credentials: "include" });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) msg = body.error;
+    } catch {
+      /* тело не JSON — показываем статус */
+    }
+    throw new Error(msg);
+  }
+  return res.blob();
+}
+
+/** Сохранить Blob на диск под именем файла (кнопка «Скачать»). */
+export function saveBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename || "файл";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
 /** Тянет файл вложения письма и кодирует его в base64 — ровно в момент отправки. */
 export async function attachmentBase64(emailId: string, attachmentId: string): Promise<string> {
   const res = await fetch(attachmentUrl(emailId, attachmentId), { credentials: "include" });

@@ -197,7 +197,10 @@ export function updateAccount(
       tls: input.tls,
       username: input.username,
       authType: input.authType,
-      settings: JSON.stringify(input.settings ?? {}),
+            // ⚠️ СЛИВАЕМ с прежними настройками, а не заменяем: клиент может прислать частичный
+      // объект (старая версия приложения, форма без части полей) — и тогда подпись, правила
+      // ответа и прочее молча сбрасывались (жалоба заказчика: «настройки сбрасываются»).
+      settings: JSON.stringify({ ...(existing.settings ?? {}), ...(input.settings ?? {}) }),
       smtpHost: input.smtpHost === undefined ? existing.smtpHost : input.smtpHost,
       smtpPort: input.smtpPort === undefined ? existing.smtpPort : input.smtpPort,
       smtpTls: input.smtpTls === undefined ? existing.smtpTls : input.smtpTls,

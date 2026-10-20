@@ -2,6 +2,9 @@ import { app, BrowserWindow, dialog, ipcMain, safeStorage, shell } from "electro
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { startServer } from "@mailsense/server";
 import {
   NodeSecretStore,
@@ -281,6 +284,22 @@ if (!gotTheLock) {
       );
       // Окно всегда грузит ЛОКАЛЬНЫЙ backend: он отдаёт почту и проксирует документооборот.
       mainWindow.loadURL(server.url).catch((err) => startupLog("loadURL failed: " + (err as Error).message));
+      // ⚠️ Вложение открывает СИСТЕМНОЕ приложение, а не окно браузера: ссылка на /api/...
+      // уходила во внешний браузер без сессии — «требуется вход в систему» (жалоба заказчика).
+      ipcMain.handle("shell:open-file", async (_e, payload: unknown) => {
+        const { name, base64 } = (payload ?? {}) as { name?: string; base64?: string };
+        if (!name || !base64) return { ok: false, error: "нет данных файла" };
+        try {
+          const dir = await mkdtemp(join(tmpdir(), "mailsense-"));
+          const safe = name.replace(/[\\/:*?"<>|]/g, "_");
+          const file = join(dir, safe);
+          await writeFile(file, Buffer.from(base64, "base64"));
+          const err = await shell.openPath(file);
+          return err ? { ok: false, error: err } : { ok: true };
+        } catch (e) {
+          return { ok: false, error: (e as Error).message };
+        }
+      });
       mainWindow.webContents.setWindowOpenHandler(({ url }) => {
         void shell.openExternal(url);
         return { action: "deny" };
