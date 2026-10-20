@@ -391,7 +391,15 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     res.json({ ok: true, name: "mailsense", time: new Date().toISOString() });
   });
 
-  app.get("/api/settings", requirePermission("settings.manage"), (_req, res) => {
+  /**
+   * Ключи настроек, которые работник видит в «Общих» (только чтение).
+   *
+   * ⚠️ Заказчик: «у человека без ролей даже нет общих настроек». Вкладка должна быть,
+   * но менять общесерверную автопроверку почты работнику нельзя — это настройка предприятия.
+   */
+  const WORKER_SETTINGS = ["auto_fetch", "auto_analyze", "pollIntervalSeconds"];
+
+  app.get("/api/settings", (req, res) => {
     // ⚠️ Секреты наружу не отдаём: `getAllSettings` возвращает ВСЮ таблицу — включая `ai.apiKey`
     // и зашифрованный пароль каталога, поэтому ключи вырезаем здесь.
     // Чтение настроек предприятия закрыто правом settings.manage (матрица T39): раньше маршрут
@@ -400,7 +408,10 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
     const all = getAllSettings();
     delete all["ai.apiKey"];
     delete all["ldap.passwordEncrypted"];
-    res.json(all);
+    if (hasPermission(req.user, "settings.manage")) return res.json(all);
+    const safe: Record<string, string> = {};
+    for (const k of WORKER_SETTINGS) if (k in all) safe[k] = all[k];
+    return res.json(safe);
   });
 
   app.put("/api/settings", requirePermission("settings.manage"), (req, res) => {

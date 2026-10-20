@@ -97,9 +97,8 @@ const SEND_CASES: Case[] = [
 
 /** Управление ящиками и настройками предприятия — settings.manage. */
 const MANAGE_CASES: Case[] = [
-  // ⚠️ T39 закрыл и ЧТЕНИЕ настроек правом settings.manage (раньше GET был открыт любому
-  // вошедшему с вырезанными секретами). Проверяем фактическое поведение, а не старый комментарий.
-  { what: "GET /api/settings — чтение настроек предприятия", method: "GET", path: "/api/settings", allow: ["admin"] },
+  // ⚠️ GET /api/settings сюда НЕ входит: «Общие» открыты вошедшему с безопасным минимумом
+  // (auto_fetch/auto_analyze/pollIntervalSeconds), но без секретов и настроек каталога.
   { what: "PUT /api/settings — смена настроек предприятия", method: "PUT", path: "/api/settings", body: { "ai.model": "x" }, allow: ["admin"] },
   { what: "GET /api/ai/config — ключ модели", method: "GET", path: "/api/ai/config", allow: ["admin"] },
   { what: "PUT /api/ai/config — смена ключа модели", method: "PUT", path: "/api/ai/config", body: {}, allow: ["admin"] },

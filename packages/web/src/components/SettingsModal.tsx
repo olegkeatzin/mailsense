@@ -723,6 +723,9 @@ function AiTab() {
 }
 
 function GeneralTab() {
+  const can = useStore((s) => s.can);
+  /** Менять общесерверные настройки может только администратор — остальным показываем как есть. */
+  const readOnly = !can("settings.manage");
   const [settings, setSettings] = useState<Record<string, string>>({});
   /** Настройки не удалось получить (например, нет права): говорим об этом, а не молчим отказом. */
   const [loadError, setLoadError] = useState("");
@@ -757,12 +760,21 @@ function GeneralTab() {
   return (
     <div>
       {loadError ? <Alert type="error" showIcon message={loadError} style={{ marginBottom: 12 }} /> : null}
+      {readOnly ? (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Эти настройки задаёт администратор предприятия. Здесь они только для чтения."
+        />
+      ) : null}
       <Space direction="vertical" size="large">
         <div>
           <Typography.Text>Автоматическая проверка новой почты</Typography.Text>
           <br />
           <Switch
             checked={settings["auto_fetch"] !== "false"}
+            disabled={readOnly}
             onChange={(v) => void save("auto_fetch", v)}
           />
           <Typography.Text type="secondary" style={{ fontSize: 12, display: "block" }}>
@@ -779,6 +791,7 @@ function GeneralTab() {
           <br />
           <Switch
             checked={settings["auto_analyze"] !== "false"}
+            disabled={readOnly}
             onChange={(v) => void save("auto_analyze", v)}
           />
         </div>
@@ -789,6 +802,7 @@ function GeneralTab() {
             min={10}
             max={3600}
             value={Number(settings["pollIntervalSeconds"] || 60)}
+            disabled={readOnly}
             onChange={(v) => void save("pollIntervalSeconds", v ?? 60)}
             style={{ marginTop: 8 }}
           />
@@ -1233,7 +1247,8 @@ export default function SettingsModal() {
   const settingsTabs: Array<{ key: string; label: string; children: ReactNode }> = [
     // ⚠️ «Общие» — первым: это настройки предприятия в целом, заказчик ждёт их сверху,
     // а не последним пунктом списка.
-    ...(canManageSettings ? [{ key: "general", label: "Общие", children: <GeneralTab /> }] : []),
+    // «Общие» видны всем: работник читает значения, менять может только администратор.
+    { key: "general", label: "Общие", children: <GeneralTab key={reloadKey} /> },
     // Вкладка «Почта» — свои ящики работника; права роли для неё не нужны.
     ...(canUseMail ? [{ key: "mail", label: "Почта", children: <AccountTab /> }] : []),
     // Личные настройки: свои данные, поэтому доступны ЛЮБОМУ вошедшему (не settings.manage).
@@ -1268,10 +1283,12 @@ export default function SettingsModal() {
   ];
 
   const SETTINGS_CATEGORIES: Array<{ group: string; keys: string[] }> = [
+    // «Общие» — настройки предприятия в целом: стоят первыми, как ждёт заказчик.
+    { group: "Предприятие", keys: ["general"] },
     { group: "Почта", keys: ["mail", "profile", "connection"] },
     { group: "Документооборот", keys: ["users", "roles", "docflow", "numbering", "audit"] },
     { group: "Правила предприятия", keys: ["service", "sorting", "notifications", "templates"] },
-    { group: "Служба", keys: ["ldap", "ai", "general"] }
+    { group: "Служба", keys: ["ldap", "ai"] }
   ];
   const knownKeys = new Set(SETTINGS_CATEGORIES.flatMap((c) => c.keys));
   const restKeys = settingsTabs.filter((t) => !knownKeys.has(t.key)).map((t) => t.key);

@@ -62,7 +62,8 @@ const SEND_ROUTES: Array<[string, string]> = [
 ];
 
 const MANAGE_ROUTES: Array<[string, string]> = [
-  ["GET", "/api/settings"],
+  // GET /api/settings сюда НЕ входит: вкладка «Общие» доступна любому вошедшему —
+  // работник видит три общесерверные настройки только для чтения (жалоба заказчика).
   ["PUT", "/api/settings"],
   ["GET", "/api/ai/config"],
   ["PUT", "/api/ai/config"],
@@ -121,6 +122,26 @@ describe("права предприятия закрыты для чужих (D-
  * (docs/design/mail-ownership.md). Отказ по правам здесь был бы регрессией: человек
  * без ролей обязан пользоваться своим ящиком. Пакетный анализ почты остаётся правом.
  */
+/**
+ * «Общие» — вкладка для всех: работник видит три настройки, но секретов предприятия там нет.
+ */
+describe("чтение «Общих» доступно вошедшему, но без секретов", () => {
+  it("партнёр без ролей получает только безопасный минимум", async () => {
+    const res = await call("GET", "/api/settings", TOKENS.partner);
+    expect(res.status).toBe(200);
+    // Набор зависит от того, что есть в базе: важно, что ЛИШНЕГО не отдаём.
+    const keys = Object.keys(res.body);
+    expect(keys.every((k) => ["auto_fetch", "auto_analyze", "pollIntervalSeconds"].includes(k))).toBe(true);
+  });
+
+  it("ключ модели и настройки каталога работнику не отдаются", async () => {
+    const res = await call("GET", "/api/settings", TOKENS.executor);
+    expect(res.body["ai.apiKey"]).toBeUndefined();
+    expect(res.body["ai.model"]).toBeUndefined();
+    expect(res.body["ldap.url"]).toBeUndefined();
+  });
+});
+
 describe("личная почта доступна любому вошедшему: прав на почту у ролей нет", () => {
   // ⚠️ Раньше здесь был отдельный список «пакетный анализ — по праву mail.view». Права больше
   // нет: разбор идёт по ящикам самого работника (сервер фильтрует по владельцу), чужое ему
