@@ -43,7 +43,9 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
     deadlineRef.current = v;
     setDeadline(v);
   };
-  const [people, setPeople] = useState<Array<{ id: string; fullName: string }>>([]);
+  const [people, setPeople] = useState<Array<{ id: string; fullName: string; email?: string }>>([]);
+  /** Адреса из письма, которых нет в каталоге: показываем, чтобы аппарат вписал вручную. */
+  const [unknownAddresses, setUnknownAddresses] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -63,16 +65,38 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
 
   async function open(kind: "approval" | "report", item: ReplyContextItem) {
     setMode({ kind, item });
-    setText("");
+    // Руководитель мог ответить из Outlook: тогда текста резолюции у нас ещё нет,
+    // а в письме он есть — подставляем его как черновик (аппарат поправит).
+    setText(kind === "approval" ? (item.replyText ?? "") : "");
     setAssignees(item.assignees.map((a) => a.userId));
+    setUnknownAddresses([]);
     setResponsible(item.assignees.find((a) => a.kind === "responsible")?.userId);
     commitDeadline(null);
-    if (kind === "approval" && !people.length) {
-      try {
-        const list = await resolutionApi.executorCandidates();
-        setPeople(list.map((u) => ({ id: u.id, fullName: u.fullName })));
-      } catch {
-        setPeople([]);
+    if (kind === "approval") {
+      let list = people;
+      if (!list.length) {
+        try {
+          const fetched = await resolutionApi.executorCandidates();
+          list = fetched.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email }));
+          setPeople(list);
+        } catch {
+          list = [];
+          setPeople([]);
+        }
+      }
+      // Исполнители, которых руководитель указал в письме (решение заказчика):
+      // сопоставляем адреса с каталогом и сразу отмечаем найденных.
+      const candidates = item.executorCandidates ?? [];
+      if (candidates.length) {
+        const matched: string[] = [];
+        const unknown: string[] = [];
+        for (const c of candidates) {
+          const person = list.find((p) => (p.email ?? "").toLowerCase() === c.address.toLowerCase());
+          if (person) matched.push(person.id);
+          else unknown.push(c.address);
+        }
+        if (matched.length) setAssignees((prev) => [...new Set([...prev, ...matched])]);
+        setUnknownAddresses(unknown);
       }
     }
   }
@@ -162,6 +186,12 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
           }
         >
           <div style={{ color: "#666", fontSize: 13, marginBottom: 10 }}>{it.taskText}</div>
+          {it.executorCandidates?.length ? (
+            <div style={{ fontSize: 12, color: "#595959", marginBottom: 8 }}>
+              В письме указаны исполнители:{" "}
+              {it.executorCandidates.map((c) => c.name || c.address).join(", ")}
+            </div>
+          ) : null}
           <div style={{ fontSize: 12, color: "#595959", marginBottom: 8 }}>
             Отметьте, что это за письмо — система сама не определяет:
           </div>
@@ -223,6 +253,12 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
                   placeholder="Выберите из справочника"
                   options={people.map((p) => ({ value: p.id, label: p.fullName }))}
                 />
+                {unknownAddresses.length ? (
+                  <div style={{ fontSize: 12, color: "#ad6800", marginTop: 4 }}>
+                    В письме есть адреса, которых нет в каталоге: {unknownAddresses.join(", ")}.
+                    Укажите этих людей вручную — поручение уйдёт только тем, кого выберете.
+                  </div>
+                ) : null}
               </Form.Item>
               <Space size="large" wrap>
                 <Form.Item label="Ответственный" style={{ marginBottom: 0 }}>

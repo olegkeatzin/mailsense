@@ -142,6 +142,16 @@ export interface ReplyContextItem {
   documentSummary: string;
   taskText: string;
   assignees: Array<{ userId: string; fullName: string; kind: AssigneeKind }>;
+  /**
+   * Текст ответа руководителя — черновик резолюции. Пригодится, когда он отвечал
+   * из Outlook: в нашей системе резолюции ещё нет, а текст уже есть в письме.
+   */
+  replyText?: string;
+  /**
+   * Исполнители, названные в письме (получатели и копия, кроме нашего ящика и автора).
+   * Аппарат их видит и подтверждает — система никого не назначает сама.
+   */
+  executorCandidates?: Array<{ address: string; name: string }>;
 }
 
 export interface BoardColumn {

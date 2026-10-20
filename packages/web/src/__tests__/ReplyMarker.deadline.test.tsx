@@ -93,3 +93,55 @@ describe("срок в модалке «Резолюция руководител
     expect((resolutionApi.markApproval as jest.Mock).mock.calls[0][1].deadline).toBeNull();
   });
 });
+
+/**
+ * Руководитель ответил из Outlook: нашего текста резолюции нет, исполнителей он назвал
+ * в копии письма. Аппарат должен увидеть и то, и другое — и поправить при желании.
+ */
+describe("ответ из Outlook: текст и исполнители из письма", () => {
+  beforeAll(installDomEnvironment);
+
+  const outlookItem = {
+    resolutionId: "res-9",
+    expects: "approval" as const,
+    documentNumber: "вх2",
+    documentSummary: "Спортивное мероприятие",
+    taskText: "Организовать мероприятие",
+    assignees: [],
+    replyText: "Петрову и Иванову организовать мероприятие до 20.10",
+    executorCandidates: [
+      { address: "petrov@mail.test", name: "Петров" },
+      { address: "unknown@mail.test", name: "Неизвестный" }
+    ]
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    (resolutionApi.replyContext as jest.Mock).mockResolvedValue([outlookItem]);
+    (resolutionApi.executorCandidates as jest.Mock).mockResolvedValue([
+      { id: "u-9", fullName: "Петров Пётр", email: "petrov@mail.test", department: "" }
+    ]);
+    (resolutionApi.markApproval as jest.Mock).mockResolvedValue({});
+    useStore.setState({
+      ...initial,
+      docflowUnavailable: false,
+      authStatus: { docflowEnabled: true } as unknown as AuthStatus,
+      authUser: { permissions: ["resolution.dispatch"], roles: ["clerk"] } as unknown as AuthUser
+    });
+  });
+
+  it("показывает исполнителей из письма и подставляет текст ответа", async () => {
+    render(<ReplyMarker emailId="e-9" onMarked={jest.fn()} />);
+
+    expect(await screen.findByText(/В письме указаны исполнители: Петров, Неизвестный/)).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Это резолюция руководителя" }));
+    const textarea = (await screen.findByPlaceholderText("Кому и что сделать")) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("Петрову и Иванову организовать мероприятие до 20.10");
+
+    // Петрова (получателя из письма) система находит по адресу и отмечает сама.
+    await waitFor(() => expect(screen.getByText(/Петров Пётр/)).not.toBeNull());
+    // Безызвестный адрес не выдумываем — о нём честно предупреждаем.
+    expect(screen.getByText(/которых нет в каталоге/)).not.toBeNull();
+  });
+});
