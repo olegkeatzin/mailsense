@@ -40,6 +40,12 @@ services:
         condition: service_healthy
     ports:
       - "8123:8123"
+    # ⚠️ Стенд (почта + каталог) живёт на ХОСТЕ и публикует порты 389/993/465. Из контейнера
+    # 127.0.0.1 — это сам контейнер, а IP хоста меняется при смене сети (Wi-Fi, Tailscale).
+    # host.docker.internal — постоянное имя хоста: адрес в .env не надо переписывать.
+    # На Docker Desktop (Windows/macOS) оно есть по умолчанию; на Linux — вот этой строкой.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       # Почтовая база SQLite, вложения, ключ шифрования и логи — тоже папка на хосте
       # (MAILSENSE_DATA_PATH в .env, по умолчанию docker/data). Бэкап = копирование каталога.
