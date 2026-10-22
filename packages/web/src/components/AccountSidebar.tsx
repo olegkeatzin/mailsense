@@ -35,12 +35,14 @@ export default function AccountSidebar() {
     ...accounts.map((a) => ({ key: a.id, icon: <MailOutlined />, label: a.username }))
   ];
 
-  /** Разделы СЭД показываем только тем, кому доступен журнал (ТЗ п. 5). */
-  const canJournal = can("journal.view");
-  // Пункты меню разведены по правам так же, как маршруты на сервере: подписант видит
-  // «На утверждении», исполнитель — «Мои задачи». Аппарат ведёт журнал и регистрацию.
+  // Каждый раздел виден по СВОЕМУ праву — ровно тому, которое проверяет его маршрут
+  // (SECTION_PERMISSIONS в store.ts). Раньше весь список был обёрнут в journal.view:
+  // администратор снимал у исполнителя «Смотреть журнал», и вместе с журналом у него
+  // пропадали «Мои задачи», хотя право task.view никто не отнимал.
+  // Заголовок группы тоже не должен зависеть от журнала: она показывается, пока в ней
+  // есть хоть один доступный раздел.
   const docflowItems = [
-    { key: "journal", icon: <FileTextOutlined />, label: "Журнал" },
+    ...(can("journal.view") ? [{ key: "journal", icon: <FileTextOutlined />, label: "Журнал" }] : []),
     ...(can("journal.register") ? [{ key: "incoming", icon: <InboxOutlined />, label: "На регистрацию" }] : []),
     ...(can("resolution.approve") ? [{ key: "approvals", icon: <AuditOutlined />, label: "На утверждении" }] : []),
     // «На подтверждении» — рабочее место АППАРАТА: он подтверждает разбор ответов,
@@ -53,6 +55,7 @@ export default function AccountSidebar() {
     ...(can("task.view") ? [{ key: "tasks", icon: <CheckSquareOutlined />, label: "Мои задачи" }] : []),
     ...(can("resolution.create") ? [{ key: "board", icon: <ProjectOutlined />, label: "Резолюции" }] : [])
   ];
+  const hasDocflow = docflowItems.length > 0;
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", overflow: "auto" }}>
@@ -71,7 +74,7 @@ export default function AccountSidebar() {
         </Button>
       </div>
 
-      {canJournal && (
+      {hasDocflow && (
         <>
           <Typography.Text type="secondary" style={{ padding: "0 16px 4px", fontSize: 12 }}>
             Документооборот

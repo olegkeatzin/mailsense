@@ -1286,7 +1286,13 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   app.get(
     "/api/roles",
     requireDocflowDb,
-    requirePermission("journal.view"),
+    // Список ролей нужен конструктору ролей и «Пользователям и ролям» (users.manage),
+    // а «Аудиту» — чтобы показать название роли вместо её id (audit.view). Права журнала
+    // здесь быть НЕ ДОЛЖНО как единственного условия: администратор вправе завести роль
+    // без доступа к журналу, и тогда он не смог бы открыть даже список ролей.
+    // journal.view оставлен третьим основанием: справочник ролей исторически виден всем,
+    // кто видит журнал, и отбирать это у ролей не требуется.
+    requireAnyPermission("journal.view", "users.manage", "audit.view"),
     asyncHandler(async (_req, res) => {
       // Роли отдаём с их правами: интерфейс показывает их и даёт править галочками.
       res.json(await listRolesFromDb());
@@ -1535,7 +1541,7 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   );
 
   // -------- Документооборот: журнал регистрации (этап 2) --------
-  mountJournalRoutes(app, { requireDocflowDb, requirePermission, asyncHandler });
+  mountJournalRoutes(app, { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler });
   mountResolutionRoutes(app, {
     requireDocflowDb,
     requirePermission,

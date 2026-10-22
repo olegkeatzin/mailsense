@@ -86,6 +86,12 @@ function TaskAttachmentButton({
 export function MyTasks() {
   const can = useStore((s) => s.can);
   /**
+   * Отчёт — ОТДЕЛЬНОЕ право (task.report): задачу видеть мало, отчитываться должен тот,
+   * кому поручено. Конструктор ролей позволяет выдать «Видеть поручения» без него.
+   * Раньше кнопка «Отчитаться» показывалась всем, у кого есть task.view, и клик давал 403.
+   */
+  const canReport = can("task.report");
+  /**
    * Есть ли у работника почта. Исполнителю она обычно закрыта (D-4), и тогда «Открыть в почте»
    * не показываем — у него остаётся просмотр письма по поручению.
    */
@@ -254,10 +260,17 @@ export function MyTasks() {
               сдан {dayjs(v).format("DD.MM HH:mm")}
             </Tag>
           </Tooltip>
-        ) : (
+        ) : canReport ? (
           <Button size="small" type="primary" onClick={() => setReportFor(r)}>
             Отчитаться
           </Button>
+        ) : (
+          // Права нет — не показываем кнопку, которая всё равно ответит 403.
+          <Tooltip title="Вашей роли не разрешено отчитываться об исполнении">
+            <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+              нет права
+            </Typography.Text>
+          </Tooltip>
         )
     }
   ];

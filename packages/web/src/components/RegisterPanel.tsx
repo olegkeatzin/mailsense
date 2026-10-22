@@ -35,12 +35,24 @@ export function RegisterPanel({ emailId }: { emailId: string }) {
     }
   }, [emailId]);
 
+  /**
+   * Статус «зарегистрировано ли письмо» читается маршрутом с правом journal.view.
+   * Без него запрос всё равно ответит 403 — не дёргаем сервер зря. Кнопка регистрации
+   * при этом остаётся: право journal.register самостоятельное.
+   */
+  const canViewJournal = can("journal.view");
+
   useEffect(() => {
     setReady(false);
     // Перешли к другому письму — форма снова свёрнута.
     setOpen(false);
+    if (!canViewJournal) {
+      setDoc(null);
+      setReady(true);
+      return;
+    }
     void load();
-  }, [load]);
+  }, [load, canViewJournal]);
 
   // Намерение из списка: открыть форму сразу. Снимаем его, чтобы оно не сработало повторно.
   useEffect(() => {

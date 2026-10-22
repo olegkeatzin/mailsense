@@ -70,6 +70,28 @@ describe("RegisterPanel: форма открывается по кнопке, а
     expect(screen.queryByRole("button", { name: "Свернуть" })).toBeNull();
   });
 
+  /**
+   * У исполнителя после снятия journal.view нет и journal.register. Раньше панель всё равно
+   * запрашивала статус документа при каждом открытии письма — маршрут отвечал 403.
+   */
+  it("без права на журнал и регистрацию статус документа не запрашивается", async () => {
+    useStore.setState({
+      authUser: { ...useStore.getState().authUser!, permissions: ["task.view"] } as unknown as AuthUser
+    });
+
+    render(<RegisterPanel emailId="mail-1" />);
+
+    expect(mockDocumentByEmail).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /Зарегистрировать/ })).toBeNull();
+  });
+
+  it("с правом регистрации, но без журнала кнопка есть, а лишнего запроса нет", async () => {
+    render(<RegisterPanel emailId="mail-1" />);
+
+    expect(await screen.findByRole("button", { name: /Зарегистрировать/ })).not.toBeNull();
+    expect(mockDocumentByEmail).not.toHaveBeenCalled();
+  });
+
   it("по кнопке форма открывается, по «Свернуть» — снова прячется", async () => {
     render(<RegisterPanel emailId="mail-1" />);
 

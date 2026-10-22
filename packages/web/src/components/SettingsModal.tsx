@@ -37,6 +37,7 @@ import { MailProfileTab } from "./MailProfileTab";
 import { ServerAddressCard } from "./ServerAddressCard";
 import { NotificationsTab } from "./sorting/NotificationsTab";
 import { RolesEditor } from "./RolesEditor";
+import { settingsTabKeys } from "../settingsTabs";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, MailDefaults, MailServerDefaults, Template } from "../types";
 import { humanError } from "../utils/humanError";
 
@@ -1215,10 +1216,6 @@ export default function SettingsModal() {
   const canUseMail = useStore((s) => s.canUseMail());
   const [reloadKey, setReloadKey] = useState(0);
   const [activeTab, setActiveTab] = useState(canUseMail ? "mail" : "profile");
-  // Вкладки администрирования документооборот видны только тем, кто может управлять пользователями.
-  const canManageUsers = can("users.manage");
-  /** Настройки сервера (ИИ, «Общие») — тоже администраторские. */
-  const canManageSettings = can("settings.manage");
 
   // Модалка не размонтирует вкладки, поэтому при каждом открытии настроек
   // пересоздаём их: иначе список шаблонов и статус каталога остаются устаревшими.
@@ -1244,43 +1241,38 @@ export default function SettingsModal() {
    * разъедутся при первой же правке. Категории задают только порядок и заголовки;
    * раздел, забытый в категориях, попадает в «Прочее» и не теряется.
    */
-  const settingsTabs: Array<{ key: string; label: string; children: ReactNode }> = [
+  const allSettingsTabs: Array<{ key: string; label: string; children: ReactNode }> = [
     // ⚠️ «Общие» — первым: это настройки предприятия в целом, заказчик ждёт их сверху,
     // а не последним пунктом списка.
     // «Общие» видны всем: работник читает значения, менять может только администратор.
     { key: "general", label: "Общие", children: <GeneralTab key={reloadKey} /> },
     // Вкладка «Почта» — свои ящики работника; права роли для неё не нужны.
-    ...(canUseMail ? [{ key: "mail", label: "Почта", children: <AccountTab /> }] : []),
+    { key: "mail", label: "Почта", children: <AccountTab /> },
     // Личные настройки: свои данные, поэтому доступны ЛЮБОМУ вошедшему (не settings.manage).
     { key: "profile", label: "Личные настройки", children: <MailProfileTab key={reloadKey} /> },
     // Адрес сервера — личная настройка работника (Р21): файл предприятия выше и не
     // редактируется, а свой адрес человек задаёт сам. Поэтому вкладка доступна всем,
     // а администрирование документооборота осталось у администраторов ниже.
     { key: "connection", label: "Подключение", children: <ServerAddressCard key={reloadKey} /> },
-    ...(canManageUsers
-      ? [
-          { key: "users", label: "Пользователи и роли", children: <UsersTab key={reloadKey} /> },
-          { key: "roles", label: "Роли", children: <RolesEditor key={reloadKey} /> },
-          { key: "docflow", label: "Документооборот", children: <DocflowTab key={reloadKey} /> }
-        ]
-      : []),
-    ...(can("journal.view") ? [{ key: "numbering", label: "Нумерация", children: <NumberingTab key={reloadKey} /> }] : []),
-    ...(can("audit.view") ? [{ key: "audit", label: "Аудит", children: <AuditTab /> }] : []),
-    // Настройки ИИ и «Общие» закрыты правом settings.manage: у остальных ролей
-    // вкладки открывались, а запросы отвечали 403 и сыпались в консоль.
-    ...(canManageSettings
-      ? [
-          // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
-          // Служебный ящик: аппарат видит подсказку, выбирает администратор (settings.manage).
-          { key: "service", label: "Служебные ящики", children: <ServiceAccountAdmin key={reloadKey} /> },
-          { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
-          { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> }
-        ]
-      : []),
-    ...(canManageSettings ? [{ key: "ai", label: "ИИ", children: <AiTab /> }] : []),
+    { key: "users", label: "Пользователи и роли", children: <UsersTab key={reloadKey} /> },
+    { key: "roles", label: "Роли", children: <RolesEditor key={reloadKey} /> },
+    { key: "docflow", label: "Документооборот", children: <DocflowTab key={reloadKey} /> },
+    { key: "numbering", label: "Нумерация", children: <NumberingTab key={reloadKey} /> },
+    { key: "audit", label: "Аудит", children: <AuditTab /> },
+    // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
+    // Служебный ящик: аппарат видит подсказку, выбирает администратор (settings.manage).
+    { key: "service", label: "Служебные ящики", children: <ServiceAccountAdmin key={reloadKey} /> },
+    { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
+    { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> },
+    { key: "ai", label: "ИИ", children: <AiTab /> },
     { key: "templates", label: "Шаблоны", children: <TemplatesTab key={reloadKey} /> },
-    { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> },
+    { key: "ldap", label: "Каталог (LDAP)", children: <LdapTab key={reloadKey} /> }
   ];
+  // Права вкладок — в чистой settingsTabKeys: её проверяют тесты без jsdom.
+  const tabsByKey = new Map(allSettingsTabs.map((tab) => [tab.key, tab]));
+  const settingsTabs = settingsTabKeys(can, canUseMail)
+    .map((key) => tabsByKey.get(key))
+    .filter((tab): tab is { key: string; label: string; children: ReactNode } => !!tab);
 
   const SETTINGS_CATEGORIES: Array<{ group: string; keys: string[] }> = [
     // «Общие» — настройки предприятия в целом: стоят первыми, как ждёт заказчик.

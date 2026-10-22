@@ -78,6 +78,7 @@ import {
 export interface JournalDeps {
   requireDocflowDb: express.RequestHandler;
   requirePermission: (permission: Permission) => express.RequestHandler;
+  requireAnyPermission: (...permissions: Permission[]) => express.RequestHandler;
   asyncHandler: (
     fn: (req: express.Request, res: express.Response) => Promise<unknown>
   ) => express.RequestHandler;
@@ -237,9 +238,13 @@ export function registerJournalAttachments(): void {
 }
 
 export function mountJournalRoutes(app: express.Express, deps: JournalDeps): void {
-  const { requireDocflowDb, requirePermission, asyncHandler } = deps;
+  const { requireDocflowDb, requirePermission, requireAnyPermission, asyncHandler } = deps;
   registerJournalAttachments();
   const view = [requireDocflowDb, requirePermission("journal.view")];
+  // Нумерацию СМОТРИТ тот, кто видит журнал, а МЕНЯЕТ — у кого есть settings.manage
+  // (PUT ниже). Значит и читать её должен настройщик без доступа к журналу, иначе
+  // вкладка пропадает у законной роли «Менять настройки предприятия».
+  const numberingView = [requireDocflowDb, requireAnyPermission("journal.view", "settings.manage")];
   const register = [requireDocflowDb, requirePermission("journal.register")];
   const edit = [requireDocflowDb, requirePermission("journal.edit")];
   const manage = [requireDocflowDb, requirePermission("settings.manage")];
@@ -261,7 +266,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
   // -------- Нумерация --------
   app.get(
     "/api/docflow/numbering",
-    ...view,
+    ...numberingView,
     asyncHandler(async (req, res) => {
       const period = typeof req.query.period === "string" ? req.query.period : undefined;
       const state = await getNumberingState(period);

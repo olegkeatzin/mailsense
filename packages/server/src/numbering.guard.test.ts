@@ -27,6 +27,11 @@ beforeAll(async () => {
   for (const role of ["admin", "secretary", "executor"]) {
     mocked.__sessions.set(token(role), testUser("u-" + role, [role]));
   }
+  // Роль настройщика без права на журнал: нумерацию ей менять можно (PUT — settings.manage),
+  // значит и читать состояние она обязана.
+  mocked.__sessions.set(token("settings"), testUser("u-settings", [], { permissions: ["settings.manage"] }));
+  // Работник без прав документооборота: нумерация ему недоступна.
+  mocked.__sessions.set(token("no-rights"), testUser("u-no-rights", [], { permissions: [] }));
   app = await listen(await createApp({}));
 });
 
@@ -198,5 +203,18 @@ describe("состояние нумерации отдаёт подсказки 
     expect(body.reopenablePeriods).toEqual([YEAR]);
     expect(body.archiveLimitBytes).toBeUndefined();
     expect(body.archiveWarning).toBeUndefined();
+  });
+
+  it("настройщик без права на журнал читает нумерацию: иначе вкладки не будет", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/numbering", { token: token("settings") });
+
+    expect(res.status).toBe(200);
+    expect(mocked.getNumberingState).toHaveBeenCalled();
+  });
+
+  it("работнику без прав документооборота состояние нумерации закрыто", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/numbering", { token: token("no-rights") });
+
+    expect(res.status).toBe(403);
   });
 });

@@ -17,11 +17,20 @@ const mockedDocflow = docflow as unknown as Record<string, jest.Mock> & { __sess
 
 const ADMIN = "token:admin";
 const WORKER = "token:worker";
+/** Управляющий пользователями, но без права на журнал: такую роль заводит конструктор. */
+const ROLE_MANAGER = "token:role-manager";
+/** Аудитор: ему роли нужны только чтобы показать названия в журнале аудита. */
+const AUDITOR = "token:auditor";
+/** Работник без прав документооборота: роли ему не нужны вовсе. */
+const NO_RIGHTS = "token:no-rights";
 let app: RunningApp;
 
 beforeAll(async () => {
   mockedDocflow.__sessions.set(ADMIN, testUser("u-admin", ["admin"]));
   mockedDocflow.__sessions.set(WORKER, testUser("u-worker", ["executor"]));
+  mockedDocflow.__sessions.set(ROLE_MANAGER, testUser("u-role-manager", [], { permissions: ["users.manage"] }));
+  mockedDocflow.__sessions.set(AUDITOR, testUser("u-auditor", [], { permissions: ["audit.view"] }));
+  mockedDocflow.__sessions.set(NO_RIGHTS, testUser("u-no-rights", [], { permissions: [] }));
   app = await listen(await createApp({}));
 });
 
@@ -64,6 +73,37 @@ describe("чтение ролей и каталога прав", () => {
     expect(Array.isArray(res.body)).toBe(true);
     // Каталог настоящий: в нём есть группы и человеческие названия (мок берёт его из docflow).
     expect(JSON.stringify(res.body)).toContain("journal.view");
+  });
+
+  /**
+   * Роль без права на журнал — законная настройка: заказчик уже снял journal.view
+   * у исполнителя. Список ролей при этом обязан открываться по users.manage, иначе
+   * администратор с такой ролью не увидит ни ролей, ни пользователей (UsersTab грузит их
+   * одним Promise.all). Раньше маршрут требовал именно journal.view.
+   */
+  test("управляющему пользователями список ролей доступен без права на журнал", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/roles", { token: ROLE_MANAGER });
+
+    expect(res.status).toBe(200);
+    expect(mockedDocflow.listRolesFromDb).toHaveBeenCalled();
+  });
+
+  test("аудитору список ролей доступен: по нему «Аудит» показывает названия ролей", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/roles", { token: AUDITOR });
+
+    expect(res.status).toBe(200);
+  });
+
+  test("работнику без прав документооборота список ролей закрыт", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/roles", { token: NO_RIGHTS });
+
+    expect(res.status).toBe(403);
+  });
+
+  test("исполнителю с журналом список ролей доступен, как и раньше", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/roles", { token: WORKER });
+
+    expect(res.status).toBe(200);
   });
 });
 
