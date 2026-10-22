@@ -22,6 +22,7 @@ data/
 # logs / env / coverage
 *.log
 .tmp/
+.jest-cache/
 .env
 .env.*
 coverage/
