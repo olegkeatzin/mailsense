@@ -28,15 +28,20 @@
 
 | Контейнер | Образ | Порты (хост) | Что это |
 |---|---|---|---|
-| `mailserver` | `ghcr.io/docker-mailserver/docker-mailserver:latest` | 25, 110, 143, 465, 587, 993, 995, 18080 | Почта: SMTP, POP3, IMAP, IMAPS, SMTPS. Ящики `@mail.test` |
+| `mailserver` | `ghcr.io/docker-mailserver/docker-mailserver:latest` | 25, 110, 143, 465, 587, 993, 995 | Почта: SMTP, POP3, IMAP, IMAPS, SMTPS. Ящики `@mail.test` |
+| `mail-admin` | `testmail-admin` (собирается из `test mail/admin`) | 18080 | Веб-админка: пользователи сразу в почте и LDAP |
 | `ldap` | `nowsci/samba-domain:latest` | 389, 636, 3268 | Домен и каталог AD: `stand.test`, пользователи и группы |
 | `mailsense-db-dev` | `postgres:16-alpine` | 55432 | PostgreSQL стенда (`mailsense`) и тестовая база (`mailsense_test`) |
 
-Все три поднимаются с `restart: unless-stopped`, то есть переживают перезапуск Docker.
+Все четыре поднимаются с `restart: unless-stopped`, то есть переживают перезапуск Docker.
+
+Веб-админка стенда — http://127.0.0.1:18080 (`admin` / `MailAdmin123!`): заводит и удаляет
+почтовые ящики и учётки AD одной формой. Подробности — `admin/README.md` в папке `test mail`.
 
 ```bash
 docker ps                                   # что поднято и здорово ли
 docker logs mailserver --tail 20            # почта
+docker logs mail-admin --tail 20            # веб-админка
 docker logs ldap --tail 20                  # домен/каталог
 docker compose -f docker/docker-compose.dev.yml up -d      # вернуть базу стенда
 ```
