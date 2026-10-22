@@ -8,7 +8,8 @@ import type { AccountInput } from "@mailsense/core";
  * «Настройки → Почта»), а работник вводит только адрес ящика и пароль.
  *
  * Хранятся настройкой `mail.defaults` (JSON) и засеиваются из `MAILSENSE_MAIL_DEFAULTS` —
- * по тому же правилу, что каталог: значение в базе важнее переменной окружения.
+ * по тому же правилу, что каталог: значение из переменной окружения применяется при каждом
+ * старте и перекрывает сохранённое в интерфейсе (пустая переменная ничего не меняет).
  */
 export const MAIL_DEFAULTS_SETTING = "mail.defaults";
 export const MAIL_DEFAULTS_ENV = "MAILSENSE_MAIL_DEFAULTS";

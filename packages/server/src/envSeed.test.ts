@@ -73,17 +73,28 @@ describe("каталог из переменных окружения", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  test("настройка, уже заданная администратором, НЕ перетирается", async () => {
+  /**
+   * Правило изменено по просьбе заказчика: .env — описание развёртывания, и он главнее базы.
+   * Перезапуск контейнера должен приводить настройки к тому, что записано в файле.
+   */
+  test("значение из .env перекрывает заданное в интерфейсе", async () => {
     const store = db({ "ldap.url": "ldaps://admin-changed:636", "ldap.login": "admin-bind" });
 
     const result = await seedLdapFromEnv({ env: FULL_LDAP_ENV, ...store, encrypt: ENCRYPT });
 
-    expect(store.data["ldap.url"]).toBe("ldaps://admin-changed:636");
-    expect(store.data["ldap.login"]).toBe("admin-bind");
-    expect(result.skipped).toContain("Адрес");
-    expect(result.skipped).toContain("Учётка каталога");
-    // Остальные значения из окружения всё равно записались.
+    expect(store.data["ldap.url"]).toBe("ldaps://dc.stand.test:636");
+    expect(store.data["ldap.login"]).toBe("ldap-bind");
+    expect(result.written).toContain("Адрес");
+    expect(result.written).toContain("Учётка каталога");
     expect(store.data["ldap.baseDn"]).toBe("DC=stand,DC=test");
+  });
+
+  test("совпадающее значение не переписывается зря", async () => {
+    const store = db({ "ldap.url": "ldaps://dc.stand.test:636" });
+
+    const result = await seedLdapFromEnv({ env: FULL_LDAP_ENV, ...store, encrypt: ENCRYPT });
+
+    expect(result.skipped).toContain("Адрес");
   });
 
   test("неполный набор переменных (нет Base DN) — предупреждение, а не падение", async () => {
@@ -164,14 +175,14 @@ describe("служебные ящики из переменных окружен
     expect(calls).toEqual([{ internal: "acc-1" }]);
   });
 
-  test("уже заданная роль не перетирается", async () => {
+  test("роль из .env перекрывает прежнюю", async () => {
     const store = db({ "docflow.serviceAccountId": "acc-existing" });
     const { deps, calls } = mailboxDeps(store, { MAILSENSE_SERVICE_MAILBOX: "test@mail.test" });
 
     const result = await seedServiceMailboxesFromEnv(deps);
 
-    expect(result.internal).toBe("skipped");
-    expect(calls).toEqual([]);
+    expect(result.internal).toBe("written");
+    expect(calls).toEqual([{ internal: "acc-1" }]);
   });
 
   test("внешняя роль совпала с внутренней — предупреждение (пилот), но запись есть", async () => {
@@ -220,8 +231,8 @@ describe("засев целиком: старт не падает ни при к
     ).summary;
 
     expect(summary).toContain("Засев из окружения");
-    expect(summary).toContain("каталог: записано");
-    expect(summary).toContain("ящики: внутренний настроен");
+    expect(summary).toContain("каталог: применено из .env");
+    expect(summary).toContain("ящики: внутренний применён из .env");
     // Сводка ядра про засев ящиков — в той же строке, чтобы не искать по журналу.
     expect(
       (

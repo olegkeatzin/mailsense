@@ -20,9 +20,10 @@ import {
  * Заказчик разворачивает контейнер целиком из .env: адрес каталога, учётка bind'а и адреса
  * служебных ящиков задаются переменными. Правило одно и то же для всего:
  *
- *   ⚠️ НАСТРОЙКА В БАЗЕ ВАЖНЕЕ ПЕРЕМЕННОЙ. Если администратор уже задал значение в интерфейсе,
- *   переменная его не перетирает — только строка в журнале о том, что пропущено. Иначе
- *   перезапуск контейнера молча отменял бы решение человека (тот же класс, что чинили в T48).
+ *   ⚠️ ПЕРЕМЕННАЯ ОКРУЖЕНИЯ ГЛАВНЕЕ БАЗЫ. Значение из .env применяется при КАЖДОМ старте и
+ *   перекрывает то, что сохранено в интерфейсе: развёртывание описано файлом, и перезапуск не
+ *   должен оставлять «старый» адрес. Пустая переменная = «не задано»: пустотой ничего не стираем.
+ *   Каждая замена пишется в журнал — чтобы смена значения не была неожиданной.
  *
  * ⚠️ Ошибки засева НЕ роняют старт: всё в журнал одной понятной строкой и без паролей —
  * сервер обязан подниматься, даже если каталог недоступен или адрес ящика указан с опечаткой.
@@ -81,12 +82,11 @@ export async function seedLdapFromEnv(deps: LdapSeedDeps): Promise<LdapSeedResul
     const value = envValue(env, name);
     if (value === null) continue;
     const current = await deps.readSetting(key);
-    if (current !== null && current.trim() !== "") {
+    if (current !== null && current.trim() === value) {
+      // Уже то же самое: писать нечего, но и «пропущено» тут значит «совпадает».
       result.skipped.push(label);
       continue;
     }
-
-
     await deps.writeSetting(key, value);
     result.written.push(label);
   }
@@ -96,9 +96,13 @@ export async function seedLdapFromEnv(deps: LdapSeedDeps): Promise<LdapSeedResul
     if (ldapLogin === null || ldapPassword === null) {
       result.warnings.push("учётка каталога задана неполно: нужны и логин, и пароль");
     } else {
+      // Пароль хранится зашифрованным, сравнить его с переменной нельзя — поэтому учётку
+      // из .env применяем всегда (шифруем заново). Логин в переменной задан явно, значит
+      // это и есть желаемое состояние развёртывания.
       const currentLogin = await deps.readSetting("ldap.login");
       const currentPassword = await deps.readSetting("ldap.passwordEncrypted");
-      if ((currentLogin ?? "") !== "" || (currentPassword ?? "") !== "") {
+      const sameLogin = (currentLogin ?? "").trim() === ldapLogin;
+      if (sameLogin && currentPassword) {
         result.skipped.push("Учётка каталога");
       } else {
         await deps.writeSetting("ldap.login", ldapLogin);
@@ -134,7 +138,7 @@ export interface MailDefaultsSeedResult {
  *
  * Работник тогда вводит только адрес ящика и пароль: хост, порты, шифрование и способ входа
  * приходят из `MAILSENSE_MAIL_DEFAULTS` (JSON с ключами imap/pop3/smtp).
- * ⚠️ Правило то же, что у каталога: значение в базе важнее переменной окружения.
+ * ⚠️ Правило то же, что у каталога: переменная окружения главнее базы.
  */
 export async function seedMailDefaultsFromEnv(deps: {
   env: NodeJS.ProcessEnv;
@@ -145,11 +149,6 @@ export async function seedMailDefaultsFromEnv(deps: {
   if (raw === null) return null;
 
   const result: MailDefaultsSeedResult = { written: false, skipped: false, warnings: [] };
-  const current = await deps.readSetting(MAIL_DEFAULTS_SETTING);
-  if (current !== null && current.trim() !== "") {
-    result.skipped = true;
-    return result;
-  }
   const parsed = parseMailDefaults(raw);
   if (parsed.error) {
     result.warnings.push(parsed.error);
@@ -159,7 +158,15 @@ export async function seedMailDefaultsFromEnv(deps: {
     result.warnings.push("умолчания почты пусты: записывать нечего");
     return result;
   }
-  await deps.writeSetting(MAIL_DEFAULTS_SETTING, JSON.stringify(parsed.defaults));
+  const value = JSON.stringify(parsed.defaults);
+  const current = await deps.readSetting(MAIL_DEFAULTS_SETTING);
+  if (current !== null && current.trim() === value) {
+    // Уже такие же — писать нечего.
+    result.skipped = true;
+    return result;
+  }
+  // ⚠️ Переменная главнее базы: значение из .env применяется при каждом старте.
+  await deps.writeSetting(MAIL_DEFAULTS_SETTING, value);
   result.written = true;
   return result;
 }
@@ -179,7 +186,7 @@ export interface MailboxSeedDeps {
  * Записывает роли служебных ящиков по адресам из окружения.
  *
  * Вызывать ПОСЛЕ засева ящиков ядром (T50) — иначе ящика ещё нет и найти его нечем.
- * Роль, уже заданная в базе, не перетирается; ненайденный адрес — строка в журнал, а не падение.
+ * Роль из переменной перекрывает прежнюю; ненайденный адрес — строка в журнал, а не падение.
  */
 export async function seedServiceMailboxesFromEnv(deps: MailboxSeedDeps): Promise<MailboxSeedResult> {
   const result: MailboxSeedResult = { warnings: [] };
@@ -197,16 +204,16 @@ export async function seedServiceMailboxesFromEnv(deps: MailboxSeedDeps): Promis
     key: string
   ): Promise<void> => {
     if (address === null) return;
-    const current = await deps.readSetting(key);
-    if (current !== null && current.trim() !== "") {
-      result[role] = "skipped";
-      return;
-    }
-
     const account = deps.findAccount(address);
     if (!account) {
       result[role] = "not_found";
       result.warnings.push("ящик " + address + " не найден среди засеянных");
+      return;
+    }
+    // ⚠️ Переменная главнее базы: если в .env другой ящик — роль переставляем.
+    const current = await deps.readSetting(key);
+    if (current !== null && current.trim() === account.id) {
+      result[role] = "skipped";
       return;
     }
     patch[role] = account.id;
@@ -247,7 +254,7 @@ export function describeSeedSummary(
   if (mailDefaults) {
     parts.push(
       "умолчания почты: " +
-        (mailDefaults.written ? "записаны" : mailDefaults.skipped ? "уже настроены" : "не записаны")
+        (mailDefaults.written ? "применены из .env" : mailDefaults.skipped ? "уже такие же" : "не записаны")
     );
     for (const w of mailDefaults.warnings) parts.push("умолчания почты: " + w);
   }
@@ -258,12 +265,12 @@ export function describeSeedSummary(
   }
   if (ldap) {
     parts.push(
-      "каталог: записано " + ldap.written.length + ", пропущено (уже настроено) " + ldap.skipped.length
+      "каталог: применено из .env " + ldap.written.length + ", без изменений " + ldap.skipped.length
     );
     for (const w of ldap.warnings) parts.push("каталог: " + w);
   }
   if (mailboxes) {
-    const role = (v?: string): string => (v === "written" ? "настроен" : v === "skipped" ? "уже был" : v === "not_found" ? "НЕ НАЙДЕН" : "не задан");
+    const role = (v?: string): string => (v === "written" ? "применён из .env" : v === "skipped" ? "уже тот же" : v === "not_found" ? "НЕ НАЙДЕН" : "не задан");
     parts.push("ящики: внутренний " + role(mailboxes.internal) + ", внешний " + role(mailboxes.external));
     for (const w of mailboxes.warnings) parts.push("ящики: " + w);
   }
