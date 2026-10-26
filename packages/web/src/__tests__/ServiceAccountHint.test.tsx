@@ -84,12 +84,14 @@ describe("подсказка аппарату про служебный ящик
     expect(screen.getByText("post@mail.test")).not.toBeNull();
   });
 
-  it("ящика нет в клиенте — честный текст и кнопка «Скопировать параметры»", async () => {
+  it("ящика нет в клиенте — предлагаем подключить самому, а не просить администратора", async () => {
     asClerk();
     render(<ServiceAccountHint />);
 
-    expect(await screen.findByText("Попросите администратора подключить ящик post@mail.test")).not.toBeNull();
+    expect(await screen.findByText(/Вы ещё не подключили ящик post@mail.test/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Открыть «Почту»" })).not.toBeNull();
     expect(screen.getByRole("button", { name: "Скопировать параметры" })).not.toBeNull();
+    expect(screen.queryByText(/Попросите администратора/)).toBeNull();
   });
 
   it("ящик уже есть в списке клиента (сравнение по username) — «Ящик подключён»", async () => {
@@ -155,15 +157,16 @@ describe("подсказка аппарату про служебный ящик
     mockGet.mockResolvedValue(state({ account: null, problem: null, problemCode: "account_missing" }));
     render(<ServiceAccountHint />);
 
-    expect(await screen.findByText(/Выбранный служебный ящик больше не существует/)).not.toBeNull();
+    expect(await screen.findByText(/Служебный ящик больше не существует/)).not.toBeNull();
   });
 
-  it("ящик не выбран — подсказка говорит, что отправка возьмёт первый ящик с SMTP", async () => {
+  it("служебный ящик не задан на сервере — говорим об этом без «попросите администратора»", async () => {
     asClerk();
     mockGet.mockResolvedValue(state({ configured: false, account: null, problem: null, problemCode: "not_configured" }));
     render(<ServiceAccountHint />);
 
-    expect(await screen.findByText(/Служебный ящик не выбран/)).not.toBeNull();
+    expect(await screen.findByText(/Служебный ящик не задан на сервере/)).not.toBeNull();
+    expect(screen.queryByText(/Попросите администратора/)).toBeNull();
   });
 
   it("ошибка загрузки показывается с кнопкой «Повторить», без цикла запросов", async () => {

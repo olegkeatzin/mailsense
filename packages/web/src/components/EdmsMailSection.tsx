@@ -15,6 +15,8 @@ export function EdmsMailSection() {
   const { settings, loading, error, reload, setSettings } = useEdmsMail(true);
   // Подпись берём у ЯЩИКА (решение заказчика): здесь только показываем её выбранного.
   const accounts = useStore((st) => st.accounts);
+  const authUser = useStore((st) => st.authUser);
+  const openSettings = useStore((st) => st.openSettings);
   const [value, setValue] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -79,8 +81,17 @@ export function EdmsMailSection() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Доступных ящиков нет"
-          description="Попросите администратора подключить ящик — после этого его можно будет выбрать здесь."
+          message="Ящик ещё не подключён"
+          description={
+            authUser?.email
+              ? "За вами в LDAP закреплён ящик " + authUser.email + ". Подключите его в разделе «Почта» — после этого он появится здесь."
+              : "Вы ещё не зарегистрировались в ящике, закреплённом за вами в LDAP. Подключите его в разделе «Почта» — после этого он появится здесь."
+          }
+          action={
+            <Button size="small" onClick={() => openSettings("mail")}>
+              Перейти в «Почту»
+            </Button>
+          }
         />
       ) : (
         <>

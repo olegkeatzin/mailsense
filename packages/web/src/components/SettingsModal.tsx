@@ -56,7 +56,7 @@ const AUTH_OPTIONS = [
   { value: "oauth2", label: "OAuth2" }
 ];
 
-function AccountTab() {
+export function AccountTab() {
   const accounts = useStore((s) => s.accounts);
   const loadAccounts = useStore((s) => s.loadAccounts);
   const [form] = Form.useForm();
@@ -382,6 +382,10 @@ function AccountTab() {
             {
               key: "server",
               label: "Дополнительно: сервер, порты и шифрование",
+              // Поля сервера/порта обязательны, но живут в свёрнутой панели. Без forceRender
+              // они не монтируются, и форма ругалась «укажите сервер», даже когда умолчания
+              // предприятия уже подставлены. Пользователь лечил это открытием панели вручную.
+              forceRender: true,
               children: (
                 <>
 <Space wrap>
@@ -1259,9 +1263,9 @@ export default function SettingsModal() {
     { key: "docflow", label: "Документооборот", children: <DocflowTab key={reloadKey} /> },
     { key: "numbering", label: "Нумерация", children: <NumberingTab key={reloadKey} /> },
     { key: "audit", label: "Аудит", children: <AuditTab /> },
-    // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
-    // Служебный ящик: аппарат видит подсказку, выбирает администратор (settings.manage).
+    // Служебные ящики: администратор выбирает внутренний и внешний ящики предприятия.
     { key: "service", label: "Служебные ящики", children: <ServiceAccountAdmin key={reloadKey} /> },
+    // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
     { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
     { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> },
     { key: "ai", label: "ИИ", children: <AiTab /> },

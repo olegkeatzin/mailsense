@@ -10,15 +10,16 @@ import { humanError } from "../utils/humanError";
  *
  * Читается с правом journal.register — аппарат должен видеть, куда подключаться.
  * Пароли сервер не отдаёт: интерфейс показывает только хост, порт, TLS и логин.
- * Подсказка НИЧЕГО не меняет и не расширяет права: выбор служебного ящика — настройка
- * администратора (settings.manage), а добавить ящик в клиент аппарат может только так же,
- * как любой другой ящик. Никакого «подключить за меня» здесь нет.
+ * Подсказка НИЧЕГО не меняет и не расширяет права: параметры служебного ящика приходят
+ * с сервера, а в свой клиент работник добавляет его САМ — как любой другой ящик.
+ * Никакого «подключите за меня» здесь нет.
  */
 export function ServiceAccountHint() {
   const can = useStore((s) => s.can);
   const authStatus = useStore((s) => s.authStatus);
   const authUser = useStore((s) => s.authUser);
   const accounts = useStore((s) => s.accounts);
+  const openSettings = useStore((s) => s.openSettings);
   const [state, setState] = useState<ServiceAccountState | null>(null);
   const [error, setError] = useState("");
 
@@ -116,24 +117,28 @@ export function ServiceAccountHint() {
             ) : account.smtpHostConfigured ? (
               // Адрес есть, а пароля нет: отправка не работает — говорим точнее, чем «не настроена».
               <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                Адрес SMTP указан, но пароль не задан — отправка не работает. Попросите администратора настроить SMTP у
-                ящика.
+                Адрес SMTP указан, но пароль не задан — отправка не работает. Укажите пароль SMTP в настройках ящика.
               </Typography.Text>
             ) : (
               <Typography.Text type="warning" style={{ fontSize: 12 }}>
-                Отправка не настроена — письмо отправить нечем. Попросите администратора настроить SMTP у ящика.
+                Отправка не настроена — проверьте настройки SMTP у ящика.
               </Typography.Text>
             )}
           </div>
           {connected ? null : (
             <div style={{ marginTop: 4 }}>
               <Typography.Text style={{ fontSize: 12 }}>
-                {"Попросите администратора подключить ящик " + account.username}
+                {"Вы ещё не подключили ящик " + account.username + ". Добавьте его в «Настройки → Почта» — параметры ниже."}
               </Typography.Text>
               <div style={{ marginTop: 4 }}>
-                <Button size="small" onClick={() => void copyParams()}>
-                  Скопировать параметры
-                </Button>
+                <Space wrap>
+                  <Button size="small" type="primary" onClick={() => openSettings("mail")}>
+                    Открыть «Почту»
+                  </Button>
+                  <Button size="small" onClick={() => void copyParams()}>
+                    Скопировать параметры
+                  </Button>
+                </Space>
               </div>
             </div>
           )}
@@ -141,9 +146,9 @@ export function ServiceAccountHint() {
       ) : (
         <Typography.Text style={{ fontSize: 12 }}>
           {problemCode === "account_missing"
-            ? "Выбранный служебный ящик больше не существует — попросите администратора выбрать другой."
+            ? "Служебный ящик больше не существует — задайте его в настройках предприятия."
             : problemCode === "not_configured"
-              ? "Служебный ящик не выбран: отправка возьмёт первый ящик с настроенной отправкой. Попросите администратора выбрать служебный ящик в настройках."
+              ? "Служебный ящик не задан на сервере — письма СЭД уйти не смогут."
               : problemCode === "smtp_not_configured"
                 ? "У служебного ящика не настроена отправка — письмо отправить нечем."
                 : "Служебный ящик не выбран."}

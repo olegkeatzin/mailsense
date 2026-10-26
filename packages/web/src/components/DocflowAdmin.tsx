@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { EdmsMailAllowanceModal } from "./EdmsMailAllowanceModal";
 import {
   Alert,
   Button,
@@ -42,8 +41,6 @@ export function UsersTab() {
   const [q, setQ] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
-  /** Кому сейчас выдаём ящики для СЭД (T57). */
-  const [mailUser, setMailUser] = useState<User | null>(null);
   const [form] = Form.useForm();
 
   const load = useCallback(async () => {
@@ -170,6 +167,9 @@ export function UsersTab() {
             title: "ФИО",
             dataIndex: "fullName",
             width: 220,
+            // Первая колонка стоит на месте при горизонтальной прокрутке: иначе на узком
+            // экране уезжает имя, и непонятно, к кому относятся остальные столбцы.
+            fixed: "left",
             render: (v: string, u) => (
               <Space direction="vertical" size={0}>
                 <Typography.Text strong>{v || "—"}</Typography.Text>
@@ -230,15 +230,6 @@ export function UsersTab() {
             }
           },
           {
-            title: "Почта для СЭД",
-            width: 130,
-            render: (_v, u) => (
-              <Button size="small" type="link" onClick={() => setMailUser(u)}>
-                Настроить
-              </Button>
-            )
-          },
-          {
             title: "",
             width: 130,
             render: (_v, u) =>
@@ -272,8 +263,6 @@ export function UsersTab() {
           }
         ]}
       />
-
-      <EdmsMailAllowanceModal user={mailUser} onClose={() => setMailUser(null)} />
 
       <Modal
         open={createOpen}

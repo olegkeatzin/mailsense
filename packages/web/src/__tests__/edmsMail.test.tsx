@@ -267,7 +267,7 @@ describe("личные настройки: раздел «Почта для СЭ
     await waitFor(() => expect(resolutionApi.saveMyEdmsMail).toHaveBeenCalledWith(null));
   });
 
-  it("доступных ящиков нет — честный текст вместо пустого списка", async () => {
+  it("ящиков нет — просим подключить ящик из LDAP, а не идти к администратору", async () => {
     (resolutionApi.myEdmsMail as jest.Mock).mockResolvedValue({
       accountId: null,
       account: null,
@@ -276,7 +276,10 @@ describe("личные настройки: раздел «Почта для СЭ
     } as EdmsMailSettings);
     render(<EdmsMailSection />);
 
-    expect(await screen.findByText("Доступных ящиков нет")).not.toBeNull();
+    expect(await screen.findByText("Ящик ещё не подключён")).not.toBeNull();
+    expect(screen.getByText(/закреплённом за вами в LDAP/)).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Перейти в «Почту»" })).not.toBeNull();
+    expect(screen.queryByText(/Попросите администратора/)).toBeNull();
     expect(screen.queryByRole("button", { name: "Сохранить выбор" })).toBeNull();
   });
 });
