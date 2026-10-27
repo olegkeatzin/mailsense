@@ -50,6 +50,9 @@ const STATUS_OPTIONS = (Object.keys(DOCUMENT_STATUS_TITLES) as DocumentStatus[])
 
 export default function DocumentCard({ documentId, onClose, onChanged }: Props) {
   const can = useStore((s) => s.can);
+  const setSection = useStore((s) => s.setSection);
+  const selectEmail = useStore((s) => s.select);
+  const canUseMail = useStore((s) => s.canUseMail);
   const [doc, setDoc] = useState<DocCard | null>(null);
   const [history, setHistory] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -142,6 +145,14 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       duration: 8
     });
   };
+
+  /** Открыть связанное письмо в почте: из журнала человек должен попасть в сам документ. */
+  async function openLinkedEmail(emailId: string) {
+    if (!canUseMail()) return;
+    onClose();
+    setSection("mail");
+    await selectEmail(emailId);
+  }
 
   async function actResolution(id: string, fn: () => Promise<unknown>, ok: string) {
     try {
@@ -511,7 +522,22 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                 dataSource={doc.emails}
                 renderItem={(e) => (
                   <List.Item>
-                    <span style={{ color: "#595959", marginRight: 8 }}>{e.role === "source" ? "входящее" : e.role}</span>
+                    <span style={{ marginRight: 8 }}>
+                      {canUseMail() ? (
+                        <Button
+                          type="link"
+                          size="small"
+                          style={{ padding: 0, height: "auto" }}
+                          title="Открыть письмо в почте"
+                          aria-label={"Открыть письмо: " + (e.role === "source" ? "входящее" : e.role)}
+                          onClick={() => void openLinkedEmail(e.emailId)}
+                        >
+                          {e.role === "source" ? "Входящее письмо" : e.role}
+                        </Button>
+                      ) : (
+                        <span style={{ color: "#595959" }}>{e.role === "source" ? "входящее" : e.role}</span>
+                      )}
+                    </span>
                     {/* Внутренний идентификатор письма человеку бесполезен: показываем, когда привязано. */}
                     <span style={{ color: "#595959", fontSize: 12 }}>
                       {e.linkedAt ? "привязано " + dayjs(e.linkedAt).format("DD.MM.YYYY HH:mm") : "привязано"}

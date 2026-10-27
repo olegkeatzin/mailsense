@@ -11,6 +11,7 @@ configure({ asyncUtilTimeout: 8000 });
 jest.mock("../api", () => ({
   api: {
     document: jest.fn(),
+    email: jest.fn(),
     audit: jest.fn(),
     updateDocument: jest.fn(),
     saveSetting: jest.fn(),
@@ -468,6 +469,38 @@ describe("действия СЭД передают выбранный ящик (
     );
     // Сырую серверную формулировку не показываем.
     expect((document.body.textContent ?? "").match(/403 Forbidden/)).toBeNull();
+  });
+
+  it("связанное письмо открывается в почте по клику", async () => {
+    (api.document as jest.Mock).mockResolvedValue({
+      id: "doc-1",
+      regNumber: "вх38",
+      regDate: "2026-10-06",
+      docNumber: "17",
+      docDate: "2026-10-05",
+      sender: "Прокуратура",
+      summary: "Обращение",
+      sheetsCount: 2,
+      caseNumber: "12-4",
+      documentName: "Обращение",
+      status: "new",
+      emailId: "mail-1",
+      correspondentId: null,
+      createdBy: null,
+      createdAt: "2026-10-06T10:00:00.000Z",
+      updatedAt: "2026-10-06T10:00:00.000Z",
+      archivedAt: null,
+      emails: [{ emailId: "mail-1", role: "source", linkedAt: "2026-10-06T10:05:00.000Z" }]
+    });
+    (api.email as jest.Mock).mockResolvedValue({ id: "mail-1", subject: "Входящее" });
+    const onClose = jest.fn();
+    render(<DocumentCard documentId="doc-1" onClose={onClose} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Открыть письмо: входящее" }));
+
+    await waitFor(() => expect(useStore.getState().selectedId).toBe("mail-1"));
+    expect(useStore.getState().section).toBe("mail");
+    expect(onClose).toHaveBeenCalled();
   });
 
   it("без доступного ящика письмо не уходит — показываем причину", async () => {
