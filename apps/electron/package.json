@@ -47,6 +47,7 @@
     "@types/node": "^22.10.5",
     "electron": "^35.0.0",
     "electron-builder": "^25.1.8",
+    "resedit": "1.7.2",
     "tsup": "^8.3.5",
     "typescript": "^5.7.3"
   },
@@ -59,6 +60,7 @@
       "output": "release"
     },
     "asar": true,
+    "afterPack": "scripts/after-pack.cjs",
     "asarUnpack": [
       "**/*.node"
     ],
