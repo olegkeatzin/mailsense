@@ -12,6 +12,7 @@ jest.mock("../api", () => ({
   api: {
     document: jest.fn(),
     email: jest.fn(),
+    documentEmailForMe: jest.fn(),
     audit: jest.fn(),
     updateDocument: jest.fn(),
     saveSetting: jest.fn(),
@@ -493,6 +494,10 @@ describe("действия СЭД передают выбранный ящик (
       emails: [{ emailId: "mail-1", role: "source", linkedAt: "2026-10-06T10:05:00.000Z" }]
     });
     (api.email as jest.Mock).mockResolvedValue({ id: "mail-1", subject: "Входящее" });
+    (api.documentEmailForMe as jest.Mock).mockResolvedValue({
+      emailId: "mail-1",
+      label: "Направлено руководителю"
+    });
     const onClose = jest.fn();
     render(<DocumentCard documentId="doc-1" onClose={onClose} />);
 

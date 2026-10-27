@@ -66,6 +66,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
   const [signerQuery, setSignerQuery] = useState("");
   const [forwardTo, setForwardTo] = useState<string | null>(null);
   const [forwardBusy, setForwardBusy] = useState(false);
+  const [linkedBusy, setLinkedBusy] = useState(false);
   /** Кандидаты на получение письма: только те, кто вправе подписывать. */
   const [signers, setSigners] = useState<User[]>([]);
 
@@ -146,12 +147,27 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
     });
   };
 
-  /** Открыть связанное письмо в почте: из журнала человек должен попасть в сам документ. */
-  async function openLinkedEmail(emailId: string) {
-    if (!canUseMail()) return;
-    onClose();
-    setSection("mail");
-    await selectEmail(emailId);
+  /**
+   * Открыть связанное письмо в почте. Сервер выбирает СВОЮ копию: у аппарата —
+   * входящее, у руководителя — запрос от аппарата; чужой id не подставляем.
+   */
+  async function openLinkedEmail() {
+    if (!canUseMail() || !documentId) return;
+    setLinkedBusy(true);
+    try {
+      const target = await api.documentEmailForMe(documentId);
+      if (!target.emailId) {
+        message.warning("Нет доступной копии письма в вашем ящике");
+        return;
+      }
+      onClose();
+      setSection("mail");
+      await selectEmail(target.emailId);
+    } catch (e) {
+      message.error("Не удалось открыть письмо: " + humanError(e));
+    } finally {
+      setLinkedBusy(false);
+    }
   }
 
   async function actResolution(id: string, fn: () => Promise<unknown>, ok: string) {
@@ -527,12 +543,13 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                         <Button
                           type="link"
                           size="small"
+                          loading={linkedBusy}
                           style={{ padding: 0, height: "auto" }}
                           title="Открыть письмо в почте"
                           aria-label={"Открыть письмо: " + (e.role === "source" ? "входящее" : e.role)}
-                          onClick={() => void openLinkedEmail(e.emailId)}
+                          onClick={() => void openLinkedEmail()}
                         >
-                          {e.role === "source" ? "Входящее письмо" : e.role}
+                          Открыть письмо
                         </Button>
                       ) : (
                         <span style={{ color: "#595959" }}>{e.role === "source" ? "входящее" : e.role}</span>

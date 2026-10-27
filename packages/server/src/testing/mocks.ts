@@ -126,6 +126,7 @@ export function coreMockModule(): Record<string, unknown> {
     // Поиск ящика по адресу (T50): в ядре сравнение в JS, регистр и пробелы не важны.
     getAccountByUsername: jest.fn(() => null),
     getEmailView: jest.fn(() => null),
+    findEmailCopy: jest.fn(() => null),
     listEmailsWithAnalysis: jest.fn(() => []),
     listThreadsGrouped: jest.fn(() => []),
     listDrafts: jest.fn(() => []),

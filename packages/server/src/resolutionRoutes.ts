@@ -274,6 +274,14 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // Отчёт — отдельное право: задачу видеть мало, отчитываться должен тот, кому поручено.
   const report = [requireDocflowDb, requirePermission("task.report")];
 
+  /** Своя копия письма по Message-ID: чужие ящики не просматриваем. */
+  function ownCopyOf(req: express.Request, storedEmailId: string | null | undefined): string | null {
+    if (!storedEmailId) return null;
+    const mail = getEmailView(storedEmailId);
+    if (!mail?.messageId) return null;
+    return findEmailCopy(mail.messageId, deps.ownedAccountIds(req))?.id ?? null;
+  }
+
   /**
    * Руководитель отправил резолюцию сам: письмо уходит в ответ на исходное
    * сообщение, аппарату и исполнителям. Аппарат после этого только ведёт журнал.
@@ -612,6 +620,67 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           return false;
         })
       );
+    })
+  );
+
+  /** Копия письма в СВОЁМ ящике: ссылка из журнала не должна искать чужую запись. */
+  app.get(
+    "/api/docflow/emails/:emailId/my-copy",
+    ...view,
+    asyncHandler(async (req, res) => {
+      res.json({ emailId: ownCopyOf(req, req.params.emailId) });
+    })
+  );
+
+  /**
+   * Письмо по документу, доступное текущему человеку: у аппарата — входящее,
+   * у руководителя — запрос, который он получил. Чужие копии не подставляем.
+   */
+  app.get(
+    "/api/docflow/journal/:documentId/email-for-me",
+    ...view,
+    asyncHandler(async (req, res) => {
+      const doc = await getDocument(req.params.documentId);
+      if (!doc) throw new AppError("Документ не найден", 404, "not_found");
+      const resolutions = await listDocumentResolutions(req.params.documentId);
+      const candidates: Array<{ label: string; emailId: string | null }> = [
+        { label: "Входящее письмо", emailId: doc.emailId },
+        ...resolutions.flatMap((r) => [
+          { label: "Направлено руководителю", emailId: r.requestEmailId },
+          { label: "Ответ руководителя", emailId: r.approvalEmailId },
+          { label: "Отправлено исполнителям", emailId: r.dispatchEmailId }
+        ])
+      ];
+      for (const candidate of candidates) {
+        const emailId = ownCopyOf(req, candidate.emailId);
+        if (emailId) return res.json({ emailId, label: candidate.label });
+      }
+      res.json({ emailId: null, label: null });
+    })
+  );
+
+  /**
+   * Ссылки на письма по делу, доступные текущему человеку.
+   * У руководителя это полученный запрос и его отправленные ответы, у аппарата —
+   * отправленный запрос и полученный ответ: id в базе один, копии в ящиках разные.
+   */
+  app.get(
+    "/api/docflow/resolutions/:id/email-links",
+    ...view,
+    asyncHandler(async (req, res) => {
+      const detail = await getResolutionDetail(req.params.id);
+      if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
+      assertResolutionVisible(req, detail);
+      const raw = [
+        { key: "source", label: "Входящее письмо", emailId: detail.documentEmailId },
+        { key: "request", label: "Направлено руководителю", emailId: detail.requestEmailId },
+        { key: "approval", label: "Ответ руководителя", emailId: detail.approvalEmailId },
+        { key: "dispatch", label: "Отправлено исполнителям", emailId: detail.dispatchEmailId }
+      ];
+      const links = raw
+        .map((l) => ({ key: l.key, label: l.label, emailId: ownCopyOf(req, l.emailId) }))
+        .filter((l): l is { key: string; label: string; emailId: string } => !!l.emailId);
+      res.json({ links });
     })
   );
 

@@ -843,6 +843,63 @@ describe("пересылка руководителю: сначала захва
   });
 });
 
+describe("ссылки на письма по делу ведут только в свои копии", () => {
+  it("my-copy находит копию по Message-ID", async () => {
+    mockedCore.getEmailView.mockReturnValue({ id: "stored-1", messageId: "<m-1@test>" });
+    mockedCore.findEmailCopy.mockReturnValue({ id: "copy-1" });
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/emails/stored-1/my-copy", {
+      token: token("manager")
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ emailId: "copy-1" });
+    expect(mockedCore.findEmailCopy).toHaveBeenCalledWith("<m-1@test>", expect.any(Array));
+  });
+
+  it("document email-for-me берёт запрос руководителя, если входящее ему недоступно", async () => {
+    mockedDocflow.getDocument.mockResolvedValue({ id: "doc-1", emailId: "src-mail", regNumber: "вх1" });
+    mockedDocflow.listDocumentResolutions.mockResolvedValue([
+      { ...resolutionDetail({ status: "approved" }), requestEmailId: "req-mail" }
+    ]);
+    mockedCore.getEmailView.mockImplementation((id: string) => ({ id, messageId: id + "@test" }));
+    mockedCore.findEmailCopy.mockImplementation((messageId: string) =>
+      messageId === "req-mail@test" ? { id: "copy-req" } : null
+    );
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/journal/doc-1/email-for-me", {
+      token: token("manager")
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ emailId: "copy-req", label: "Направлено руководителю" });
+  });
+
+  it("email-links скрывает чужие копии и отдаёт свои", async () => {
+    mockedDocflow.getResolutionDetail.mockResolvedValue({
+      ...resolutionDetail({ status: "approved" }),
+      documentEmailId: "src-mail",
+      requestEmailId: "req-mail",
+      approvalEmailId: "approval-mail",
+      dispatchEmailId: "dispatch-mail"
+    });
+    mockedCore.getEmailView.mockImplementation((id: string) => ({ id, messageId: id + "@test" }));
+    mockedCore.findEmailCopy.mockImplementation((messageId: string) =>
+      messageId === "req-mail@test" || messageId === "dispatch-mail@test" ? { id: "copy-" + messageId } : null
+    );
+
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1/email-links", {
+      token: token("manager")
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.links).toEqual([
+      { key: "request", label: "Направлено руководителю", emailId: "copy-req-mail@test" },
+      { key: "dispatch", label: "Отправлено исполнителям", emailId: "copy-dispatch-mail@test" }
+    ]);
+  });
+});
+
 describe("резолюция, созданная руководителем из письма", () => {
   it("руководитель создаёт и сразу утверждает её по документу; исполнителю нельзя", async () => {
     mockedCore.getEmailView.mockReturnValue({

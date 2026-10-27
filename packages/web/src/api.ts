@@ -352,6 +352,11 @@ export const api = {
   document: (id: string) => request<DocumentCard>("/api/docflow/journal/" + id),
   documentByEmail: (emailId: string) =>
     request<DocumentRecord | null>("/api/docflow/journal/by-email/" + encodeURIComponent(emailId)),
+  /** Письмо по документу в СВОЁМ ящике: у аппарата входящее, у руководителя запрос. */
+  documentEmailForMe: (documentId: string) =>
+    request<{ emailId: string | null; label: string | null }>(
+      "/api/docflow/journal/" + encodeURIComponent(documentId) + "/email-for-me"
+    ),
   registerDocument: (input: Record<string, unknown>) =>
     request<DocumentRecord>("/api/docflow/journal", { method: "POST", body: JSON.stringify(input) }),
   updateDocument: (id: string, patch: Record<string, unknown>) =>
@@ -718,6 +723,13 @@ export const resolutionApi = {
   },
 
 
+
+  /** Письма по делу, доступные текущему человеку (свои копии, не чужие id). */
+  emailLinks(resolutionId: string) {
+    return request<{
+      links: Array<{ key: string; label: string; emailId: string }>;
+    }>("/api/docflow/resolutions/" + encodeURIComponent(resolutionId) + "/email-links");
+  },
 
   /** В переписке ли письмо и по какому поручению — факт из заголовков, а не догадка. */
   replyContext(emailId: string) {
