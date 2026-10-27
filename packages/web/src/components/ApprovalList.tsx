@@ -176,7 +176,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
             Исполнители: <b>{assignees}</b>
           </div>
           <div style={{ color: "#595959", marginTop: 8 }}>
-            Отменить утверждение нельзя: дальше аппарат отправит поручение исполнителям.
+            Отменить утверждение нельзя: после него письмо сразу уйдёт аппарату и исполнителям.
           </div>
         </div>
       ),
@@ -191,9 +191,10 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                 kind: (uid === f.resp ? "responsible" : "coexecutor") as AssigneeKind
               })),
               priority: f.priority,
-              deadline: f.deadline
+              deadline: f.deadline,
+              sendEmail: true
             }),
-          "Утверждено"
+          "Утверждено и отправлено"
         )
     });
   }

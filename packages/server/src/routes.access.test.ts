@@ -843,6 +843,25 @@ describe("пересылка руководителю: сначала захва
   });
 });
 
+describe("утверждение руководителем сразу отправляет письмо", () => {
+  it("approve с sendEmail уходит аппарату и исполнителям", async () => {
+    mockedDocflow.approveResolution.mockResolvedValue({ id: "res-1", status: "approved" });
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/approve", {
+      token: token("manager"),
+      body: {
+        text: "Щеглову пойти гулять",
+        assignees: [{ userId: "u-assignee", kind: "responsible" }],
+        sendEmail: true
+      }
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: "sent", sentTo: expect.arrayContaining(["stand@mail.test"]) });
+    expect(mockedCore.sendEmail).toHaveBeenCalled();
+    expect(mockedDocflow.dispatchResolution).toHaveBeenCalled();
+  });
+});
+
 describe("ссылки на письма по делу ведут только в свои копии", () => {
   it("my-copy находит копию по Message-ID", async () => {
     mockedCore.getEmailView.mockReturnValue({ id: "stored-1", messageId: "<m-1@test>" });

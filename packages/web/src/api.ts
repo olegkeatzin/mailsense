@@ -1089,8 +1089,8 @@ export async function materializeAttachments(
       });
       continue;
     }
-    let data = item.data;
-    if (data === undefined && item.ref) {
+    let data: string | undefined;
+    if (item.ref) {
       try {
         data = await load(item.ref.emailId, item.ref.attachmentId);
       } catch (err) {

@@ -288,7 +288,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
    */
   async function sendApprovedResolution(
     resolutionId: string,
-    emailId: string,
+    emailId: string | null,
     actor: Actor,
     accountId?: string | null
   ) {
@@ -297,12 +297,14 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     const withEmail = detail.assignees.filter((a) => !!a.email);
     if (!withEmail.length) throw new AppError("У исполнителей не заполнены адреса", 400, "no_emails");
 
-    const mail = getEmailView(emailId);
-    if (!mail) throw new AppError("Письмо не найдено", 400, "no_email");
+    const mail = emailId ? getEmailView(emailId) : null;
+    if (emailId && !mail) throw new AppError("Письмо не найдено", 400, "no_email");
     // Для ответа берём ПИСЬМО-ЗАПРОС, а не сам ответ руководителя: именно его
-    // отправитель — аппарат, и именно в его тред должен уйти ответ.
+    // отправитель — аппарат, и именно в его тред должен уйти ответ. Если approve
+    // пришёл из очереди, письма под рукой нет — берём источник документа.
     const requestMail = detail.requestEmailId ? getEmailView(detail.requestEmailId) : null;
-    const sourceMail = requestMail ?? mail;
+    const sourceMail =
+      requestMail ?? mail ?? (detail.documentEmailId ? getEmailView(detail.documentEmailId) : null);
     const account = await resolveSendAccount(actor.id, accountId ?? null);
 
     // Ответ уходит и аппарату (отправителю запроса), и исполнителям.
@@ -331,7 +333,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       : null;
     if (serviceAccount?.username) {
       addRecipient(serviceAccount.username, "Аппарат", true);
-    } else if (detail.requestEmailId && sourceMail.from?.address) {
+    } else if (detail.requestEmailId && sourceMail?.from?.address) {
       // Служебный ящик не настроен: для системного запроса берём его отправителя.
       addRecipient(sourceMail.from.address, sourceMail.from.name, true);
     }
@@ -340,7 +342,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
 
     const doc = await getDocument(detail.documentId);
     const number = doc?.regNumber || detail.documentNumber || "без номера";
-    const sourceSubject = (sourceMail.subject ?? "").trim();
+    const sourceSubject = (sourceMail?.subject ?? "").trim();
     const subject = sourceSubject
       ? /^re:/i.test(sourceSubject)
         ? sourceSubject
@@ -371,11 +373,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         to: recipients,
         subject,
         bodyText,
-        inReplyToEmailId: sourceMail.id,
-        inReplyToMessageId: sourceMail.messageId ?? null,
-        references: sourceMail.messageId
+        inReplyToEmailId: sourceMail?.id ?? null,
+        inReplyToMessageId: sourceMail?.messageId ?? null,
+        references: sourceMail?.messageId
           ? [...(sourceMail.references ?? []), sourceMail.messageId]
-          : (sourceMail.references ?? []),
+          : (sourceMail?.references ?? []),
         headers: {
           "X-MailSense-EDMS": "doc=" + detail.documentId + "; res=" + resolutionId + "; kind=dispatch; v=1"
         }
@@ -1076,10 +1078,10 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         deadline: b.deadline !== undefined ? (b.deadline ? String(b.deadline) : null) : undefined,
         emailId: b.emailId ? String(b.emailId) : null
       });
-      if (b.sendEmail === true && b.emailId) {
+      if (b.sendEmail === true) {
         const sent = await sendApprovedResolution(
           approved.id,
-          String(b.emailId),
+          b.emailId ? String(b.emailId) : null,
           actorOf(req),
           b.accountId ? String(b.accountId) : null
         );
