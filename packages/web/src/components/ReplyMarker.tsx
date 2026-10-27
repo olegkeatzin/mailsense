@@ -9,17 +9,21 @@ import type { AssigneeKind, ReplyContextItem } from "../resolutionTypes";
 import { humanError } from "../utils/humanError";
 
 /**
- * Разметка письма в почте: аппарат говорит, что это за письмо (Р9, этап 4).
+ * Разметка письма в почте: человек говорит, что это за письмо (Р9, этап 4).
  *
  * ⚠️ **Система этого не решает.** Ни при сканировании ящика, ни при открытии письма: определяет
  * человек, прочитав письмо. Система сообщает только ФАКТ из заголовков — что письмо отвечает
- * в переписке по такому-то поручению. Это экономит поиск, но ничего не решает за аппарата.
+ * в переписке по такому-то поручению.
+ *
+ * ⚠️ Этап могли пройти в Outlook. Поэтому аппарат подтверждает чужие ответы, руководитель
+ * утверждает свою резолюцию сам, а исполнитель сам регистрирует свой отчёт.
  *
  * ⚠️ **ИИ не классифицирует.** Он вызывается кнопкой «Заполнить с помощью ИИ» и только готовит
- * черновик полей, которые аппарат проверит и поправит.
+ * черновик полей, которые человек проверит и поправит.
  */
 export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: () => void }) {
   const can = useStore((s) => s.can);
+  const me = useStore((s) => s.authUser?.id);
   const [items, setItems] = useState<ReplyContextItem[]>([]);
   const [mode, setMode] = useState<{ kind: "approval" | "report"; item: ReplyContextItem } | null>(null);
   const [text, setText] = useState("");
@@ -60,8 +64,12 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
     void load();
   }, [load]);
 
-  // Работа аппарата: подтверждает он, значит и право его.
-  if (!can("resolution.dispatch")) return null;
+  // Аппарат подтверждает разбор, но само письмо могло быть написано в Outlook:
+  // руководитель и исполнитель тоже должны уметь зарегистрировать свой шаг здесь.
+  const isClerk = can("resolution.dispatch");
+  const isApprover = can("resolution.approve");
+  const isReporter = can("task.report");
+  if (!isClerk && !isApprover && !isReporter) return null;
 
   async function open(kind: "approval" | "report", item: ReplyContextItem) {
     setMode({ kind, item });
@@ -140,21 +148,32 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
           message.warning("Назначьте исполнителя — поручение без него не уйдёт");
           return;
         }
-        await resolutionApi.markApproval(mode.item.resolutionId, {
-          emailId,
+        const payload = {
           text,
           assignees: assignees.map((uid) => ({
             userId: uid,
             kind: (uid === responsible ? "responsible" : "coexecutor") as AssigneeKind
           })),
           deadline: deadlineValue,
-          priority: "normal"
-        });
-        message.success("Отмечено как резолюция руководителя — можно отправлять исполнителям");
-      } else {
-        // Отчёт принимает аппарат: он прочитал письмо и решил, что это отчёт. 
+          priority: "normal" as const
+        };
+        if (isClerk) {
+          // Аппарат подтверждает ответ, пришедший письмом.
+          await resolutionApi.markApproval(mode.item.resolutionId, { emailId, ...payload });
+          message.success("Отмечено как резолюция руководителя — можно отправлять исполнителям");
+        } else {
+          // Руководитель сам регистрирует свою резолюцию из Outlook.
+          await resolutionApi.approve(mode.item.resolutionId, { ...payload, emailId });
+          message.success("Резолюция утверждена — аппарат отправит её исполнителям");
+        }
+      } else if (isClerk) {
+        // Отчёт принимает аппарат: он прочитал письмо и решил, что это отчёт.
         await resolutionApi.confirmReport(mode.item.resolutionId, responsible ?? assignees[0] ?? "", text);
         message.success("Отчёт принят");
+      } else {
+        // Исполнитель сам регистрирует свой отчёт, отправленный из Outlook.
+        await resolutionApi.report(mode.item.resolutionId, text, emailId);
+        message.success("Отчёт зарегистрирован");
       }
       setMode(null);
       await load();
@@ -196,10 +215,17 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
             Отметьте, что это за письмо — система сама не определяет:
           </div>
           <Space wrap>
-            <Button type="primary" onClick={() => void open("approval", it)}>
-              Это резолюция руководителя
-            </Button>
-            <Button onClick={() => void open("report", it)}>Это отчёт об исполнении</Button>
+            {(isClerk || (isApprover && it.expects === "approval")) && (
+              <Button type="primary" onClick={() => void open("approval", it)}>
+                {isClerk ? "Это резолюция руководителя" : "Это моя резолюция"}
+              </Button>
+            )}
+            {(isClerk ||
+              (isReporter && it.expects === "report" && it.assignees.some((a) => a.userId === me))) && (
+              <Button onClick={() => void open("report", it)}>
+                {isClerk ? "Это отчёт об исполнении" : "Это мой отчёт"}
+              </Button>
+            )}
           </Space>
         </Card>
       ))}
@@ -210,7 +236,15 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
         onCancel={() => setMode(null)}
         onOk={() => void submit()}
         confirmLoading={saving}
-        okText={mode?.kind === "approval" ? "Отметить и утвердить" : "Принять отчёт"}
+        okText={
+          mode?.kind === "approval"
+            ? isClerk
+              ? "Отметить и утвердить"
+              : "Утвердить"
+            : isClerk
+              ? "Принять отчёт"
+              : "Отправить отчёт"
+        }
         width={640}
       >
         <Alert

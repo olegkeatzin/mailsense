@@ -16,6 +16,7 @@ import { humanError } from "../utils/humanError";
  */
 export default function EmailDocflowTab({ emailId, letter }: { emailId: string; letter: EmailView }) {
   const can = useStore((s) => s.can);
+  const setSection = useStore((s) => s.setSection);
   const [doc, setDoc] = useState<DocumentRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [cardId, setCardId] = useState<string | null>(null);
@@ -81,7 +82,22 @@ export default function EmailDocflowTab({ emailId, letter }: { emailId: string; 
             description={
               can("journal.register")
                 ? "Форма регистрации — во вкладке «Письмо», рядом с текстом: поля берутся из письма, и оно должно быть видно."
-                : "Регистрация доступна аппарату (роль «Секретарь»)."
+                : can("resolution.approve")
+                  ? "Если это письмо-запрос на резолюцию, она ждёт в разделе «На утверждении»: там можно написать резолюцию и назначить исполнителей."
+                  : can("task.report")
+                    ? "Если это ваш отчёт об исполнении, его можно зарегистрировать в разделе «Мои задачи»."
+                    : "Регистрация доступна аппарату (роль «Секретарь»)."
+            }
+            action={
+              can("resolution.approve") ? (
+                <Button size="small" onClick={() => setSection("approvals")}>
+                  На утверждении
+                </Button>
+              ) : can("task.report") ? (
+                <Button size="small" onClick={() => setSection("tasks")}>
+                  Мои задачи
+                </Button>
+              ) : null
             }
           />
         </>

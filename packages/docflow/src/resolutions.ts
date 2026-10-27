@@ -706,7 +706,15 @@ export async function forwardToManager(
 export async function approveResolution(
   id: string,
   actor: Actor,
-  opts: { comment?: string; text?: string; assignees?: AssigneeInput[]; priority?: ResolutionPriority; deadline?: string | null } = {}
+  opts: {
+    comment?: string;
+    text?: string;
+    assignees?: AssigneeInput[];
+    priority?: ResolutionPriority;
+    deadline?: string | null;
+    /** Письмо-подтверждение из Outlook: им и регистрируется резолюция. */
+    emailId?: string | null;
+  } = {}
 ): Promise<ResolutionRecord> {
   const text = opts.text !== undefined ? opts.text.trim() : undefined;
   if (text !== undefined && !text) {
@@ -714,7 +722,12 @@ export async function approveResolution(
   }
   if (opts.assignees) await validateAssignees(opts.assignees);
 
-  const patch: Record<string, unknown> = { approvedBy: actor.id, approvedAt: now(), approvalMethod: "app" };
+  const patch: Record<string, unknown> = {
+    approvedBy: actor.id,
+    approvedAt: now(),
+    approvalMethod: opts.emailId ? "email" : "app",
+    approvalEmailId: opts.emailId ?? null
+  };
   if (text !== undefined) patch.text = text;
   if (opts.priority !== undefined) patch.priority = opts.priority;
   if (opts.deadline !== undefined) patch.deadline = opts.deadline;
@@ -724,7 +737,8 @@ export async function approveResolution(
     to: "approved",
     patch,
     step: "approved",
-    method: "app",
+    method: opts.emailId ? "email" : "app",
+    emailId: opts.emailId ?? null,
     comment: opts.comment ?? null,
     action: "resolution.approve",
     // Аппарат (prepared_by) должен узнать, что решение принято: без этого поручение

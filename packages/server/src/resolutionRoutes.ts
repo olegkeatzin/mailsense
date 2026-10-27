@@ -473,9 +473,26 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
    */
   app.get(
     "/api/docflow/emails/:emailId/reply-context",
-    ...dispatch,
+    // Подсказка нужна не только аппарату: руководитель и исполнитель тоже отвечают
+    // из Outlook и должны увидеть, к какому поручению относится письмо.
+    requireDocflowDb,
+    requireAnyPermission("resolution.dispatch", "resolution.approve", "task.report"),
     asyncHandler(async (req, res) => {
-      res.json(await findReplyContext(req.params.emailId));
+      const user = req.user;
+      if (!user) throw new AppError("Требуется вход", 401, "unauthorized");
+      const items = await findReplyContext(req.params.emailId);
+      const isClerk = user.permissions.includes("resolution.dispatch");
+      const isApprover = user.permissions.includes("resolution.approve");
+      const isReporter = user.permissions.includes("task.report");
+      res.json(
+        items.filter((it) => {
+          if (isClerk) return true;
+          // Подписант видит только ожидающие его решения, исполнитель — только свои задачи.
+          if (isApprover && it.expects === "approval") return true;
+          if (isReporter && it.assignees.some((a) => a.userId === user.id)) return true;
+          return false;
+        })
+      );
     })
   );
 
@@ -485,7 +502,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
    */
   app.post(
     "/api/docflow/emails/:emailId/suggest-fields",
-    ...dispatch,
+    requireDocflowDb,
+    requireAnyPermission("resolution.dispatch", "resolution.approve", "task.report"),
     asyncHandler(async (req, res) => {
       const kind = (req.body ?? {}).kind === "report" ? "report" : "approval";
       res.json(await suggestFields(req.params.emailId, kind));
@@ -804,7 +822,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           text: b.text !== undefined ? String(b.text) : undefined,
           assignees: b.assignees !== undefined ? assigneesFrom(b.assignees) : undefined,
           priority: b.priority as ResolutionPriority | undefined,
-          deadline: b.deadline !== undefined ? (b.deadline ? String(b.deadline) : null) : undefined
+          deadline: b.deadline !== undefined ? (b.deadline ? String(b.deadline) : null) : undefined,
+          emailId: b.emailId ? String(b.emailId) : null
         })
       );
     })

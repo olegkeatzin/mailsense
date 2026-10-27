@@ -556,6 +556,8 @@ export const resolutionApi = {
       assignees?: Array<{ userId: string; kind: AssigneeKind }>;
       priority?: ResolutionPriority;
       deadline?: string | null;
+      /** Письмо-подтверждение из Outlook: им и регистрируется резолюция. */
+      emailId?: string;
     } = {}
   ) {
     return request<Resolution>("/api/docflow/resolutions/" + id + "/approve", {
