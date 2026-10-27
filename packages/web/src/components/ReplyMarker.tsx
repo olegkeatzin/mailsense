@@ -380,13 +380,13 @@ export function ReplyMarker({
 
       <div style={{ marginBottom: 12 }}>
         <Button type="link" style={{ paddingLeft: 0 }} onClick={() => void openManual()}>
-          Не нашли поручение? Связать вручную
+          Выбрать поручение или создать резолюцию
         </Button>
       </div>
 
       <Modal
         open={bindOpen}
-        title="Связать письмо с поручением"
+        title="Поручение по письму"
         onCancel={() => setBindOpen(false)}
         footer={null}
         width={720}
@@ -396,7 +396,7 @@ export function ReplyMarker({
           showIcon
           style={{ marginBottom: 12 }}
           message="Автоматически связать не удалось"
-          description="Письмо могло быть написано в Outlook новым сообщением. Выберите поручение из журнала — дальнейшее действие запишется в него."
+          description="Письмо могло быть написано в Outlook новым сообщением. Выберите существующее поручение или документ без поручения — если записи ещё нет, резолюция будет создана и утверждена."
         />
         <Input
           allowClear

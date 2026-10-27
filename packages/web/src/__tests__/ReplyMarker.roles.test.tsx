@@ -99,7 +99,7 @@ it("если тред не совпал, руководитель выбирае
   });
 
   render(<ReplyMarker emailId="e-1" onMarked={jest.fn()} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Не нашли поручение? Связать вручную" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Выбрать поручение или создать резолюцию" }));
   fireEvent.click(await screen.findByRole("button", { name: "Выбрать" }));
   fireEvent.change(await screen.findByPlaceholderText("Кому и что сделать"), {
     target: { value: "Петровой подготовить ответ" }
@@ -127,7 +127,7 @@ it("руководитель может создать резолюцию по �
   });
 
   render(<ReplyMarker emailId="e-1" onMarked={jest.fn()} replyText="Прошу указать поручение" />);
-  fireEvent.click(await screen.findByRole("button", { name: "Не нашли поручение? Связать вручную" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Выбрать поручение или создать резолюцию" }));
   expect(await screen.findByText("Документы без поручения")).not.toBeNull();
   fireEvent.click(await screen.findByRole("button", { name: "Создать резолюцию" }));
 
