@@ -261,7 +261,12 @@ export function ReplyMarker({
         }
       } else if (isClerk) {
         // Отчёт принимает аппарат: он прочитал письмо и решил, что это отчёт.
-        await resolutionApi.confirmReport(mode.item.resolutionId, responsible ?? assignees[0] ?? "", text);
+        await resolutionApi.confirmReport(
+          mode.item.resolutionId,
+          responsible ?? assignees[0] ?? "",
+          text,
+          emailId
+        );
         message.success("Отчёт принят");
       } else {
         // Исполнитель сам регистрирует свой отчёт, отправленный из Outlook.

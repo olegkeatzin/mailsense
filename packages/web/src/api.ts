@@ -732,10 +732,10 @@ export const resolutionApi = {
   },
 
   /** Принять отчёт: текст можно поправить — дальше срабатывает правило закрытия. */
-  confirmReport(resolutionId: string, userId: string, text?: string) {
+  confirmReport(resolutionId: string, userId: string, text?: string, emailId?: string | null) {
     return request<Resolution>("/api/docflow/resolutions/" + resolutionId + "/report/confirm", {
       method: "POST",
-      body: JSON.stringify({ userId, text })
+      body: JSON.stringify({ userId, text, emailId })
     });
   },
 

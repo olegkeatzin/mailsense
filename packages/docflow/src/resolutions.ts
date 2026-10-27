@@ -1509,7 +1509,7 @@ export async function listAwaitingReports(): Promise<
 export async function confirmReport(
   resolutionId: string,
   userId: string,
-  input: { text?: string },
+  input: { text?: string; emailId?: string | null },
   actor: Actor
 ): Promise<ResolutionRecord> {
   const db = getDocflowDb();
@@ -1552,7 +1552,7 @@ export async function confirmReport(
       entityType: "resolution",
       entityId: resolutionId,
       oldValue: stringify({ summary: mine.reportSummary }),
-      newValue: stringify({ text, executorId: userId }),
+      newValue: stringify({ text, executorId: userId, emailId: input.emailId ?? null }),
       createdAt: ts
     });
   });

@@ -1066,7 +1066,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const confirmed = await confirmReport(
         req.params.id,
         userId,
-        { text: b.text !== undefined ? String(b.text) : undefined },
+        { text: b.text !== undefined ? String(b.text) : undefined, emailId: b.emailId ? String(b.emailId) : null },
         actorOf(req)
       );
       scheduleStatsRecompute(confirmed);
