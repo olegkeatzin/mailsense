@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { installDomEnvironment } from "./dom";
 
 jest.mock("../api", () => ({
-  api: {},
+  api: { journal: jest.fn().mockResolvedValue({ items: [], total: 0 }) },
   resolutionApi: {
     replyContext: jest.fn(),
     executorCandidates: jest.fn().mockResolvedValue([]),
@@ -12,13 +12,14 @@ jest.mock("../api", () => ({
     confirmReport: jest.fn(),
     approve: jest.fn().mockResolvedValue({}),
     report: jest.fn().mockResolvedValue({}),
+    createApprovedFromEmail: jest.fn().mockResolvedValue({}),
     forApproval: jest.fn().mockResolvedValue({ items: [], total: 0 }),
     board: jest.fn().mockResolvedValue([]),
     myTasks: jest.fn().mockResolvedValue([])
   }
 }));
 
-import { resolutionApi } from "../api";
+import { api, resolutionApi } from "../api";
 import { ReplyMarker } from "../components/ReplyMarker";
 import { useStore } from "../store";
 import type { AuthStatus, AuthUser } from "../types";
@@ -107,6 +108,31 @@ it("если тред не совпал, руководитель выбирае
 
   await waitFor(() => expect(resolutionApi.approve).toHaveBeenCalledTimes(1));
   expect((resolutionApi.approve as jest.Mock).mock.calls[0][0]).toBe("res-2");
+});
+
+it("руководитель может создать резолюцию по документу, если поручения ещё нет", async () => {
+  asUser("u-signer", ["journal.view", "resolution.approve"]);
+  (resolutionApi.replyContext as jest.Mock).mockResolvedValue([]);
+  (resolutionApi.forApproval as jest.Mock).mockResolvedValue({ items: [], total: 0 });
+  (api.journal as jest.Mock).mockResolvedValue({
+    items: [
+      {
+        id: "doc-1",
+        regNumber: "вх1",
+        summary: "Приглашение на участие в ВКС",
+        resolution: null
+      }
+    ],
+    total: 1
+  });
+
+  render(<ReplyMarker emailId="e-1" onMarked={jest.fn()} replyText="Прошу указать поручение" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Не нашли поручение? Связать вручную" }));
+  expect(await screen.findByText("Документы без поручения")).not.toBeNull();
+  fireEvent.click(await screen.findByRole("button", { name: "Создать резолюцию" }));
+
+  expect(await screen.findByDisplayValue("Прошу указать поручение")).not.toBeNull();
+  expect(screen.getByRole("button", { name: "Создать и утвердить" })).not.toBeNull();
 });
 
 it("исполнитель сам регистрирует свой отчёт из письма", async () => {

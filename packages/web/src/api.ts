@@ -523,6 +523,23 @@ export const resolutionApi = {
     return request<Resolution>("/api/docflow/resolutions", { method: "POST", body: JSON.stringify(input) });
   },
 
+  /** Руководитель создаёт и сразу утверждает резолюцию по документу из письма. */
+  createApprovedFromEmail(
+    documentId: string,
+    opts: {
+      text: string;
+      assignees: Array<{ userId: string; kind: AssigneeKind }>;
+      deadline?: string | null;
+      priority?: ResolutionPriority;
+      emailId: string;
+    }
+  ) {
+    return request<Resolution>("/api/docflow/journal/" + encodeURIComponent(documentId) + "/resolutions/from-email", {
+      method: "POST",
+      body: JSON.stringify(opts)
+    });
+  },
+
   update(
     id: string,
     patch: {

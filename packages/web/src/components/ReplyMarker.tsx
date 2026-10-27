@@ -3,7 +3,7 @@ import { Alert, Button, Card, DatePicker, Form, Input, List, Modal, Select, Spac
 import dayjs from "dayjs";
 import { parseTypedDate } from "../utils/deadlineInput";
 import { RobotOutlined } from "@ant-design/icons";
-import { resolutionApi } from "../api";
+import { api, resolutionApi } from "../api";
 import { useStore } from "../store";
 import type {
   AssigneeKind,
@@ -15,6 +15,8 @@ import type {
 import { humanError } from "../utils/humanError";
 
 const BINDABLE: ResolutionStatus[] = ["pending_approval", "email_approval", "sent"];
+
+type ManualDoc = { id: string; regNumber: string; summary: string };
 
 function fromResolution(
   r: Resolution,
@@ -74,7 +76,13 @@ export function ReplyMarker({
   const [bindLoading, setBindLoading] = useState(false);
   const [bindQuery, setBindQuery] = useState("");
   const [manual, setManual] = useState<ReplyContextItem[]>([]);
-  const [mode, setMode] = useState<{ kind: "approval" | "report"; item: ReplyContextItem } | null>(null);
+  const [manualDocs, setManualDocs] = useState<ManualDoc[]>([]);
+  const [mode, setMode] = useState<{
+    kind: "approval" | "report";
+    item: ReplyContextItem;
+    /** Для резолюции, которой ещё нет: документ, по которому её создать. */
+    createDocumentId?: string;
+  } | null>(null);
   const [text, setText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -129,6 +137,7 @@ export function ReplyMarker({
     setBindQuery("");
     setBindLoading(true);
     setManual([]);
+    setManualDocs([]);
     try {
       let list: ReplyContextItem[] = [];
       if (isClerk) {
@@ -143,10 +152,18 @@ export function ReplyMarker({
           fromResolution(r, r.status === "sent" ? "report" : "approval", replyText)
         );
       } else if (isApprover) {
-        const page = await resolutionApi.forApproval();
+        const [page, journal] = await Promise.all([
+          resolutionApi.forApproval(),
+          api.journal({ limit: 200 })
+        ]);
         list = page.items
           .filter((r) => r.status === "pending_approval")
           .map((r) => fromResolution(r, "approval", replyText));
+        setManualDocs(
+          journal.items
+            .filter((d) => !d.resolution)
+            .map((d) => ({ id: d.id, regNumber: d.regNumber, summary: d.summary }))
+        );
       } else if (me) {
         const tasks = await resolutionApi.myTasks();
         list = tasks.filter((t) => !t.reportAt).map((t) => fromTask(t, me, authUser?.fullName ?? ""));
@@ -164,6 +181,44 @@ export function ReplyMarker({
     void open(item.expects, item);
   }
 
+  async function ensurePeople() {
+    let list = people;
+    if (!list.length) {
+      try {
+        const fetched = await resolutionApi.executorCandidates();
+        list = fetched.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email }));
+        setPeople(list);
+      } catch {
+        list = [];
+        setPeople([]);
+      }
+    }
+    return list;
+  }
+
+  /** Резолюции ещё нет: руководитель создаёт её по документу из журнала. */
+  async function openCreate(doc: ManualDoc) {
+    setBindOpen(false);
+    setMode({
+      kind: "approval",
+      createDocumentId: doc.id,
+      item: {
+        resolutionId: "",
+        expects: "approval",
+        documentNumber: doc.regNumber,
+        documentSummary: doc.summary,
+        taskText: "",
+        assignees: []
+      }
+    });
+    setText(replyText);
+    setAssignees([]);
+    setResponsible(undefined);
+    setUnknownAddresses([]);
+    commitDeadline(null);
+    await ensurePeople();
+  }
+
   async function open(kind: "approval" | "report", item: ReplyContextItem) {
     setMode({ kind, item });
     // Руководитель мог ответить из Outlook: тогда текста резолюции у нас ещё нет,
@@ -174,17 +229,7 @@ export function ReplyMarker({
     setResponsible(item.assignees.find((a) => a.kind === "responsible")?.userId);
     commitDeadline(null);
     if (kind === "approval") {
-      let list = people;
-      if (!list.length) {
-        try {
-          const fetched = await resolutionApi.executorCandidates();
-          list = fetched.map((u) => ({ id: u.id, fullName: u.fullName, email: u.email }));
-          setPeople(list);
-        } catch {
-          list = [];
-          setPeople([]);
-        }
-      }
+      const list = await ensurePeople();
       // Исполнители, которых руководитель указал в письме (решение заказчика):
       // сопоставляем адреса с каталогом и сразу отмечаем найденных.
       const candidates = item.executorCandidates ?? [];
@@ -250,7 +295,14 @@ export function ReplyMarker({
           deadline: deadlineValue,
           priority: "normal" as const
         };
-        if (isClerk) {
+        if (mode.createDocumentId) {
+          // Резолюции не было вовсе: создаём её по документу и сразу утверждаем.
+          await resolutionApi.createApprovedFromEmail(mode.createDocumentId, {
+            ...payload,
+            emailId
+          });
+          message.success("Резолюция создана и утверждена — аппарат отправит её исполнителям");
+        } else if (isClerk) {
           // Аппарат подтверждает ответ, пришедший письмом.
           await resolutionApi.markApproval(mode.item.resolutionId, { emailId, ...payload });
           message.success("Отмечено как резолюция руководителя — можно отправлять исполнителям");
@@ -393,23 +445,63 @@ export function ReplyMarker({
               </List.Item>
             )}
           />
+          {manualDocs.length ? (
+            <>
+              <div style={{ fontSize: 13, fontWeight: 600, margin: "16px 0 4px" }}>
+                Документы без поручения
+              </div>
+              <div style={{ fontSize: 12, color: "#595959", marginBottom: 8 }}>
+                Если поручения ещё нет, выберите документ — резолюция будет создана и сразу утверждена.
+              </div>
+              <List
+                dataSource={manualDocs.filter((d) => {
+                  const q = bindQuery.trim().toLowerCase();
+                  if (!q) return true;
+                  return [d.regNumber, d.summary].join(" ").toLowerCase().includes(q);
+                })}
+                locale={{ emptyText: "Среди документов не нашли" }}
+                renderItem={(d) => (
+                  <List.Item
+                    actions={[
+                      <Button key="create" onClick={() => void openCreate(d)}>
+                        Создать резолюцию
+                      </Button>
+                    ]}
+                  >
+                    <List.Item.Meta
+                      title={<b>{d.regNumber || "Без номера"}</b>}
+                      description={d.summary || "Без краткого содержания"}
+                    />
+                  </List.Item>
+                )}
+              />
+            </>
+          ) : null}
         </Spin>
       </Modal>
 
       <Modal
         open={!!mode}
-        title={mode?.kind === "approval" ? "Резолюция руководителя" : "Отчёт об исполнении"}
+        title={
+          mode?.createDocumentId
+            ? "Резолюция по документу " + mode.item.documentNumber
+            : mode?.kind === "approval"
+              ? "Резолюция руководителя"
+              : "Отчёт об исполнении"
+        }
         onCancel={() => setMode(null)}
         onOk={() => void submit()}
         confirmLoading={saving}
         okText={
-          mode?.kind === "approval"
-            ? isClerk
-              ? "Отметить и утвердить"
-              : "Утвердить"
-            : isClerk
-              ? "Принять отчёт"
-              : "Отправить отчёт"
+          mode?.createDocumentId
+            ? "Создать и утвердить"
+            : mode?.kind === "approval"
+              ? isClerk
+                ? "Отметить и утвердить"
+                : "Утвердить"
+              : isClerk
+                ? "Принять отчёт"
+                : "Отправить отчёт"
         }
         width={640}
       >

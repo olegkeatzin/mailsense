@@ -763,6 +763,60 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     })
   );
 
+  /**
+   * Руководитель сам регистрирует резолюцию по документу, если запрос пришёл не из
+   * MailSense: письмо в Outlook, а поручения в журнале ещё нет. Создаём черновик,
+   * проводим его через «на утверждении» и сразу утверждаем этим же человеком —
+   * иначе подписант остался бы без записи, к которой можно привязать письмо.
+   */
+  app.post(
+    "/api/docflow/journal/:documentId/resolutions/from-email",
+    ...approve,
+    asyncHandler(async (req, res) => {
+      const b = req.body ?? {};
+      const documentId = String(req.params.documentId ?? "");
+      const emailId = b.emailId ? String(b.emailId) : "";
+      if (!emailId || !getEmailView(emailId)) {
+        throw new AppError("Письмо не найдено", 400, "no_email");
+      }
+      const actor = actorOf(req);
+      const text = String(b.text ?? "");
+      const assignees = assigneesFrom(b.assignees);
+      const deadline = b.deadline !== undefined ? (b.deadline ? String(b.deadline) : null) : null;
+      const priority = (b.priority as ResolutionPriority) ?? "normal";
+
+      const created = await createResolution(
+        {
+          documentId,
+          text,
+          sourceText: "Резолюция создана из письма",
+          sourceKind: "email",
+          priority,
+          deadline,
+          assignees
+        },
+        actor
+      );
+      try {
+        await requestApproval(created.id, actor);
+        const approved = await approveResolution(created.id, actor, {
+          text,
+          deadline,
+          priority,
+          emailId
+        });
+        res.status(201).json(approved);
+      } catch (err) {
+        await cancelResolution(
+          created.id,
+          actor,
+          "Не удалось утвердить резолюцию из письма: " + (err as Error).message
+        ).catch(() => undefined);
+        throw err;
+      }
+    })
+  );
+
   // -------- Карточка и шаги процесса --------
   app.get(
     "/api/docflow/resolutions/:id",

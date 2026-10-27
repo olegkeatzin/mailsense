@@ -843,6 +843,46 @@ describe("пересылка руководителю: сначала захва
   });
 });
 
+describe("резолюция, созданная руководителем из письма", () => {
+  it("руководитель создаёт и сразу утверждает её по документу; исполнителю нельзя", async () => {
+    mockedCore.getEmailView.mockReturnValue({ id: "mail-1" });
+    mockedDocflow.createResolution.mockResolvedValue({ id: "res-new" });
+    mockedDocflow.requestApproval.mockResolvedValue({ id: "res-new", status: "pending_approval" });
+    mockedDocflow.approveResolution.mockResolvedValue({ id: "res-new", status: "approved" });
+
+    const body = {
+      emailId: "mail-1",
+      text: "Петровой подготовить ответ",
+      deadline: "2026-11-01",
+      assignees: [{ userId: "u-assignee", kind: "responsible" }]
+    };
+    const created = await request(
+      app.baseUrl,
+      "POST",
+      "/api/docflow/journal/doc-1/resolutions/from-email",
+      { token: token("manager"), body }
+    );
+    expect(created.status).toBe(201);
+    expect(mockedDocflow.createResolution).toHaveBeenCalledWith(
+      expect.objectContaining({ documentId: "doc-1", text: "Петровой подготовить ответ", sourceKind: "email" }),
+      expect.anything()
+    );
+    expect(mockedDocflow.approveResolution).toHaveBeenCalledWith(
+      "res-new",
+      expect.anything(),
+      expect.objectContaining({ emailId: "mail-1", text: "Петровой подготовить ответ" })
+    );
+
+    const denied = await request(
+      app.baseUrl,
+      "POST",
+      "/api/docflow/journal/doc-1/resolutions/from-email",
+      { token: token("executor"), body }
+    );
+    expect(denied.status).toBe(403);
+  });
+});
+
 describe("ответ руководителя письмом снова сопоставляется с поручением", () => {
   it("письмо из пересылки находится в списке ожидающих утверждения", async () => {
     // 1) Аппарат переслал письмо руководителю: запись создана, письмо записано.
