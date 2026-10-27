@@ -55,6 +55,7 @@
     "productName": "MailSense",
     "publish": null,
     "directories": {
+      "buildResources": "assets",
       "output": "release"
     },
     "asar": true,
@@ -76,12 +77,21 @@
       {
         "from": "../../packages/web/dist",
         "to": "web"
+      },
+      {
+        "from": "assets/icon.ico",
+        "to": "icon.ico"
+      },
+      {
+        "from": "assets/icon.png",
+        "to": "icon.png"
       }
     ],
     "linux": {
       "target": [
         "deb"
       ],
+      "icon": "assets/icon.png",
       "category": "Office",
       "maintainer": "MailSense <mailsense@example.com>"
     },
@@ -92,6 +102,7 @@
       "target": [
         "zip"
       ],
+      "icon": "assets/icon.ico",
       "signAndEditExecutable": false,
       "extraResources": [
         {

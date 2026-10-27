@@ -18,6 +18,15 @@ import {
 // Песочница Chromium: .deb использует SUID chrome-sandbox (after-install.sh ставит setuid).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/** Иконка окна: в сборке лежит в resources, при запуске из исходников — в assets. */
+function windowIconPath(): string | undefined {
+  const name = process.platform === "win32" ? "icon.ico" : "icon.png";
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, name)
+    : path.join(__dirname, "..", "assets", name);
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
 /**
  * Трассировка старта в <userData>/logs/startup.log. Обычный логгер поднимается
  * только внутри startServer (после initDb), поэтому падение на раннем этапе
@@ -266,10 +275,13 @@ if (!gotTheLock) {
         return;
       }
 
+      // Windows группирует окна и берёт иконку панели задач по AppUserModelID.
+      if (process.platform === "win32") app.setAppUserModelId("ru.mailsense.app");
       mainWindow = new BrowserWindow({
         width: 1280,
         height: 840,
         title: "MailSense — Почтовый помощник",
+        icon: windowIconPath(),
         webPreferences: {
           preload: path.join(__dirname, "preload.cjs"),
           contextIsolation: true,
