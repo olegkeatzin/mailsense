@@ -613,7 +613,21 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
             ]
               .filter((line) => line !== "")
               .join("\n");
-            openEdmsCompose({ documentId: documentId ?? "", subject, bodyText });
+            // Выбранного руководителя переносим в окно письма: иначе человек выбирает его
+            // второй раз, а письмо уходит не тому, кого он указал в этом окне.
+            const recipient = forwardTo ? signers.find((u) => u.id === forwardTo) : null;
+            openEdmsCompose({
+              documentId: documentId ?? "",
+              subject,
+              bodyText,
+              ...(recipient?.email
+                ? {
+                    to: [{ address: recipient.email, name: recipient.fullName || undefined }],
+                    toUserId: recipient.id,
+                    toEmail: recipient.email
+                  }
+                : {})
+            });
             setForwardOpen(false);
           }}
         >

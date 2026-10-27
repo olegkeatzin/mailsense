@@ -618,10 +618,23 @@ function ComposerForm({
             await resolutionApi.dispatch(edms.resolutionId, accountId, { emailId: sent.emailId });
             message.success("Письмо отправлено, поручение передано исполнителям");
           } else {
-            await resolutionApi.forward(edms.documentId, "", undefined, {
-              emailId: sent.emailId,
-              ...(to[0] ? { toEmail: to[0] } : {})
-            });
+            // В «Кому» адрес хранится в формате «Имя <a@b>». Серверу нужен чистый адрес:
+            // раньше сюда уходила строка с угловыми скобками, и связь падала с bad_email.
+            const recipient = parseEmails(to.join(","))[0] ?? edms.to?.[0];
+            const recipientEmail = recipient?.address ?? edms.toEmail;
+            const sameAsChosen =
+              !!recipientEmail &&
+              !!edms.toEmail &&
+              recipientEmail.toLowerCase() === edms.toEmail.toLowerCase();
+            await resolutionApi.forward(
+              edms.documentId,
+              sameAsChosen ? (edms.toUserId ?? "") : "",
+              undefined,
+              {
+                emailId: sent.emailId,
+                ...(recipientEmail ? { toEmail: recipientEmail } : {})
+              }
+            );
             message.success("Письмо отправлено и связано с поручением");
           }
         } catch (e) {
@@ -801,7 +814,8 @@ export default function Composer() {
         subject: compose.edms.subject,
         bodyHtml: "<p>" + escapeHtml(compose.edms.bodyText).replace(/\n/g, "<br>") + "</p>",
         bodyText: compose.edms.bodyText,
-        to: [],
+        // Получатель, выбранный в окне «Направить руководителю», не теряется при правке письма.
+        to: compose.edms.to ?? [],
         cc: [],
         bcc: [],
         attachments: []

@@ -10,6 +10,7 @@ import type {
   AuthUser,
   Draft,
   Email,
+  EmailAddress,
   EmailView,
   Permission,
   ThreadGroup
@@ -141,6 +142,13 @@ interface State extends FilterState {
       kind?: "forward" | "dispatch";
       /** Для dispatch: к какому поручению привязать отправленное письмо. */
       resolutionId?: string;
+      /**
+       * Кому письмо руководителю: выбранный в окне «Направить» получатель переносится
+       * в окно письма, чтобы человеку не приходилось выбирать его второй раз.
+       */
+      to?: EmailAddress[];
+      toUserId?: string;
+      toEmail?: string;
     } | null;
   };
   openCompose: (mode: ComposeMode, emailId?: string | null) => void;
@@ -151,6 +159,9 @@ interface State extends FilterState {
     bodyText: string;
     kind?: "forward" | "dispatch";
     resolutionId?: string;
+    to?: EmailAddress[];
+    toUserId?: string;
+    toEmail?: string;
   }) => void;
   /** Открыть композер с уже сохранённым черновиком. */
   openDraftCompose: (draft: Draft) => void;

@@ -341,6 +341,26 @@ describe("действия СЭД передают выбранный ящик (
     await waitFor(() => expect(resolutionApi.forward).toHaveBeenCalledWith("doc-1", "u-signer", "acc-1"));
   });
 
+  it("«Открыть окно письма» переносит выбранного руководителя в «Кому»", async () => {
+    render(<DocumentCard documentId="doc-1" onClose={() => {}} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
+    const signerCombo = await screen.findByRole("combobox", { name: "Кому направить" });
+    fireEvent.mouseDown(signerCombo);
+    fireEvent.change(signerCombo, { target: { value: "Петрова" } });
+    fireEvent.click(await screen.findByText("Мария Петрова"));
+    fireEvent.click(await screen.findByRole("button", { name: "Открыть окно письма (править текст)" }));
+
+    await waitFor(() => {
+      const edms = useStore.getState().compose.edms;
+      expect(edms?.toEmail).toBe("p@mail.test");
+      expect(edms?.toUserId).toBe("u-signer");
+      expect(edms?.to).toEqual([{ address: "p@mail.test", name: "Мария Петрова" }]);
+    });
+    // Не оставляем открытое окно следующему тесту.
+    useStore.getState().closeCompose();
+  });
+
   it("ящик без настроенной отправки не блокирует попытку: предупреждаем, но отправляем (T58)", async () => {
     (resolutionApi.myEdmsMail as jest.Mock).mockResolvedValue({
       accountId: "acc-1",
