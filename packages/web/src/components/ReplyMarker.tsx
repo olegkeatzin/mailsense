@@ -293,15 +293,15 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
             ...payload,
             emailId
           });
-          message.success("Резолюция создана и утверждена — аппарат отправит её исполнителям");
+          message.success("Резолюция создана и отправлена аппарату и исполнителям");
         } else if (isClerk) {
           // Аппарат подтверждает ответ, пришедший письмом.
           await resolutionApi.markApproval(mode.item.resolutionId, { emailId, ...payload });
           message.success("Отмечено как резолюция руководителя — можно отправлять исполнителям");
         } else {
           // Руководитель сам регистрирует свою резолюцию из Outlook.
-          await resolutionApi.approve(mode.item.resolutionId, { ...payload, emailId });
-          message.success("Резолюция утверждена — аппарат отправит её исполнителям");
+          await resolutionApi.approve(mode.item.resolutionId, { ...payload, emailId, sendEmail: true });
+          message.success("Резолюция утверждена и отправлена аппарату и исполнителям");
         }
       } else if (isClerk) {
         // Отчёт принимает аппарат: он прочитал письмо и решил, что это отчёт.
@@ -486,11 +486,11 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
         confirmLoading={saving}
         okText={
           mode?.createDocumentId
-            ? "Создать и утвердить"
+            ? "Создать и отправить"
             : mode?.kind === "approval"
               ? isClerk
                 ? "Отметить и утвердить"
-                : "Утвердить"
+                : "Утвердить и отправить"
               : isClerk
                 ? "Принять отчёт"
                 : "Отправить отчёт"
@@ -503,7 +503,9 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
           style={{ marginBottom: 12 }}
           message={
             mode?.kind === "approval"
-              ? "Поручение уйдёт исполнителям только после отправки — её делает аппарат."
+              ? isClerk
+                ? "Поручение уйдёт исполнителям только после отправки — её делает аппарат."
+                : "После утверждения письмо с резолюцией уйдёт аппарату и исполнителям."
               : "Отчёт закроет поручение по правилу: есть ответственный — по его отчёту, нет — когда отчитались все."
           }
         />

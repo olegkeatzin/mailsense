@@ -575,6 +575,10 @@ export const resolutionApi = {
       deadline?: string | null;
       /** Письмо-подтверждение из Outlook: им и регистрируется резолюция. */
       emailId?: string;
+      /** Руководитель утверждает из письма — письмо уходит сразу, без шага аппарата. */
+      sendEmail?: boolean;
+      /** Ящик отправки, если выбран явно. */
+      accountId?: string;
     } = {}
   ) {
     return request<Resolution>("/api/docflow/resolutions/" + id + "/approve", {

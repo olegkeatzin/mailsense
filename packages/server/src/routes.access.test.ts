@@ -845,7 +845,13 @@ describe("пересылка руководителю: сначала захва
 
 describe("резолюция, созданная руководителем из письма", () => {
   it("руководитель создаёт и сразу утверждает её по документу; исполнителю нельзя", async () => {
-    mockedCore.getEmailView.mockReturnValue({ id: "mail-1" });
+    mockedCore.getEmailView.mockReturnValue({
+      id: "mail-1",
+      from: { address: "post@mail.test", name: "Аппарат" },
+      subject: "Письмо вх1 — прошу наложить резолюцию",
+      messageId: "<req-1@stand.test>",
+      references: []
+    });
     mockedDocflow.createResolution.mockResolvedValue({ id: "res-new" });
     mockedDocflow.requestApproval.mockResolvedValue({ id: "res-new", status: "pending_approval" });
     mockedDocflow.approveResolution.mockResolvedValue({ id: "res-new", status: "approved" });
@@ -872,6 +878,17 @@ describe("резолюция, созданная руководителем из
       expect.anything(),
       expect.objectContaining({ emailId: "mail-1", text: "Петровой подготовить ответ" })
     );
+    // Руководитель отправил сам: ответ ушёл аппарату и исполнителю, без шага dispatch.
+    expect(mockedCore.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: expect.arrayContaining([
+          expect.objectContaining({ address: "stand@mail.test" }),
+          expect.objectContaining({ address: "u-assignee@stand.test" })
+        ]),
+        inReplyToMessageId: "<req-1@stand.test>"
+      })
+    );
+    expect(mockedDocflow.dispatchResolution).toHaveBeenCalled();
 
     const denied = await request(
       app.baseUrl,

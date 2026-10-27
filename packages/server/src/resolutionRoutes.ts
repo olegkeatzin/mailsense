@@ -274,6 +274,125 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // Отчёт — отдельное право: задачу видеть мало, отчитываться должен тот, кому поручено.
   const report = [requireDocflowDb, requirePermission("task.report")];
 
+  /**
+   * Руководитель отправил резолюцию сам: письмо уходит в ответ на исходное
+   * сообщение, аппарату и исполнителям. Аппарат после этого только ведёт журнал.
+   */
+  async function sendApprovedResolution(
+    resolutionId: string,
+    emailId: string,
+    actor: Actor,
+    accountId?: string | null
+  ) {
+    const detail = await getResolutionDetail(resolutionId);
+    if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
+    const withEmail = detail.assignees.filter((a) => !!a.email);
+    if (!withEmail.length) throw new AppError("У исполнителей не заполнены адреса", 400, "no_emails");
+
+    const mail = getEmailView(emailId);
+    if (!mail) throw new AppError("Письмо не найдено", 400, "no_email");
+    // Для ответа берём ПИСЬМО-ЗАПРОС, а не сам ответ руководителя: именно его
+    // отправитель — аппарат, и именно в его тред должен уйти ответ.
+    const requestMail = detail.requestEmailId ? getEmailView(detail.requestEmailId) : null;
+    const sourceMail = requestMail ?? mail;
+    const account = await resolveSendAccount(actor.id, accountId ?? null);
+
+    // Ответ уходит и аппарату (отправителю запроса), и исполнителям.
+    const recipients: Array<{ address: string; name?: string }> = [];
+    const seen = new Set<string>();
+    const addRecipient = (
+      address?: string | null,
+      name?: string | null,
+      keepSelf = false
+    ) => {
+      const value = (address ?? "").trim();
+      const key = value.toLowerCase();
+      if (!value || seen.has(key)) return;
+      // Аппарат — обязательный адресат, даже если отправка идёт с его же ящика:
+      // иначе ответ руководителя не попадёт туда, откуда пришёл запрос.
+      if (!keepSelf && key === (account.username ?? "").toLowerCase()) return;
+      seen.add(key);
+      recipients.push(name ? { address: value, name } : { address: value });
+    };
+    // Аппарат — это служебный ящик, а не произвольный отправитель письма:
+    // руководитель мог привязать резолюцию к внешнему письму, и отправлять
+    // резолюцию контрагенту нельзя.
+    const serviceState = await getServiceAccountState();
+    const serviceAccount = serviceState.accountId
+      ? listAccounts().find((a) => a.id === serviceState.accountId)
+      : null;
+    if (serviceAccount?.username) {
+      addRecipient(serviceAccount.username, "Аппарат", true);
+    } else if (detail.requestEmailId && sourceMail.from?.address) {
+      // Служебный ящик не настроен: для системного запроса берём его отправителя.
+      addRecipient(sourceMail.from.address, sourceMail.from.name, true);
+    }
+    for (const a of withEmail) addRecipient(a.email, a.fullName);
+    if (!recipients.length) throw new AppError("Не указано, кому отправить резолюцию", 400, "no_recipients");
+
+    const doc = await getDocument(detail.documentId);
+    const number = doc?.regNumber || detail.documentNumber || "без номера";
+    const sourceSubject = (sourceMail.subject ?? "").trim();
+    const subject = sourceSubject
+      ? /^re:/i.test(sourceSubject)
+        ? sourceSubject
+        : "Re: " + sourceSubject
+      : "Резолюция по документу " + number;
+    const executorNames = withEmail.map((a) => a.fullName).join(", ");
+    const bodyText = [
+      "Резолюция по документу " + number + ".",
+      "",
+      detail.text,
+      "",
+      detail.deadline ? "Срок: " + detail.deadline.split("-").reverse().join(".") : "Срок не указан.",
+      "Исполнители: " + executorNames,
+      "",
+      "Резолюцию утвердил(а): " + actor.name,
+      "",
+      "—",
+      actor.name
+    ].filter((line) => line !== "").join("\n");
+
+    const claimed = await dispatchResolution(resolutionId, actor, {
+      comment: "Резолюция отправлена руководителем"
+    });
+    let sent: { emailId: string };
+    try {
+      sent = await sendEmail({
+        accountId: account.id,
+        to: recipients,
+        subject,
+        bodyText,
+        inReplyToEmailId: sourceMail.id,
+        inReplyToMessageId: sourceMail.messageId ?? null,
+        references: sourceMail.messageId
+          ? [...(sourceMail.references ?? []), sourceMail.messageId]
+          : (sourceMail.references ?? []),
+        headers: {
+          "X-MailSense-EDMS": "doc=" + detail.documentId + "; res=" + resolutionId + "; kind=dispatch; v=1"
+        }
+      });
+    } catch (err) {
+      await revertDispatch(
+        resolutionId,
+        actor,
+        "Почтовый сервер не принял письмо: " + (err as Error).message
+      ).catch((revertError: Error) => {
+        logger.warn(
+          { err: revertError.message, resolutionId },
+          "Не удалось откатить отправку резолюции руководителем"
+        );
+        return claimed;
+      });
+      throw err;
+    }
+
+    return {
+      resolution: await attachDispatchEmail(resolutionId, sent.emailId, actor),
+      sentTo: recipients.map((r) => r.address)
+    };
+  }
+
   // -------- Черновик по письму: ИИ предлагает текст --------
   app.post(
     "/api/docflow/resolutions/draft",
@@ -797,6 +916,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         },
         actor
       );
+      let approvedId: string;
       try {
         await requestApproval(created.id, actor);
         const approved = await approveResolution(created.id, actor, {
@@ -805,7 +925,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           priority,
           emailId
         });
-        res.status(201).json(approved);
+        approvedId = approved.id;
       } catch (err) {
         await cancelResolution(
           created.id,
@@ -814,6 +934,15 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         ).catch(() => undefined);
         throw err;
       }
+
+      // Резолюцию отправляет сам руководитель, в ответ на письмо аппарата.
+      const sent = await sendApprovedResolution(
+        approvedId,
+        emailId,
+        actor,
+        b.accountId ? String(b.accountId) : null
+      );
+      res.status(201).json({ ...sent.resolution, sentTo: sent.sentTo });
     })
   );
 
@@ -870,16 +999,24 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     asyncHandler(async (req, res) => {
       const b = req.body ?? {};
       // Руководитель вправе написать текст и назначить исполнителя прямо при утверждении (Р8).
-      res.json(
-        await approveResolution(req.params.id, actorOf(req), {
-          comment: str(b.comment),
-          text: b.text !== undefined ? String(b.text) : undefined,
-          assignees: b.assignees !== undefined ? assigneesFrom(b.assignees) : undefined,
-          priority: b.priority as ResolutionPriority | undefined,
-          deadline: b.deadline !== undefined ? (b.deadline ? String(b.deadline) : null) : undefined,
-          emailId: b.emailId ? String(b.emailId) : null
-        })
-      );
+      const approved = await approveResolution(req.params.id, actorOf(req), {
+        comment: str(b.comment),
+        text: b.text !== undefined ? String(b.text) : undefined,
+        assignees: b.assignees !== undefined ? assigneesFrom(b.assignees) : undefined,
+        priority: b.priority as ResolutionPriority | undefined,
+        deadline: b.deadline !== undefined ? (b.deadline ? String(b.deadline) : null) : undefined,
+        emailId: b.emailId ? String(b.emailId) : null
+      });
+      if (b.sendEmail === true && b.emailId) {
+        const sent = await sendApprovedResolution(
+          approved.id,
+          String(b.emailId),
+          actorOf(req),
+          b.accountId ? String(b.accountId) : null
+        );
+        return res.json({ ...sent.resolution, sentTo: sent.sentTo });
+      }
+      res.json(approved);
     })
   );
 

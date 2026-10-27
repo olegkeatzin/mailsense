@@ -74,10 +74,11 @@ it("руководитель сам утверждает резолюцию из
   fireEvent.change(await screen.findByPlaceholderText("Кому и что сделать"), {
     target: { value: "Петровой подготовить ответ" }
   });
-  fireEvent.click(screen.getByRole("button", { name: "Утвердить" }));
+  fireEvent.click(screen.getByRole("button", { name: "Утвердить и отправить" }));
 
   await waitFor(() => expect(resolutionApi.approve).toHaveBeenCalledTimes(1));
   expect((resolutionApi.approve as jest.Mock).mock.calls[0][1].text).toContain("Петровой");
+  expect((resolutionApi.approve as jest.Mock).mock.calls[0][1].sendEmail).toBe(true);
 });
 
 it("если тред не совпал, руководитель выбирает поручение вручную", async () => {
@@ -104,7 +105,7 @@ it("если тред не совпал, руководитель выбирае
   fireEvent.change(await screen.findByPlaceholderText("Кому и что сделать"), {
     target: { value: "Петровой подготовить ответ" }
   });
-  fireEvent.click(screen.getByRole("button", { name: "Утвердить" }));
+  fireEvent.click(screen.getByRole("button", { name: "Утвердить и отправить" }));
 
   await waitFor(() => expect(resolutionApi.approve).toHaveBeenCalledTimes(1));
   expect((resolutionApi.approve as jest.Mock).mock.calls[0][0]).toBe("res-2");
@@ -134,7 +135,7 @@ it("руководитель может создать резолюцию по �
   // Текст письма-запроса не должен становиться текстом резолюции.
   const field = (await screen.findByPlaceholderText("Кому и что сделать")) as HTMLTextAreaElement;
   expect(field.value).toBe("");
-  expect(screen.getByRole("button", { name: "Создать и утвердить" })).not.toBeNull();
+  expect(screen.getByRole("button", { name: "Создать и отправить" })).not.toBeNull();
 
   // Исполнителя можно найти по почте, а не только по ФИО.
   const combo = screen.getAllByRole("combobox")[0];
