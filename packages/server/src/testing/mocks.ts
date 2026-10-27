@@ -359,6 +359,7 @@ export function docflowMockModule(): Record<string, unknown> {
     confirmReport: stub({ id: "res-1" }),
     closeResolution: stub({ id: "res-1" }),
     cancelResolution: stub({ id: "res-1" }),
+    setDocumentFilesPath: jest.fn(async () => undefined),
     markTaskReceived: stub(undefined),
     /** Запись письма-поручения: возвращает запись с проставленным идентификатором. */
     attachDispatchEmail: jest.fn(async (id: string, emailId: string) => ({

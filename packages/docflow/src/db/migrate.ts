@@ -520,6 +520,14 @@ CREATE TABLE IF NOT EXISTS user_settings (
 -- все тесты, которые ходят в ту же базу.
 ALTER TABLE roles ADD COLUMN IF NOT EXISTS permissions TEXT;
 `
+  },
+  {
+    // ⚠️ Номер 11 — следующий свободный после 10.
+    version: 11,
+    name: "document_files_path",
+    sql: `-- Папка вложений зарегистрированного документа на сервере (mailDocs/<вх><год>_<дата>).
+-- NULL = папка ещё не создана; сервер заполнит её при открытии карточки/скачивании.
+ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_files_path TEXT;`
   }
 ];
 

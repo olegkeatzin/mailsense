@@ -49,15 +49,18 @@ import {
   saveCase,
   saveCorrespondent,
   saveNumberingRule,
+  setDocumentFilesPath,
   updateDocument,
   type Actor,
   type DocumentEmailRole,
   type DocumentFilter,
+  type DocumentRecord,
   type DocumentPatch,
   type DocumentSortField,
   type DocumentStatus,
   type Permission
 } from "@mailsense/docflow";
+import { documentFilePath, ensureDocumentFiles } from "./documentFiles.js";
 import {
   archiveFailureText,
   closePeriod,
@@ -248,6 +251,15 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
   const register = [requireDocflowDb, requirePermission("journal.register")];
   const edit = [requireDocflowDb, requirePermission("journal.edit")];
   const manage = [requireDocflowDb, requirePermission("settings.manage")];
+
+  /** Раскладывает вложения в mailDocs и запоминает путь в карточке. */
+  async function filesOf(doc: DocumentRecord): Promise<{ docFilesPath: string; files: Array<{ name: string; size: number }> }> {
+    const result = await ensureDocumentFiles(doc);
+    if (doc.docFilesPath !== result.docFilesPath) {
+      await setDocumentFilesPath(doc.id, result.docFilesPath);
+    }
+    return result;
+  }
 
   /**
    * Какой номер будет присвоен следующему документу — подсказка для формы.
@@ -725,7 +737,17 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
         },
         actorOf(req)
       );
-      res.status(201).json(doc);
+      try {
+        const files = await filesOf(doc);
+        return res.status(201).json({ ...doc, docFilesPath: files.docFilesPath });
+      } catch (err) {
+        // Карточка уже создана; папку досоздаст открытие карточки или скачивание.
+        logger.error(
+          { err: (err as Error).message, documentId: doc.id },
+          "Не удалось разложить вложения зарегистрированного документа"
+        );
+        return res.status(201).json(doc);
+      }
     })
   );
 
@@ -734,9 +756,52 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     "/api/docflow/journal/:id",
     ...view,
     asyncHandler(async (req, res) => {
+      const found = await getDocument(req.params.id);
+      if (!found) throw new AppError("Документ не найден", 404, "not_found");
+      let doc = found;
+      // Старые карточки получают папку при первом открытии — без отдельной миграции файлов.
+      if (!doc.docFilesPath) {
+        try {
+          const files = await filesOf(doc);
+          doc = { ...doc, docFilesPath: files.docFilesPath };
+        } catch (err) {
+          logger.error({ err: (err as Error).message, documentId: doc.id }, "Не удалось создать папку вложений");
+        }
+      }
+      res.json({ ...doc, emails: await listDocumentEmails(doc.id) });
+    })
+  );
+
+  /** Вложения карточки: список файлов и путь к папке на сервере. */
+  app.get(
+    "/api/docflow/journal/:id/files",
+    ...view,
+    asyncHandler(async (req, res) => {
       const doc = await getDocument(req.params.id);
       if (!doc) throw new AppError("Документ не найден", 404, "not_found");
-      res.json({ ...doc, emails: await listDocumentEmails(doc.id) });
+      const result = await filesOf(doc);
+      res.json({ docFilesPath: result.docFilesPath, files: result.files });
+    })
+  );
+
+  /** Скачивание вложения из папки карточки. Имя проверяется: только файл внутри неё. */
+  app.get(
+    "/api/docflow/journal/:id/files/:name",
+    ...view,
+    asyncHandler(async (req, res) => {
+      const doc = await getDocument(req.params.id);
+      if (!doc) throw new AppError("Документ не найден", 404, "not_found");
+      const result = await filesOf(doc);
+      const file = documentFilePath(result.docFilesPath, req.params.name);
+      if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+        throw new AppError("Файл не найден", 404, "not_found");
+      }
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader(
+        "Content-Disposition",
+        "attachment; filename*=UTF-8''" + encodeURIComponent(path.basename(file))
+      );
+      fs.createReadStream(file).pipe(res);
     })
   );
 

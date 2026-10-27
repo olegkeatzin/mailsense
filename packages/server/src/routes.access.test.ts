@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type express from "express";
 import { createApp } from "./app.js";
 import * as core from "@mailsense/core";
@@ -472,7 +475,11 @@ const CASES: RouteCase[] = [
  * Маршруты резолюций, которых нет в матрице. Успех здесь требует живого письма-источника
  * и подписанта в каталоге — это отдельный сценарий, а не проверка прав.
  */
-const MATRIX_EXCEPTIONS = new Set(["POST /api/docflow/resolutions/:id/mark-approval"]);
+const MATRIX_EXCEPTIONS = new Set([
+  "POST /api/docflow/resolutions/:id/mark-approval",
+  // Ссылки на письма проверяются отдельным тестом: они зависят от копий в ящиках.
+  "GET /api/docflow/resolutions/:id/email-links"
+]);
 
 let expressApp: express.Express;
 let app: RunningApp;
@@ -845,7 +852,7 @@ describe("пересылка руководителю: сначала захва
 
 describe("утверждение руководителем сразу отправляет письмо", () => {
   it("approve с sendEmail уходит аппарату и исполнителям", async () => {
-    mockedDocflow.approveResolution.mockResolvedValue({ id: "res-1", status: "approved" });
+    mockedDocflow.approveResolution.mockResolvedValueOnce({ id: "res-1", status: "approved" });
     const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/approve", {
       token: token("manager"),
       body: {
@@ -895,7 +902,7 @@ describe("ссылки на письма по делу ведут только �
   });
 
   it("email-links скрывает чужие копии и отдаёт свои", async () => {
-    mockedDocflow.getResolutionDetail.mockResolvedValue({
+    mockedDocflow.getResolutionDetail.mockResolvedValueOnce({
       ...resolutionDetail({ status: "approved" }),
       documentEmailId: "src-mail",
       requestEmailId: "req-mail",
@@ -1206,6 +1213,37 @@ describe("«Входящие на регистрацию»: вложения с�
 
     const items = (res.body as { items: Array<{ attachmentsCount: number }> }).items;
     expect(items.map((i) => i.attachmentsCount)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("вложения дела в mailDocs", () => {
+  it("маршрут файлов создаёт папку и возвращает путь docFilesPath", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mailsense-routes-docs-"));
+    const previous = process.env.MAIL_DOCS_DIR;
+    process.env.MAIL_DOCS_DIR = root;
+    mockedDocflow.getDocument.mockResolvedValueOnce({
+      id: "doc-1",
+      regNumber: "вх1",
+      regPeriod: "2026",
+      regDate: "2026-10-27",
+      emailId: null
+    });
+
+    try {
+      const res = await request(app.baseUrl, "GET", "/api/docflow/journal/doc-1/files", {
+        token: token("manager")
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({
+        docFilesPath: path.join(root, "вх12026_27.10.2026"),
+        files: []
+      });
+      expect(fs.existsSync(path.join(root, "вх12026_27.10.2026"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.MAIL_DOCS_DIR;
+      else process.env.MAIL_DOCS_DIR = previous;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

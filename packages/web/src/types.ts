@@ -515,6 +515,8 @@ export interface DocumentRecord {
   documentName: string;
   status: DocumentStatus;
   emailId: string | null;
+  /** Папка вложений дела на сервере; null — ещё не создана. */
+  docFilesPath?: string | null;
   correspondentId: string | null;
   createdBy: string | null;
   createdAt: string;

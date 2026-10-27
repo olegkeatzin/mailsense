@@ -50,6 +50,9 @@ services:
       # Почтовая база SQLite, вложения, ключ шифрования и логи — тоже папка на хосте
       # (MAILSENSE_DATA_PATH в .env, по умолчанию docker/data). Бэкап = копирование каталога.
       - ${MAILSENSE_DATA_PATH:-./data}:/data
+      # Вложения зарегистрированных документов — папка на хосте, видна администратору.
+      # Путь меняется через MAIL_DOCS_PATH в .env (по умолчанию docker/mailDocs).
+      - ${MAIL_DOCS_PATH:-./mailDocs}:/app/mailDocs
       # Логи контейнера не растут бесконечно: 10 МБ × 5 файлов.
     logging:
       driver: json-file

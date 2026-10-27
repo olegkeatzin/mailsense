@@ -45,6 +45,7 @@ RUN pnpm --filter @mailsense/core build \
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production \
     MAILSENSE_DATA_DIR=/data \
+    MAIL_DOCS_DIR=/app/mailDocs \
     MAILSENSE_HOST=0.0.0.0 \
     MAILSENSE_PORT=8123
 WORKDIR /app
@@ -65,8 +66,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
 COPY --from=build /app/packages ./packages
 
-# Данные (обе базы, вложения, ключ шифрования) — в томе, а не в слое образа.
-RUN mkdir -p /data && chown -R node:node /data /app
+# Данные (обе базы, вложения, ключ шифрования) и mailDocs — в томах, а не в слое образа.
+RUN mkdir -p /data /app/mailDocs && chown -R node:node /data /app /app/mailDocs
 USER node
 VOLUME ["/data"]
 EXPOSE 8123

@@ -82,6 +82,7 @@ function mapDocument(row: typeof documents.$inferSelect): DocumentRecord {
     documentName: row.documentName,
     status: row.status as DocumentStatus,
     emailId: row.emailId,
+    docFilesPath: row.docFilesPath,
     correspondentId: row.correspondentId,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
@@ -580,6 +581,7 @@ export async function updateDocument(id: string, patch: DocumentPatch, actor: Ac
   if (patch.documentName !== undefined) set.documentName = patch.documentName;
   if (patch.correspondentId !== undefined) set.correspondentId = patch.correspondentId;
   if (patch.status !== undefined) set.status = patch.status;
+  if (patch.docFilesPath !== undefined) set.docFilesPath = patch.docFilesPath;
   if (patch.regDate !== undefined && /^\d{4}-\d{2}-\d{2}$/.test(patch.regDate)) set.regDate = patch.regDate;
 
   // Правка и её след — в одной транзакции: иначе «кто изменил» могло потеряться,
@@ -601,6 +603,14 @@ export async function updateDocument(id: string, patch: DocumentPatch, actor: Ac
     });
     return after;
   });
+}
+
+/** Запоминает папку вложений дела. Служебная операция: аудит не нужен. */
+export async function setDocumentFilesPath(id: string, docFilesPath: string): Promise<void> {
+  await getDocflowDb()
+    .update(documents)
+    .set({ docFilesPath, updatedAt: now() })
+    .where(eq(documents.id, id));
 }
 
 /** Привязывает письмо к документу (резолюция, отчёт об исполнении). */

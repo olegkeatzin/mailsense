@@ -11,3 +11,5 @@
 **/.git
 **/.git/**
 data
+docker/mailDocs
+docker/mailDocs/**

@@ -8,6 +8,7 @@ import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useStore } from "../store";
 import { DOCUMENT_STATUS_TITLES, type DocumentListItem, type DocumentStatus } from "../types";
 import DocumentCard from "./DocumentCard";
+import { DocumentFilesButton } from "./DocumentFiles";
 import { humanError } from "../utils/humanError";
 
 /**
@@ -222,6 +223,12 @@ export default function Journal() {
       render: (v: string | null) => v || <span style={{ color: "#767676" }}>—</span>
     },
     {
+      title: "Файлы",
+      key: "files",
+      width: 100,
+      render: (_v, r) => <DocumentFilesButton documentId={r.id} />
+    },
+    {
       title: "Состояние",
       dataIndex: "status",
       width: 130,
@@ -308,7 +315,7 @@ export default function Journal() {
         loading={loading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1600 }}
+        scroll={{ x: 1700 }}
         onRow={(r) => ({
           onClick: () => setOpenId(r.id),
           // Строку открывают и с клавиатуры: раньше карточка документа была доступна только мышью.

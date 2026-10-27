@@ -177,6 +177,8 @@ export interface DocumentRecord {
   documentName: string;
   status: DocumentStatus;
   emailId: string | null;
+  /** Папка вложений дела на сервере; null — ещё не создана. */
+  docFilesPath: string | null;
   correspondentId: string | null;
   createdBy: string | null;
   createdAt: string;
@@ -206,6 +208,8 @@ export interface DocumentInput {
 
 export interface DocumentPatch extends DocumentInput {
   status?: DocumentStatus;
+  /** Служебное поле: заполняет сервер при раскладке вложений, не пользователь. */
+  docFilesPath?: string | null;
   /** Дата регистрации (правится только администратором журнала). */
   regDate?: string;
 }

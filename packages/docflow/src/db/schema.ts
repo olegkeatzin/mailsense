@@ -185,6 +185,8 @@ export const documents = pgTable(
     /** new | on_resolution | in_progress | executed | archived */
     status: text("status").notNull().default("new"),
     emailId: text("email_id"),
+    /** Папка вложений дела на сервере (mailDocs/<вх><год>_<дата>). */
+    docFilesPath: text("doc_files_path"),
     correspondentId: text("correspondent_id"),
     createdBy: text("created_by"),
     createdAt: text("created_at").notNull(),

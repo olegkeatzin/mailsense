@@ -6,6 +6,7 @@ import { api, resolutionApi } from "../api";
 import { ResolutionModal } from "./ResolutionModal";
 import { SOON_STYLE } from "./notifications/colors";
 import { ResolutionEmails } from "./ResolutionEmails";
+import { DocumentFilesButton } from "./DocumentFiles";
 import {
   PRIORITY_TITLES,
   RESOLUTION_STATUS_TITLES,
@@ -529,7 +530,10 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
           </div>
 
           <div>
-            <h4 style={{ marginBottom: 8 }}>Связанные письма</h4>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <h4 style={{ margin: 0 }}>Связанные письма</h4>
+              {doc.id ? <DocumentFilesButton documentId={doc.id} /> : null}
+            </div>
             {doc.emails.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Писем не привязано" />
             ) : (

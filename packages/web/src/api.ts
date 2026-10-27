@@ -352,6 +352,33 @@ export const api = {
   document: (id: string) => request<DocumentCard>("/api/docflow/journal/" + id),
   documentByEmail: (emailId: string) =>
     request<DocumentRecord | null>("/api/docflow/journal/by-email/" + encodeURIComponent(emailId)),
+  /** Вложения карточки и путь к папке на сервере. */
+  journalFiles: (documentId: string) =>
+    request<{ docFilesPath: string; files: Array<{ name: string; size: number }> }>(
+      "/api/docflow/journal/" + encodeURIComponent(documentId) + "/files"
+    ),
+  /** Файл скачиваем blob-ом: из Electron обычная ссылка уходит во внешний браузер без сессии. */
+  journalFileBlob: async (documentId: string, name: string): Promise<Blob> => {
+    const res = await fetch(
+      BASE +
+        "/api/docflow/journal/" +
+        encodeURIComponent(documentId) +
+        "/files/" +
+        encodeURIComponent(name),
+      { credentials: "include" }
+    );
+    if (!res.ok) {
+      let msg = res.statusText;
+      try {
+        const body = (await res.json()) as { error?: string };
+        if (body?.error) msg = body.error;
+      } catch {
+        /* не JSON */
+      }
+      throw new Error(msg);
+    }
+    return res.blob();
+  },
   /** Письмо по документу в СВОЁМ ящике: у аппарата входящее, у руководителя запрос. */
   documentEmailForMe: (documentId: string) =>
     request<{ emailId: string | null; label: string | null }>(
