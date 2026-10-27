@@ -126,13 +126,21 @@ it("руководитель может создать резолюцию по �
     total: 1
   });
 
-  render(<ReplyMarker emailId="e-1" onMarked={jest.fn()} replyText="Прошу указать поручение" />);
+  render(<ReplyMarker emailId="e-1" onMarked={jest.fn()} />);
   fireEvent.click(await screen.findByRole("button", { name: "Выбрать поручение или создать резолюцию" }));
   expect(await screen.findByText("Документы без поручения")).not.toBeNull();
   fireEvent.click(await screen.findByRole("button", { name: "Создать резолюцию" }));
 
-  expect(await screen.findByDisplayValue("Прошу указать поручение")).not.toBeNull();
+  // Текст письма-запроса не должен становиться текстом резолюции.
+  const field = (await screen.findByPlaceholderText("Кому и что сделать")) as HTMLTextAreaElement;
+  expect(field.value).toBe("");
   expect(screen.getByRole("button", { name: "Создать и утвердить" })).not.toBeNull();
+
+  // Исполнителя можно найти по почте, а не только по ФИО.
+  const combo = screen.getAllByRole("combobox")[0];
+  fireEvent.mouseDown(combo);
+  fireEvent.change(combo, { target: { value: "p@mail.test" } });
+  expect(await screen.findByText("Мария Петрова")).not.toBeNull();
 });
 
 it("исполнитель сам регистрирует свой отчёт из письма", async () => {

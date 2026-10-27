@@ -20,8 +20,7 @@ type ManualDoc = { id: string; regNumber: string; summary: string };
 
 function fromResolution(
   r: Resolution,
-  expects: "approval" | "report",
-  emailText: string
+  expects: "approval" | "report"
 ): ReplyContextItem {
   return {
     resolutionId: r.id,
@@ -30,7 +29,8 @@ function fromResolution(
     documentSummary: r.documentSummary,
     taskText: r.text,
     assignees: r.assignees.map((a) => ({ userId: a.userId, fullName: a.fullName, kind: a.kind })),
-    replyText: emailText
+    // Текст письма здесь не подставляем: это может быть запрос аппарата, а не резолюция.
+    replyText: r.text
   };
 }
 
@@ -58,16 +58,7 @@ function fromTask(t: TaskItem, userId: string, fullName: string): ReplyContextIt
  * ⚠️ **ИИ не классифицирует.** Он вызывается кнопкой «Заполнить с помощью ИИ» и только готовит
  * черновик полей, которые человек проверит и поправит.
  */
-export function ReplyMarker({
-  emailId,
-  onMarked,
-  replyText = ""
-}: {
-  emailId: string;
-  onMarked: () => void;
-  /** Текст письма: им заполняется резолюция при ручной привязке, когда тред не совпал. */
-  replyText?: string;
-}) {
+export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: () => void }) {
   const can = useStore((s) => s.can);
   const authUser = useStore((s) => s.authUser);
   const me = authUser?.id;
@@ -149,7 +140,7 @@ export function ReplyMarker({
           }
         }
         list = [...byId.values()].map((r) =>
-          fromResolution(r, r.status === "sent" ? "report" : "approval", replyText)
+          fromResolution(r, r.status === "sent" ? "report" : "approval")
         );
       } else if (isApprover) {
         const [page, journal] = await Promise.all([
@@ -158,7 +149,7 @@ export function ReplyMarker({
         ]);
         list = page.items
           .filter((r) => r.status === "pending_approval")
-          .map((r) => fromResolution(r, "approval", replyText));
+          .map((r) => fromResolution(r, "approval"));
         setManualDocs(
           journal.items
             .filter((d) => !d.resolution)
@@ -211,7 +202,8 @@ export function ReplyMarker({
         assignees: []
       }
     });
-    setText(replyText);
+    // Это не ответ руководителя, а запрос аппарата: его текст в резолюцию не тащим.
+    setText("");
     setAssignees([]);
     setResponsible(undefined);
     setUnknownAddresses([]);
@@ -540,9 +532,18 @@ export function ReplyMarker({
               <Form.Item label="Исполнители">
                 <Select
                   mode="multiple"
+                  showSearch
                   value={assignees}
                   onChange={setAssignees}
                   placeholder="Выберите из справочника"
+                  filterOption={(input, option) => {
+                    const person = people.find((p) => p.id === option?.value);
+                    return [person?.fullName, person?.email]
+                      .filter(Boolean)
+                      .join(" ")
+                      .toLowerCase()
+                      .includes(input.trim().toLowerCase());
+                  }}
                   options={people.map((p) => ({ value: p.id, label: p.fullName }))}
                 />
                 {unknownAddresses.length ? (

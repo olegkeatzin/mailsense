@@ -45,7 +45,7 @@ export default function EmailDocflowTab({ emailId, letter }: { emailId: string; 
   return (
     <Space direction="vertical" size="middle" style={{ width: "100%" }}>
       {/* Разметка письма: аппарат отмечает сам, что это за письмо (Р9, этап 4). */}
-      <ReplyMarker emailId={emailId} onMarked={() => void load()} replyText={letter.bodyText} />
+      <ReplyMarker emailId={emailId} onMarked={() => void load()} />
 
       {doc ? (
         <>
