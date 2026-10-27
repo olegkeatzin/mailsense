@@ -1,12 +1,47 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Button, Card, DatePicker, Form, Input, Modal, Select, Space, Tag, message } from "antd";
+import { Alert, Button, Card, DatePicker, Form, Input, List, Modal, Select, Space, Spin, Tag, message } from "antd";
 import dayjs from "dayjs";
 import { parseTypedDate } from "../utils/deadlineInput";
 import { RobotOutlined } from "@ant-design/icons";
 import { resolutionApi } from "../api";
 import { useStore } from "../store";
-import type { AssigneeKind, ReplyContextItem } from "../resolutionTypes";
+import type {
+  AssigneeKind,
+  ReplyContextItem,
+  Resolution,
+  ResolutionStatus,
+  TaskItem
+} from "../resolutionTypes";
 import { humanError } from "../utils/humanError";
+
+const BINDABLE: ResolutionStatus[] = ["pending_approval", "email_approval", "sent"];
+
+function fromResolution(
+  r: Resolution,
+  expects: "approval" | "report",
+  emailText: string
+): ReplyContextItem {
+  return {
+    resolutionId: r.id,
+    expects,
+    documentNumber: r.documentNumber,
+    documentSummary: r.documentSummary,
+    taskText: r.text,
+    assignees: r.assignees.map((a) => ({ userId: a.userId, fullName: a.fullName, kind: a.kind })),
+    replyText: emailText
+  };
+}
+
+function fromTask(t: TaskItem, userId: string, fullName: string): ReplyContextItem {
+  return {
+    resolutionId: t.resolutionId,
+    expects: "report",
+    documentNumber: t.documentNumber,
+    documentSummary: t.documentSummary,
+    taskText: t.text,
+    assignees: [{ userId, fullName: fullName || "Исполнитель", kind: "responsible" }]
+  };
+}
 
 /**
  * Разметка письма в почте: человек говорит, что это за письмо (Р9, этап 4).
@@ -21,10 +56,24 @@ import { humanError } from "../utils/humanError";
  * ⚠️ **ИИ не классифицирует.** Он вызывается кнопкой «Заполнить с помощью ИИ» и только готовит
  * черновик полей, которые человек проверит и поправит.
  */
-export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: () => void }) {
+export function ReplyMarker({
+  emailId,
+  onMarked,
+  replyText = ""
+}: {
+  emailId: string;
+  onMarked: () => void;
+  /** Текст письма: им заполняется резолюция при ручной привязке, когда тред не совпал. */
+  replyText?: string;
+}) {
   const can = useStore((s) => s.can);
-  const me = useStore((s) => s.authUser?.id);
+  const authUser = useStore((s) => s.authUser);
+  const me = authUser?.id;
   const [items, setItems] = useState<ReplyContextItem[]>([]);
+  const [bindOpen, setBindOpen] = useState(false);
+  const [bindLoading, setBindLoading] = useState(false);
+  const [bindQuery, setBindQuery] = useState("");
+  const [manual, setManual] = useState<ReplyContextItem[]>([]);
   const [mode, setMode] = useState<{ kind: "approval" | "report"; item: ReplyContextItem } | null>(null);
   const [text, setText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
@@ -70,6 +119,50 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
   const isApprover = can("resolution.approve");
   const isReporter = can("task.report");
   if (!isClerk && !isApprover && !isReporter) return null;
+
+  /**
+   * Ручная привязка: письмо могли написать в Outlook новым сообщением, и тогда
+   * In-Reply-To/References не несут нашу запись. Человек сам выбирает поручение.
+   */
+  async function openManual() {
+    setBindOpen(true);
+    setBindQuery("");
+    setBindLoading(true);
+    setManual([]);
+    try {
+      let list: ReplyContextItem[] = [];
+      if (isClerk) {
+        const columns = await resolutionApi.board();
+        const byId = new Map<string, Resolution>();
+        for (const column of columns) {
+          for (const r of column.items) {
+            if (BINDABLE.includes(r.status)) byId.set(r.id, r);
+          }
+        }
+        list = [...byId.values()].map((r) =>
+          fromResolution(r, r.status === "sent" ? "report" : "approval", replyText)
+        );
+      } else if (isApprover) {
+        const page = await resolutionApi.forApproval();
+        list = page.items
+          .filter((r) => r.status === "pending_approval")
+          .map((r) => fromResolution(r, "approval", replyText));
+      } else if (me) {
+        const tasks = await resolutionApi.myTasks();
+        list = tasks.filter((t) => !t.reportAt).map((t) => fromTask(t, me, authUser?.fullName ?? ""));
+      }
+      setManual(list);
+    } catch (e) {
+      message.error("Не удалось получить список поручений: " + humanError(e));
+    } finally {
+      setBindLoading(false);
+    }
+  }
+
+  function chooseManual(item: ReplyContextItem) {
+    setBindOpen(false);
+    void open(item.expects, item);
+  }
 
   async function open(kind: "approval" | "report", item: ReplyContextItem) {
     setMode({ kind, item });
@@ -185,8 +278,6 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
     }
   }
 
-  if (!items.length) return null;
-
   return (
     <>
       {items.map((it) => (
@@ -229,6 +320,76 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
           </Space>
         </Card>
       ))}
+
+      <div style={{ marginBottom: 12 }}>
+        <Button type="link" style={{ paddingLeft: 0 }} onClick={() => void openManual()}>
+          Не нашли поручение? Связать вручную
+        </Button>
+      </div>
+
+      <Modal
+        open={bindOpen}
+        title="Связать письмо с поручением"
+        onCancel={() => setBindOpen(false)}
+        footer={null}
+        width={720}
+      >
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Автоматически связать не удалось"
+          description="Письмо могло быть написано в Outlook новым сообщением. Выберите поручение из журнала — дальнейшее действие запишется в него."
+        />
+        <Input
+          allowClear
+          placeholder="Номер документа, краткое содержание или текст поручения"
+          value={bindQuery}
+          onChange={(e) => setBindQuery(e.target.value)}
+          style={{ marginBottom: 12 }}
+        />
+        <Spin spinning={bindLoading}>
+          <List
+            dataSource={manual.filter((c) => {
+              const q = bindQuery.trim().toLowerCase();
+              if (!q) return true;
+              return [c.documentNumber, c.documentSummary, c.taskText]
+                .join(" ")
+                .toLowerCase()
+                .includes(q);
+            })}
+            locale={{ emptyText: bindLoading ? "Загружаем…" : "Ничего не нашли" }}
+            renderItem={(c) => (
+              <List.Item
+                actions={[
+                  <Button key="pick" type="primary" onClick={() => chooseManual(c)}>
+                    Выбрать
+                  </Button>
+                ]}
+              >
+                <List.Item.Meta
+                  title={
+                    <Space wrap>
+                      <b>{c.documentNumber || "Без номера"}</b>
+                      <Tag color={c.expects === "approval" ? "gold" : "blue"}>
+                        {c.expects === "approval" ? "ждёт резолюции" : "ждёт отчёта"}
+                      </Tag>
+                    </Space>
+                  }
+                  description={
+                    <>
+                      <div>{c.documentSummary || "Без краткого содержания"}</div>
+                      {c.taskText ? (
+                        <div style={{ fontSize: 12, color: "#595959", marginTop: 2 }}>{c.taskText}</div>
+                      ) : null}
+                    </>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        </Spin>
+      </Modal>
 
       <Modal
         open={!!mode}
