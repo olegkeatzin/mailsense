@@ -487,8 +487,9 @@ function ComposerForm({
   });
 
   /**
-   * После сохранения сервер отдаёт ссылки на файлы черновика. Запоминаем их: дальше
-   * вложение уходит ссылкой, а base64 отпускаем — иначе 20 МБ так и висят в браузере.
+   * После сохранения сервер отдаёт ссылки на файлы черновика. Запоминаем их для
+   * автосохранения, но base64 оставляем до отправки: если файл черновика пропадёт,
+   * письмо всё равно уйдёт с вложением, которое человек видит.
    */
   const adoptSavedAttachments = (saved: Draft) => {
     setAttachments((prev) =>
@@ -496,7 +497,7 @@ function ComposerForm({
         const att = saved.attachments?.[i];
         // Порядок вложений сохраняется; если сервер вернул другое вложение — не трогаем.
         if (!att?.ref || att.filename !== item.filename || att.size !== item.size) return item;
-        return { ...item, data: undefined, draftRef: { draftId: saved.id, file: att.ref } };
+        return { ...item, draftRef: { draftId: saved.id, file: att.ref } };
       })
     );
   };

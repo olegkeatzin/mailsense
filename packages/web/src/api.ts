@@ -1066,6 +1066,17 @@ export async function materializeAttachments(
 ): Promise<OutgoingAttachment[]> {
   const out: OutgoingAttachment[] = [];
   for (const item of items) {
+    // Свежий файл, выбранный человеком, отправляем данными: даже если файл черновика
+    // уже удалён (гонка автосохранения/очистки), вложение не потеряется.
+    if (typeof item.data === "string") {
+      out.push({
+        filename: item.filename,
+        mimeType: item.mimeType,
+        size: item.size || Math.floor((item.data.length * 3) / 4),
+        data: item.data
+      });
+      continue;
+    }
     // Файл черновика уже лежит на диске: уходит ссылка, а читает его сервер.
     // Качать содержимое в браузер (и держать base64 в состоянии) незачем.
     if (item.draftRef) {

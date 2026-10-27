@@ -162,7 +162,7 @@ describe("materializeAttachments", () => {
     ]);
   });
 
-  it("ссылка на файл черновика важнее данных: файл не гоняем туда-обратно", async () => {
+  it("если данные уже в браузере, они важнее ссылки: вложение не потеряется", async () => {
     const load = jest.fn(async () => "QQ==");
 
     const out = await materializeAttachments(
@@ -175,8 +175,7 @@ describe("materializeAttachments", () => {
       filename: "Договор (копия).pdf",
       mimeType: "application/pdf",
       size: 1024,
-      ref: "Договор_копия_.pdf",
-      draftId: "draft-1"
+      data: "Zg=="
     });
   });
 });
