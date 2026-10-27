@@ -83,4 +83,13 @@ describe("разделы документооборота в боковом ме
     expect(screen.queryByText("Мои задачи")).toBeNull();
     expect(screen.getByText("Входящие")).not.toBeNull();
   });
+
+  it("в левой панели нет дублирующей кнопки «Настройки»", () => {
+    asUser(["journal.view"]);
+
+    render(<AccountSidebar />);
+
+    // Настройки остались только в шапке, справа от пользователя.
+    expect(screen.queryByRole("button", { name: "Настройки" })).toBeNull();
+  });
 });

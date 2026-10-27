@@ -395,6 +395,7 @@ export default function App() {
             lineHeight: "52px"
           }}
         >
+          <div className="app-header-main">
           <Button
             type="text"
             icon={<MenuOutlined />}
@@ -467,18 +468,20 @@ export default function App() {
           </Tooltip>
             </>
           )}
-          <div style={{ flex: 1 }} />
-          {/* Уведомления — левее пользователя: привычный порядок шапки не ломаем. */}
-          <NotificationsBell />
-          <CurrentUser />
-          <Tooltip title="Настройки">
-            <Button
-              type="text"
-              icon={<SettingOutlined />}
-              aria-label="Настройки"
-              onClick={() => setSettingsOpen(true)}
-            />
-          </Tooltip>
+          </div>
+          <div className="app-header-right">
+            {/* Уведомления — левее пользователя: привычный порядок шапки не ломаем. */}
+            <NotificationsBell />
+            <CurrentUser />
+            <Tooltip title="Настройки">
+              <Button
+                type="text"
+                icon={<SettingOutlined />}
+                aria-label="Настройки"
+                onClick={() => setSettingsOpen(true)}
+              />
+            </Tooltip>
+          </div>
         </Header>
         {docflowUnavailable ? (
           <Alert

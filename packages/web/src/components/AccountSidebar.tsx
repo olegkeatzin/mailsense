@@ -1,4 +1,4 @@
-import { Button, Menu, Typography } from "antd";
+import { Menu, Typography } from "antd";
 import {
   AuditOutlined,
   CheckSquareOutlined,
@@ -6,9 +6,7 @@ import {
   FolderOutlined,
   InboxOutlined,
   MailOutlined,
-  ProjectOutlined,
-  SafetyOutlined,
-  SettingOutlined
+  ProjectOutlined
 } from "@ant-design/icons";
 import { useStore, type AppSection } from "../store";
 
@@ -25,7 +23,6 @@ export default function AccountSidebar() {
   const accountFilter = useStore((s) => s.accountFilter);
   const setFolder = useStore((s) => s.setFolder);
   const setAccountFilter = useStore((s) => s.setAccountFilter);
-  const setSettingsOpen = useStore((s) => s.setSettingsOpen);
   const can = useStore((s) => s.can);
   const section = useStore((s) => s.section);
   const setSection = useStore((s) => s.setSection);
@@ -63,15 +60,6 @@ export default function AccountSidebar() {
         <Typography.Title level={5} style={{ margin: 0 }}>
           MailSense
         </Typography.Title>
-        <Button
-          size="small"
-          block
-          icon={<SettingOutlined />}
-          onClick={() => setSettingsOpen(true)}
-          style={{ marginTop: 8 }}
-        >
-          Настройки
-        </Button>
       </div>
 
       {hasDocflow && (
