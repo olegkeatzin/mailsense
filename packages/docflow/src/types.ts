@@ -403,6 +403,8 @@ export interface ResolutionDetail extends ResolutionRecord {
    * картинка на карточке и напоминание разойдутся на границе порога.
    */
   daysLeft: number | null;
+  /** Просрочено только поручение «в работе»; выполненное не бывает просроченным. */
+  overdue: boolean;
   /** Срок наступает в пределах notifications.dueSoonDays (А11). */
   dueSoon: boolean;
   /** Номер документа журнала — для навигации и писем. */

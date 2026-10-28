@@ -81,6 +81,12 @@ describe("плашка срока", () => {
     expect(screen.getByText("04.10.2026")).not.toBeNull();
   });
 
+  it("сданная в срок задача не краснеет, даже если срок уже прошёл", () => {
+    render(<DeadlineTag deadline="2026-10-04" daysLeft={-3} overdue={false} variant="table" />);
+    expect(screen.queryByText(/просрочено/)).toBeNull();
+    expect(screen.getByText("04.10.2026")).not.toBeNull();
+  });
+
   it("без серверного dueSoon интерфейс не гадает и показывает только дату", () => {
     render(<DeadlineTag deadline="2026-10-09" daysLeft={2} variant="table" />);
     expect(screen.getByText("09.10.2026")).not.toBeNull();

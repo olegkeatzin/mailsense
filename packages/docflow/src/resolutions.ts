@@ -250,6 +250,7 @@ async function resolutionDetails(ids: string[]): Promise<Map<string, ResolutionD
       history: history.get(rec.id) ?? [],
       // Подсветка срока: только у поручения «в работе» — исполненное не бывает «скоро».
       daysLeft: left,
+      overdue: rec.status === "sent" && isOverdue(rec.deadline),
       dueSoon: rec.status === "sent" && left !== null && left >= 0 && left <= dueSoonDays,
       documentNumber: doc?.regNumber ?? "",
       documentSummary: doc?.summary ?? doc?.documentName ?? "",

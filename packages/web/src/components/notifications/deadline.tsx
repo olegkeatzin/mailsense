@@ -55,7 +55,9 @@ export function DeadlineTag({ deadline, daysLeft, dueSoon, overdue, variant }: D
   }
 
   const left = daysLeft === null || daysLeft === undefined ? null : Math.trunc(daysLeft);
-  const isOverdue = overdue === true || (left !== null && left < 0);
+  // Серверный overdue=false означает «задача уже сдана»: отрицательный daysLeft
+  // просрочкой для неё не является. Иначе выполненная в срок задача горела красным.
+  const isOverdue = overdue !== undefined ? overdue : left !== null && left < 0;
   const isToday = !isOverdue && left === 0;
   // «Скоро» решает сервер (dueSoon — тот же порог, что у уведомления, §А5).
   const isSoon = !isOverdue && !isToday && dueSoon === true;
