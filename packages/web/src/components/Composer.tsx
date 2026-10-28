@@ -296,7 +296,9 @@ function ComposerForm({
   const canSendMail = useStore((s) => s.canSendMail());
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const [accountId, setAccountId] = useState(template.accountId);
+  const [accountId, setAccountId] = useState(() =>
+    accounts.some((a) => a.id === template.accountId) ? template.accountId : accounts[0]?.id ?? template.accountId
+  );
   const [to, setTo] = useState<string[]>(template.to.map(fmt));
   const [cc, setCc] = useState<string[]>(template.cc.map(fmt));
   const [bcc, setBcc] = useState<string[]>(template.bcc.map(fmt));
@@ -316,6 +318,12 @@ function ComposerForm({
   const [tplName, setTplName] = useState("");
   const draftIdRef = useRef<string | null>(draftId ?? null);
   const lastSnapRef = useRef<string>("");
+
+  // Список ящиков мог догрузиться после открытия окна: не оставляем в поле чужой UUID.
+  useEffect(() => {
+    if (!accounts.length) return;
+    if (!accounts.some((a) => a.id === accountId)) setAccountId(accounts[0].id);
+  }, [accounts, accountId]);
 
   /** Тело из шаблона: цитата ответа уже внутри, личную подпись добавляем поверх. */
   const baseBodyHtml = (t: ComposeTemplate) => (t.bodyHtml && t.bodyHtml.trim() ? t.bodyHtml : "<p></p>");
@@ -590,10 +598,12 @@ function ComposerForm({
   const send = async () => {
     // Отправка закрыта правом mail.send (T39/T44): объясняем, а не молча не отправляем.
     if (!canSendMail) return message.warning("Недостаточно прав для отправки");
-    if (!accountId) {
+    if (!accountId || !accounts.some((a) => a.id === accountId)) {
       // Нет ни одного ящика — человеку нужно не «выберите аккаунт», а что именно сделать.
       return message.warning(
-        "У вас нет почтового ящика: добавьте его в «Настройки → Почта» — тогда сможете писать письма"
+        accounts.length
+          ? "Выберите почтовый ящик, с которого отправлять письмо"
+          : "У вас нет почтового ящика: добавьте его в «Настройки → Почта» — тогда сможете писать письма"
       );
     }
     if (to.length === 0) return message.warning("Укажите получателя");
@@ -676,11 +686,15 @@ function ComposerForm({
     <div>
       <Space direction="vertical" style={{ width: "100%" }} size="small">
         <Select
-          value={accountId || undefined}
-          placeholder="От имени (аккаунт)"
+          // Показываем только существующий ящик: иначе AntD рисует голый UUID.
+          value={accounts.some((a) => a.id === accountId) ? accountId : undefined}
+          placeholder={accounts.length ? "Выберите ящик" : "Загрузка ящиков…"}
           style={{ width: "100%" }}
           onChange={(v) => setAccountId(v)}
-          options={accounts.map((a) => ({ value: a.id, label: a.settings.displayName ? a.settings.displayName + " <" + a.username + ">" : a.username }))}
+          options={accounts.map((a) => ({
+            value: a.id,
+            label: a.settings.displayName ? a.settings.displayName + " <" + a.username + ">" : a.username
+          }))}
         />
         <Space.Compact style={{ width: "100%" }}>
           <Select
@@ -807,9 +821,11 @@ export default function Composer() {
     }
     // Письмо по документу СЭД: текст готовит аппарат-человек, поэтому берём его как есть,
     // а не шаблон с сервера (там был бы жёстко зашитый текст «от аппарата»).
+    // Ящик из фильтра мог исчезнуть или быть чужим: подставляем только известный ящик.
+    const validFilter = accountFilter && accounts.some((a) => a.id === accountFilter) ? accountFilter : null;
     if (compose.edms) {
       setTemplate({
-        accountId: accountFilter || accounts[0]?.id || "",
+        accountId: validFilter || accounts[0]?.id || "",
         mode: "new",
         inReplyToEmailId: null,
         subject: compose.edms.subject,
@@ -829,11 +845,14 @@ export default function Composer() {
      * для ответа не подставляем: иначе ответ уйдёт не с того адреса.
      */
     const sourceAccountId = compose.mode !== "new" && emailView?.accountId ? emailView.accountId : "";
-    const accountId = sourceAccountId || accountFilter || accounts[0]?.id || "";
+    // Ответ должен уходить с ящика получения, но только если этот ящик есть в списке
+    // доступных. Иначе Select показывал UUID вместо адреса и шаблон падал без подписи.
+    const knownSource = sourceAccountId && accounts.some((a) => a.id === sourceAccountId) ? sourceAccountId : "";
+    const accountId = knownSource || validFilter || accounts[0]?.id || "";
     let alive = true;
     setTemplate(null);
     const fb = () => {
-      if (alive) setTemplate(fallbackTemplate(compose, emailView, accounts, accountFilter));
+      if (alive) setTemplate(fallbackTemplate(compose, emailView, accounts, validFilter));
     };
     if (!accountId) {
       fb();
@@ -849,10 +868,11 @@ export default function Composer() {
     return () => {
       alive = false;
     };
-    // Зависим только от открытия/режима/письма: опрос каждые 4с обновляет emailView,
-    // и пересборка шаблона во время редактирования затирала бы текст.
+    // Зависим от открытия/режима/письма и списка ящиков. emailView намеренно не в
+    // зависимостях: опрос каждые 4с затирал бы текст. Когда список ящиков догружается,
+    // шаблон запрашивается заново уже с настоящим адресом и подписью.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compose.open, compose.mode, compose.emailId, compose.draft]);
+  }, [compose.open, compose.mode, compose.emailId, compose.draft, accounts.length, accountFilter]);
 
   return (
     <>

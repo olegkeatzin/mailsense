@@ -128,6 +128,17 @@ describe("окно письма: личное имя и личная подпи�
     expect(editor.innerHTML).not.toContain("mailsense-signature");
   });
 
+  it("неизвестный ящик из фильтра заменяется доступным, а не показывается UUID", async () => {
+    useStore.setState({ accounts: [
+      { id: "acc-1", username: "user2@mail.test", settings: {} } as unknown as Account
+    ], accountFilter: "stale-acc" });
+    (api.composeTemplate as jest.Mock).mockResolvedValue({ ...template, accountId: "stale-acc" });
+    render(<Composer />);
+
+    await waitFor(() => expect(api.composeTemplate).toHaveBeenCalledWith("acc-1", "new", null, { useAccountSignature: true }));
+    expect(screen.queryByText("stale-acc")).toBeNull();
+  });
+
   it("отправка несёт fromName из личного профиля; у нового письма replyTo нет", async () => {
     render(<Composer />);
     await screen.findByTestId("editor-body");
