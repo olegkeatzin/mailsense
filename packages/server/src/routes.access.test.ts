@@ -869,6 +869,37 @@ describe("утверждение руководителем сразу отпр�
   });
 });
 
+describe("отчёт исполнителя из приложения", () => {
+  it("после сохранения отправляет письмо руководителю и аппарату", async () => {
+    mockedDocflow.reportExecution.mockResolvedValueOnce({ id: "res-1", status: "sent" });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/report", {
+      token: token("executor"),
+      body: { text: "Ответ подготовлен и отправлен" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ reportEmailSent: true });
+    expect(mockedCore.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: expect.arrayContaining([expect.objectContaining({ address: "stand@mail.test" })]),
+        bodyText: expect.stringContaining("Ответ подготовлен и отправлен")
+      })
+    );
+  });
+
+  it("отчёт, пришедший письмом, второй раз не отправляется", async () => {
+    mockedDocflow.reportExecution.mockResolvedValueOnce({ id: "res-1", status: "done" });
+
+    await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/report", {
+      token: token("executor"),
+      body: { text: "Отчёт из письма", emailId: "mail-1" }
+    });
+
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
+  });
+});
+
 describe("ссылки на письма по делу ведут только в свои копии", () => {
   it("my-copy находит копию по Message-ID", async () => {
     mockedCore.getEmailView.mockReturnValue({ id: "stored-1", messageId: "<m-1@test>" });
@@ -928,12 +959,25 @@ describe("ссылки на письма по делу ведут только �
 
 describe("резолюция, созданная руководителем из письма", () => {
   it("руководитель создаёт и сразу утверждает её по документу; исполнителю нельзя", async () => {
+    const attachmentDir = fs.mkdtempSync(path.join(os.tmpdir(), "mailsense-send-att-"));
+    const attachmentFile = path.join(attachmentDir, "scan.pdf");
+    fs.writeFileSync(attachmentFile, "pdf");
+    mockedCore.listAttachments.mockReturnValueOnce([
+      {
+        id: "att-1",
+        filename: "scan.pdf",
+        mimeType: "application/pdf",
+        size: 3,
+        storagePath: attachmentFile
+      }
+    ]);
     mockedCore.getEmailView.mockReturnValue({
       id: "mail-1",
       from: { address: "post@mail.test", name: "Аппарат" },
       subject: "Письмо вх1 — прошу наложить резолюцию",
       messageId: "<req-1@stand.test>",
-      references: []
+      references: [],
+      bodyText: "Уважаемые коллеги! Приглашаем на ВКС."
     });
     mockedDocflow.createResolution.mockResolvedValue({ id: "res-new" });
     mockedDocflow.requestApproval.mockResolvedValue({ id: "res-new", status: "pending_approval" });
@@ -968,10 +1012,13 @@ describe("резолюция, созданная руководителем из
           expect.objectContaining({ address: "stand@mail.test" }),
           expect.objectContaining({ address: "u-assignee@stand.test" })
         ]),
-        inReplyToMessageId: "<req-1@stand.test>"
+        inReplyToMessageId: "<req-1@stand.test>",
+        bodyText: expect.stringContaining("Уважаемые коллеги! Приглашаем на ВКС."),
+        attachments: [expect.objectContaining({ filename: "scan.pdf", data: "cGRm" })]
       })
     );
     expect(mockedDocflow.dispatchResolution).toHaveBeenCalled();
+    fs.rmSync(attachmentDir, { recursive: true, force: true });
 
     const denied = await request(
       app.baseUrl,

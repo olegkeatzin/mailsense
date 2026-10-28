@@ -349,6 +349,20 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         : "Re: " + sourceSubject
       : "Резолюция по документу " + number;
     const executorNames = withEmail.map((a) => a.fullName).join(", ");
+    // Исходное письмо (документ) пересылаем вместе с резолюцией: получатель должен
+    // видеть, на что наложено поручение, а не только текст резолюции.
+    const originalMail = detail.documentEmailId
+      ? getEmailView(detail.documentEmailId)
+      : sourceMail;
+    const originalText = (originalMail?.bodyText ?? "").trim();
+    const originalHead = originalMail
+      ? [
+          "— Исходное письмо —",
+          "От: " + (originalMail.from?.name || originalMail.from?.address || "не указан"),
+          "Тема: " + (originalMail.subject || "без темы"),
+          originalMail.date ? "Дата: " + originalMail.date : ""
+        ].filter(Boolean).join("\n")
+      : "";
     const bodyText = [
       "Резолюция по документу " + number + ".",
       "",
@@ -360,8 +374,25 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       "Резолюцию утвердил(а): " + actor.name,
       "",
       "—",
-      actor.name
+      actor.name,
+      ...(originalHead || originalText ? ["", originalHead, "", originalText] : [])
     ].filter((line) => line !== "").join("\n");
+
+    // Вложения исходного письма: без них адресат получает резолюцию без документа.
+    const attachmentSources = [...new Set([detail.documentEmailId, sourceMail?.id].filter(Boolean) as string[])];
+    const seenFiles = new Set<string>();
+    const attachments: Array<{ filename: string; mimeType: string; data: string }> = [];
+    for (const sourceId of attachmentSources) {
+      for (const att of listAttachments(sourceId)) {
+        if (!att.storagePath || !fs.existsSync(att.storagePath) || seenFiles.has(att.storagePath)) continue;
+        seenFiles.add(att.storagePath);
+        attachments.push({
+          filename: att.filename,
+          mimeType: att.mimeType,
+          data: fs.readFileSync(att.storagePath).toString("base64")
+        });
+      }
+    }
 
     const claimed = await dispatchResolution(resolutionId, actor, {
       comment: "Резолюция отправлена руководителем"
@@ -378,6 +409,7 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         references: sourceMail?.messageId
           ? [...(sourceMail.references ?? []), sourceMail.messageId]
           : (sourceMail?.references ?? []),
+        attachments,
         headers: {
           "X-MailSense-EDMS": "doc=" + detail.documentId + "; res=" + resolutionId + "; kind=dispatch; v=1"
         }
@@ -401,6 +433,74 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       resolution: await attachDispatchEmail(resolutionId, sent.emailId, actor),
       sentTo: recipients.map((r) => r.address)
     };
+  }
+
+  /**
+   * Отчёт, сданный в приложении, тоже должен уйти письмом — ответом на письмо
+   * с резолюцией. Иначе руководитель и аппарат видят отчёт только в карточке.
+   */
+  async function sendReportEmail(resolutionId: string, text: string, actor: Actor) {
+    const detail = await getResolutionDetail(resolutionId);
+    if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
+    const sourceId =
+      detail.approvalEmailId ?? detail.dispatchEmailId ?? detail.requestEmailId ?? detail.documentEmailId;
+    const sourceMail = sourceId ? getEmailView(sourceId) : null;
+    const account = await resolveSendAccount(actor.id, null);
+
+    const recipients: Array<{ address: string; name?: string }> = [];
+    const seen = new Set<string>();
+    const add = (address?: string | null, name?: string | null, keepSelf = false) => {
+      const value = (address ?? "").trim();
+      const key = value.toLowerCase();
+      if (!value || seen.has(key)) return;
+      if (!keepSelf && key === (account.username ?? "").toLowerCase()) return;
+      seen.add(key);
+      recipients.push(name ? { address: value, name } : { address: value });
+    };
+
+    const serviceState = await getServiceAccountState();
+    const service = serviceState.accountId
+      ? listAccounts().find((a) => a.id === serviceState.accountId)
+      : null;
+    if (service?.username) add(service.username, "Аппарат", true);
+    if (detail.approvedBy) {
+      const manager = await getUser(detail.approvedBy);
+      if (manager?.email) add(manager.email, manager.fullName);
+    }
+    if (!recipients.length) throw new AppError("Не указано, кому отправить отчёт", 400, "no_recipients");
+
+    const number = detail.documentNumber || "без номера";
+    const sourceSubject = (sourceMail?.subject ?? "").trim();
+    const subject = sourceSubject
+      ? /^re:/i.test(sourceSubject)
+        ? sourceSubject
+        : "Re: " + sourceSubject
+      : "Отчёт по поручению " + number;
+    const bodyText = [
+      "Отчёт по поручению " + number + ".",
+      "",
+      text,
+      "",
+      "Исполнитель: " + actor.name,
+      "",
+      "—",
+      actor.name
+    ].join("\n");
+
+    return sendEmail({
+      accountId: account.id,
+      to: recipients,
+      subject,
+      bodyText,
+      inReplyToEmailId: sourceMail?.id ?? null,
+      inReplyToMessageId: sourceMail?.messageId ?? null,
+      references: sourceMail?.messageId
+        ? [...(sourceMail.references ?? []), sourceMail.messageId]
+        : (sourceMail?.references ?? []),
+      headers: {
+        "X-MailSense-EDMS": "doc=" + detail.documentId + "; res=" + resolutionId + "; kind=report; v=1"
+      }
+    });
   }
 
   // -------- Черновик по письму: ИИ предлагает текст --------
@@ -1283,14 +1383,30 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       if (!req.user) throw new AppError("Требуется вход", 401, "unauthorized");
       const b = req.body ?? {};
       // Отчитывается тот, кто вошёл: «отчёт за другого» не принимаем.
+      const text = String(b.text ?? "");
       const reported = await reportExecution(
         req.params.id,
         req.user.id,
-        { text: String(b.text ?? ""), emailId: b.emailId ? String(b.emailId) : null },
+        { text, emailId: b.emailId ? String(b.emailId) : null },
         actorOf(req)
       );
       scheduleStatsRecompute(reported);
-      res.json(reported);
+
+      // Отчёт из приложения отправляем письмом. Отчёт из письма (emailId) уже
+      // пришёл почтой — второй раз не шлём.
+      let reportEmailSent = true;
+      if (!b.emailId) {
+        try {
+          await sendReportEmail(req.params.id, text, actorOf(req));
+        } catch (err) {
+          reportEmailSent = false;
+          logger.warn(
+            { err: (err as Error).message, resolutionId: req.params.id },
+            "Отчёт сохранён, но письмо руководителю/аппарату не ушло"
+          );
+        }
+      }
+      res.json({ ...reported, reportEmailSent });
     })
   );
 

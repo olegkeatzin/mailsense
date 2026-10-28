@@ -286,8 +286,12 @@ export function MyTasks() {
     }
     setReportBusy(true);
     try {
-      await resolutionApi.report(reportFor.resolutionId, reportText);
-      message.success("Отчёт отправлен");
+      const saved = await resolutionApi.report(reportFor.resolutionId, reportText);
+      if (saved.reportEmailSent === false) {
+        message.warning("Отчёт сохранён, но письмо руководителю и аппарату не ушло");
+      } else {
+        message.success("Отчёт отправлен");
+      }
       setReportFor(null);
       setReportText("");
       await load();

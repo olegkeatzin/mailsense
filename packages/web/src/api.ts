@@ -735,7 +735,7 @@ export const resolutionApi = {
 
   /** Отчёт исполнителя об исполнении: описывает, что сделано (этап 4). */
   report(id: string, text: string, emailId?: string | null, accountId?: string) {
-    return request<Resolution>("/api/docflow/resolutions/" + id + "/report", {
+    return request<Resolution & { reportEmailSent?: boolean }>("/api/docflow/resolutions/" + id + "/report", {
       method: "POST",
       body: JSON.stringify(accountId ? { text, emailId, accountId } : { text, emailId })
     });
