@@ -6,6 +6,9 @@ import { installDomEnvironment } from "./dom";
 configure({ asyncUtilTimeout: 8000 });
 
 jest.mock("../api", () => ({
+  api: {
+    documentEmailForMe: jest.fn()
+  },
   resolutionApi: {
     forApproval: jest.fn(),
     forConfirmation: jest.fn(),
@@ -13,12 +16,13 @@ jest.mock("../api", () => ({
     approve: jest.fn(),
     reject: jest.fn(),
     confirm: jest.fn(),
+    suggestAssignees: jest.fn().mockResolvedValue({ ready: false, collected: 0, needed: 0, items: [] }),
     // Форма срока теперь показывает типовые сроки (А9) — маршрут должен быть в моке.
     deadlinePresets: jest.fn().mockResolvedValue({ items: [] })
   }
 }));
 
-import { resolutionApi } from "../api";
+import { api, resolutionApi } from "../api";
 import { ApprovalList } from "../components/ApprovalList";
 import { useStore } from "../store";
 import type { AuthStatus, AuthUser } from "../types";
@@ -33,6 +37,7 @@ const resolution = {
   priority: "normal",
   deadline: "2026-10-20",
   assignees: [{ userId: "u-1", kind: "responsible", fullName: "Мария Петрова" }],
+  documentId: "doc-1",
   history: [],
   preparedByName: "Иван Иванов"
 } as unknown as Parameters<typeof Object>[0];
@@ -61,6 +66,7 @@ describe("ApprovalList: утверждение спрашивает подтве
       { id: "u-1", fullName: "Мария Петрова", email: "petrova_ma@mail.test", department: "" }
     ]);
     (resolutionApi.approve as jest.Mock).mockResolvedValue({});
+    (api.documentEmailForMe as jest.Mock).mockResolvedValue({ emailId: "copy-1", label: "Направлено руководителю" });
   });
 
   it("«Утвердить» сначала показывает, что уйдёт, и не отправляет запрос", async () => {
@@ -105,6 +111,18 @@ describe("ApprovalList: утверждение спрашивает подтве
     render(<ApprovalList mode="confirm" />);
 
     expect(await screen.findByRole("button", { name: "Подтвердить утверждение" })).not.toBeNull();
+  });
+
+  it("в карточке есть ссылка на письмо в своём ящике", async () => {
+    const select = jest.fn().mockResolvedValue(undefined);
+    useStore.setState({ select });
+    render(<ApprovalList />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Письмо" }));
+
+    await waitFor(() => expect(api.documentEmailForMe).toHaveBeenCalledWith("doc-1"));
+    expect(select).toHaveBeenCalledWith("copy-1");
+    expect(useStore.getState().section).toBe("mail");
   });
 
   it("роль signer: очередь и справочник исполнителей доступны по её правам", async () => {

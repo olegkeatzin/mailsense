@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Card, DatePicker, Empty, Input, Modal, Select, Space, Spin, Tag, Tooltip, Typography, message } from "antd";
 import dayjs from "dayjs";
-import { resolutionApi } from "../api";
+import { api, resolutionApi } from "../api";
 import { useStore } from "../store";
 import { PRIORITY_TITLES, RESOLUTION_STATUS_TITLES, type AssigneeKind, type Resolution, type ResolutionPriority } from "../resolutionTypes";
 import type { Permission, User } from "../types";
@@ -27,6 +27,8 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
   // отдельный маршрут, а не та же выборка.
   const isConfirm = mode === "confirm";
   const can = useStore((s) => s.can);
+  const setSection = useStore((s) => s.setSection);
+  const selectEmail = useStore((s) => s.select);
   /** Право на саму очередь: подписант — approve, аппарат (подтверждение разбора) — dispatch. */
   const requiredPermission: Permission = isConfirm ? "resolution.dispatch" : "resolution.approve";
   const allowed = can(requiredPermission);
@@ -38,12 +40,31 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [emailBusy, setEmailBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   /** Черновик решения по каждой резолюции: пока не утвердили — правится свободно. */
   const [forms, setForms] = useState<Record<string, { text: string; ids: string[]; resp: string | null; priority: ResolutionPriority; deadline: string | null }>>({});
 
   function patchForm(id: string, patch: Partial<{ text: string; ids: string[]; resp: string | null; priority: ResolutionPriority; deadline: string | null }>) {
     setForms((f) => ({ ...f, [id]: { ...f[id], ...patch } }));
+  }
+
+  /** Открыть письмо по документу в СВОЁМ ящике: у подписанта это запрос аппарата. */
+  async function openEmail(r: Resolution) {
+    setEmailBusy(r.id);
+    try {
+      const target = await api.documentEmailForMe(r.documentId);
+      if (!target.emailId) {
+        message.warning("Нет доступной копии письма в вашем ящике");
+        return;
+      }
+      setSection("mail");
+      await selectEmail(target.emailId);
+    } catch (e) {
+      message.error("Не удалось открыть письмо: " + humanError(e));
+    } finally {
+      setEmailBusy(null);
+    }
   }
 
   async function load() {
@@ -255,6 +276,14 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                     <span style={{ color: "#666", fontWeight: 400 }}>{r.documentSummary}</span>
                     {/* Пресет gold даёт 2.76:1 — норма AA не проходит, поэтому свой стиль. */}
                     {byEmail ? <Tag style={GOLD_STYLE}>{RESOLUTION_STATUS_TITLES.email_approval}</Tag> : null}
+                    <Button
+                      size="small"
+                      type="link"
+                      loading={emailBusy === r.id}
+                      onClick={() => void openEmail(r)}
+                    >
+                      Письмо
+                    </Button>
                   </Space>
                 }
               >
