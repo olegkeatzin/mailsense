@@ -176,9 +176,10 @@ function NotificationsPanel({ open, onClose }: { open: boolean; onClose: () => v
 
   // Фильтр — серверный: фильтровать 20 уже загруженных записей значит спрятать
   // непрочитанное 21-е и показать ложное «Непрочитанных нет» (§2.2).
+  // Список при открытии грузит колокольчик; здесь остаётся только смена фильтра.
   useEffect(() => {
-    void loadNotifications({ unreadOnly });
-  }, [unreadOnly, loadNotifications]);
+    if (!open) setUnreadOnly(false);
+  }, [open]);
 
   useEffect(() => {
     if (open) containerRef.current?.focus();
@@ -273,7 +274,14 @@ function NotificationsPanel({ open, onClose }: { open: boolean; onClose: () => v
         </Button>
       </div>
 
-      <Checkbox checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)}>
+      <Checkbox
+        checked={unreadOnly}
+        onChange={(e) => {
+          const next = e.target.checked;
+          setUnreadOnly(next);
+          void loadNotifications({ unreadOnly: next });
+        }}
+      >
         {NOTIFY_TEXTS.unreadOnly}
       </Checkbox>
 
@@ -334,6 +342,7 @@ export function NotificationsBell() {
   const startNotificationPolling = useStore((s) => s.startNotificationPolling);
   const stopNotificationPolling = useStore((s) => s.stopNotificationPolling);
   const refreshUnreadCount = useStore((s) => s.refreshUnreadCount);
+  const loadNotifications = useStore((s) => s.loadNotifications);
   const [panelOpen, setPanelOpen] = useState(false);
   const bellRef = useRef<HTMLButtonElement | null>(null);
   /** Панель уже открывали: только тогда закрытие обязано вернуть фокус на колокольчик. */
@@ -382,7 +391,12 @@ export function NotificationsBell() {
       </span>
       <Popover
         open={panelOpen}
-        onOpenChange={setPanelOpen}
+        onOpenChange={(next) => {
+          setPanelOpen(next);
+          // Перечитываем список именно при открытии: счётчик в бейдже обновляется
+          // опросом, а панель без этого оставалась на старых уведомлениях.
+          if (next) void loadNotifications();
+        }}
         trigger="click"
         placement="bottomRight"
         arrow={false}

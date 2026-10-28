@@ -157,6 +157,25 @@ describe("колокольчик уведомлений", () => {
     expect(screen.getByText("Подготовить ответ внешнему партнёру")).not.toBeNull();
   });
 
+  it("повторное открытие панели перечитывает список, а не показывает старые", async () => {
+    asUser(["notifications.view"]);
+    mockList.mockResolvedValue(page([note("n1")]));
+    mockCount.mockResolvedValue({ unread: 2, enabled: true });
+    render(<NotificationsBell />);
+
+    openPanel();
+    expect(await screen.findByText("Новое поручение n1")).not.toBeNull();
+    const before = mockList.mock.calls.length;
+
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Центр уведомлений" }), { key: "Escape" });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Уведомления/ }).getAttribute("aria-expanded")).toBe("false")
+    );
+    openPanel();
+
+    await waitFor(() => expect(mockList.mock.calls.length).toBeGreaterThan(before));
+  });
+
   it("клик по уведомлению помечает прочитанным, закрывает панель и ведёт в раздел", async () => {
     // Ссылка ведёт в «Мои задачи» — значит право task.view у пользователя есть.
     asUser(["notifications.view", "task.view"]);
