@@ -835,7 +835,7 @@ export default function Composer() {
         to: compose.edms.to ?? [],
         cc: [],
         bcc: [],
-        attachments: []
+        attachments: compose.edms.attachments ?? []
       } as unknown as ComposeTemplate);
       return;
     }

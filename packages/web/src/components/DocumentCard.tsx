@@ -171,6 +171,70 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
     }
   }
 
+  /**
+   * Окно письма руководителю: это ПЕРЕСЫЛКА исходного письма.
+   * Тянем оригинал, чтобы в окне были его текст и вложения, а не только служебная записка.
+   */
+  async function openForwardComposer() {
+    let source: Awaited<ReturnType<typeof api.email>> | null = null;
+    if (doc?.emailId) {
+      try {
+        source = await api.email(doc.emailId);
+      } catch {
+        /* письмо недоступно — окно всё равно откроется с текстом */
+      }
+    }
+    const head = doc?.regNumber ? "Письмо " + doc.regNumber : "Письмо";
+    const baseSubject = source?.subject?.replace(/^\s*((fwd|fw|re):\s*)+/i, "").trim();
+    const subject = baseSubject ? "Fwd: " + baseSubject : head + " — прошу наложить резолюцию";
+    const bodyLines = [
+      "Добрый день!",
+      "",
+      "Направляю поступившее письмо для наложения резолюции.",
+      doc?.regNumber ? "Регистрационный номер: " + doc.regNumber + "." : "",
+      doc?.summary ? "Краткое содержание: " + doc.summary : "",
+      doc?.sender ? "Отправитель: " + doc.sender : "",
+      "",
+      "Прошу указать поручение и исполнителя."
+    ];
+    if (source) {
+      bodyLines.push(
+        "",
+        "— Пересылаемое письмо —",
+        "От: " + (source.from?.name || source.from?.address || "не указан"),
+        "Тема: " + (source.subject || "без темы"),
+        source.date ? "Дата: " + source.date : "",
+        "",
+        source.bodyText
+      );
+    }
+    const recipient = forwardTo ? signers.find((u) => u.id === forwardTo) : null;
+    openEdmsCompose({
+      documentId: documentId ?? "",
+      subject,
+      bodyText: bodyLines.join("\n"),
+      attachments: source
+        ? source.attachments
+            .filter((a) => a.storagePath)
+            .map((a) => ({
+              filename: a.filename,
+              mimeType: a.mimeType,
+              size: a.size,
+              attachmentId: a.id,
+              emailId: source!.id
+            }))
+        : [],
+      ...(recipient?.email
+        ? {
+            to: [{ address: recipient.email, name: recipient.fullName || undefined }],
+            toUserId: recipient.id,
+            toEmail: recipient.email
+          }
+        : {})
+    });
+    setForwardOpen(false);
+  }
+
   async function actResolution(id: string, fn: () => Promise<unknown>, ok: string) {
     try {
       await fn();
@@ -645,38 +709,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
           type="primary"
           block
           style={{ marginBottom: 8 }}
-          onClick={() => {
-            const head = doc?.regNumber ? "Письмо " + doc.regNumber : "Письмо";
-            const subject = head + " — прошу наложить резолюцию";
-            const bodyText = [
-              "Добрый день!",
-              "",
-              "Направляю поступившее письмо для наложения резолюции.",
-              doc?.regNumber ? "Регистрационный номер: " + doc.regNumber + "." : "",
-              doc?.summary ? "Краткое содержание: " + doc.summary : "",
-              doc?.sender ? "Отправитель: " + doc.sender : "",
-              "",
-              "Прошу указать поручение и исполнителя."
-            ]
-              .filter((line) => line !== "")
-              .join("\n");
-            // Выбранного руководителя переносим в окно письма: иначе человек выбирает его
-            // второй раз, а письмо уходит не тому, кого он указал в этом окне.
-            const recipient = forwardTo ? signers.find((u) => u.id === forwardTo) : null;
-            openEdmsCompose({
-              documentId: documentId ?? "",
-              subject,
-              bodyText,
-              ...(recipient?.email
-                ? {
-                    to: [{ address: recipient.email, name: recipient.fullName || undefined }],
-                    toUserId: recipient.id,
-                    toEmail: recipient.email
-                  }
-                : {})
-            });
-            setForwardOpen(false);
-          }}
+          onClick={() => void openForwardComposer()}
         >
           Открыть окно письма (править текст)
         </Button>

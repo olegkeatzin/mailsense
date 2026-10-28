@@ -343,7 +343,26 @@ describe("действия СЭД передают выбранный ящик (
     await waitFor(() => expect(resolutionApi.forward).toHaveBeenCalledWith("doc-1", "u-signer", "acc-1"));
   });
 
-  it("«Открыть окно письма» переносит выбранного руководителя в «Кому»", async () => {
+  it("«Открыть окно письма» переносит руководителя и оригинал с вложениями", async () => {
+    const baseDoc = await (api.document as jest.Mock)();
+    (api.document as jest.Mock).mockResolvedValue({ ...baseDoc, emailId: "mail-1" });
+    (api.email as jest.Mock).mockResolvedValue({
+      id: "mail-1",
+      subject: "Входящее письмо",
+      from: { address: "sender@outside.test", name: "Отправитель" },
+      date: "2026-10-28T10:00:00.000Z",
+      bodyText: "Оригинальный текст письма.",
+      attachments: [
+        {
+          id: "att-1",
+          emailId: "mail-1",
+          filename: "scan.pdf",
+          mimeType: "application/pdf",
+          size: 3,
+          storagePath: "/tmp/scan.pdf"
+        }
+      ]
+    });
     render(<DocumentCard documentId="doc-1" onClose={() => {}} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "Направить руководителю" }));
@@ -358,6 +377,11 @@ describe("действия СЭД передают выбранный ящик (
       expect(edms?.toEmail).toBe("p@mail.test");
       expect(edms?.toUserId).toBe("u-signer");
       expect(edms?.to).toEqual([{ address: "p@mail.test", name: "Мария Петрова" }]);
+      expect(edms?.subject).toBe("Fwd: Входящее письмо");
+      expect(edms?.bodyText).toContain("Оригинальный текст письма.");
+      expect(edms?.attachments).toEqual([
+        expect.objectContaining({ filename: "scan.pdf", attachmentId: "att-1", emailId: "mail-1" })
+      ]);
     });
     // Не оставляем открытое окно следующему тесту.
     useStore.getState().closeCompose();

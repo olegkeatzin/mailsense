@@ -10,6 +10,7 @@ import type {
   AuthUser,
   Draft,
   Email,
+  ComposeTemplateAttachment,
   EmailAddress,
   EmailView,
   Permission,
@@ -147,6 +148,8 @@ interface State extends FilterState {
       to?: EmailAddress[];
       toUserId?: string;
       toEmail?: string;
+      /** Вложения исходного письма: окно пересылки не должно открыться пустым. */
+      attachments?: ComposeTemplateAttachment[];
     } | null;
   };
   openCompose: (mode: ComposeMode, emailId?: string | null) => void;
@@ -160,6 +163,7 @@ interface State extends FilterState {
     to?: EmailAddress[];
     toUserId?: string;
     toEmail?: string;
+    attachments?: ComposeTemplateAttachment[];
   }) => void;
   /** Открыть композер с уже сохранённым черновиком. */
   openDraftCompose: (draft: Draft) => void;
