@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Button, Card, Descriptions, Form, Input, Modal, Select, Space, Tag, message } from "antd";
 import { ExportOutlined, SaveOutlined } from "@ant-design/icons";
-import { api } from "../api";
+import { api, saveBlob } from "../api";
 import { useStore } from "../store";
 import type { NumberingState } from "../types";
 import { humanError } from "../utils/humanError";
@@ -30,6 +30,8 @@ export default function NumberingTab() {
   const [saving, setSaving] = useState(false);
   const [exportYear, setExportYear] = useState(String(new Date().getFullYear()));
   const [importing, setImporting] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   // Закрытие года: подтверждение вводом года + текст отказа от сервера.
   const [closeOpen, setCloseOpen] = useState(false);
@@ -138,7 +140,7 @@ export default function NumberingTab() {
     new Set([state?.openPeriod, String(new Date().getFullYear())].filter((y): y is string => !!y))
   ).map((y) => ({ value: y, label: y }));
 
-  const exportUrl = api.journalArchiveUrl(exportYear);
+
 
   const pickImport = (file: File | null) => {
     if (!file) return;
@@ -227,10 +229,21 @@ export default function NumberingTab() {
           <Space wrap>
             <Select style={{ width: 120 }} value={exportYear} onChange={setExportYear} options={yearOptions} />
             {/*
-              Скачивание — обычной ссылкой: файл может быть большим, браузер качает его
-              потоком и показывает ход сам. Кнопка с href и есть эта ссылка.
+              Скачиваем через fetch с сессией: обычная ссылка открывала системный браузер,
+              где cookie документооборота нет и сервер отвечал «Требуется вход».
             */}
-            <Button icon={<ExportOutlined />} href={exportUrl} target="_blank" rel="noreferrer">
+            <Button
+              icon={<ExportOutlined />}
+              loading={archiving}
+              onClick={() => {
+                setArchiving(true);
+                void api
+                  .journalArchiveDownload(exportYear)
+                  .then((file) => saveBlob(file.blob, file.filename))
+                  .catch((e) => message.error("Не удалось выгрузить архив: " + humanError(e)))
+                  .finally(() => setArchiving(false));
+              }}
+            >
               Выгрузить журнал за год
             </Button>
             <Button loading={importing} onClick={() => fileRef.current?.click()}>
@@ -267,8 +280,15 @@ export default function NumberingTab() {
             <Button
               size="small"
               icon={<ExportOutlined />}
-              href={api.journalExportUrl({ period: state.openPeriod })}
-              target="_blank"
+              loading={exportingExcel}
+              onClick={() => {
+                setExportingExcel(true);
+                void api
+                  .journalExport({ period: state.openPeriod! })
+                  .then((file) => saveBlob(file.blob, file.filename))
+                  .catch((e) => message.error("Не удалось выгрузить журнал: " + humanError(e)))
+                  .finally(() => setExportingExcel(false));
+              }}
             >
               Выгрузить журнал {state.openPeriod} в Excel
             </Button>

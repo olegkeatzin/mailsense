@@ -3,7 +3,7 @@ import { Button, DatePicker, Input, Select, Space, Table, Tag, message } from "a
 import { DownloadOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
-import { api, resolutionApi } from "../api";
+import { api, resolutionApi, saveBlob } from "../api";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import type { AuditEntry } from "../types";
 import {
@@ -135,6 +135,7 @@ export default function AuditTab() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [action, setAction] = useState("");
   const [entityType, setEntityType] = useState("");
   const [entityId, setEntityId] = useState("");
@@ -316,14 +317,21 @@ export default function AuditTab() {
         </Button>
         <Button
           icon={<DownloadOutlined />}
-          href={api.auditExportUrl({
-            action: action || undefined,
-            entityType: entityType || undefined,
-            entityId: entityId.trim() || undefined,
-            dateFrom: range[0] || undefined,
-            dateTo: range[1] || undefined
-          })}
-          target="_blank"
+          loading={exporting}
+          onClick={() => {
+            setExporting(true);
+            void api
+              .auditExport({
+                action: action || undefined,
+                entityType: entityType || undefined,
+                entityId: entityId.trim() || undefined,
+                dateFrom: range[0] || undefined,
+                dateTo: range[1] || undefined
+              })
+              .then((file) => saveBlob(file.blob, file.filename))
+              .catch((e) => message.error("Не удалось выгрузить аудит: " + humanError(e)))
+              .finally(() => setExporting(false));
+          }}
         >
           Выгрузить в Excel
         </Button>

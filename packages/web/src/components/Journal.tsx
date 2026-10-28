@@ -3,7 +3,7 @@ import { Button, DatePicker, Input, Select, Space, Table, Tag, Tooltip, message 
 import { DownloadOutlined, ReloadOutlined, SearchOutlined, SettingOutlined } from "@ant-design/icons";
 import type { ColumnsType } from "antd/es/table";
 import dayjs from "dayjs";
-import { api } from "../api";
+import { api, saveBlob } from "../api";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useStore } from "../store";
 import { DOCUMENT_STATUS_TITLES, type DocumentListItem, type DocumentStatus } from "../types";
@@ -44,6 +44,7 @@ export default function Journal() {
   const [rows, setRows] = useState<DocumentListItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [openId, setOpenId] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
@@ -243,6 +244,18 @@ export default function Journal() {
     }
   ];
 
+  async function exportExcel() {
+    setExporting(true);
+    try {
+      const file = await api.journalExport(filter());
+      saveBlob(file.blob, file.filename);
+    } catch (e) {
+      message.error("Не удалось выгрузить журнал: " + humanError(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <div style={{ padding: 16, height: "100%", overflow: "auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
@@ -256,8 +269,8 @@ export default function Journal() {
         <Button
           type="primary"
           icon={<DownloadOutlined />}
-          href={api.journalExportUrl(filter())}
-          target="_blank"
+          loading={exporting}
+          onClick={() => void exportExcel()}
         >
           Выгрузить в Excel
         </Button>

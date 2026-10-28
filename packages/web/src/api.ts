@@ -104,6 +104,32 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** Скачать файл с cookie сессии и достать имя из Content-Disposition. */
+async function downloadWithSession(url: string, fallback = "файл"): Promise<{ blob: Blob; filename: string }> {
+  const res = await fetch(BASE + url, { credentials: "include" });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) msg = body.error;
+    } catch {
+      /* тело не JSON — показываем статус */
+    }
+    throw new Error(msg);
+  }
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const utf = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1];
+  let filename = fallback;
+  if (utf) {
+    try {
+      filename = decodeURIComponent(utf);
+    } catch {
+      filename = utf;
+    }
+  }
+  return { blob: await res.blob(), filename };
+}
+
 export interface EmailFilter {
   folder?: string;
   accountId?: string;
@@ -413,7 +439,7 @@ export const api = {
     return request<{ items: IncomingItem[]; total: number }>("/api/docflow/journal/incoming?" + p.toString());
   },
   journalStatusCounts: () => request<Record<string, number>>("/api/docflow/journal/status-counts"),
-  /** Ссылка на выгрузку: скачивание делает браузер, а не fetch. */
+  /** Адрес выгрузки — для fetch, а не для href: из Electron href уходит во внешний браузер без сессии. */
   journalExportUrl: (filter: JournalFilter = {}) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries(filter)) {
@@ -422,6 +448,15 @@ export const api = {
     const qs = p.toString();
     return "/api/docflow/journal/export" + (qs ? "?" + qs : "");
   },
+  /** Excel-выгрузка журнала: тянем blob с cookie сессии и сохраняем локально. */
+  journalExport: (filter: JournalFilter = {}) =>
+    downloadWithSession(api.journalExportUrl(filter), "журнал.xlsx"),
+  /** Выгрузка аудита — тот же путь: href открывал внешний браузер без сессии. */
+  auditExport: (filter: Record<string, string | number | undefined> = {}) =>
+    downloadWithSession(api.auditExportUrl(filter), "аудит.xlsx"),
+  /** ZIP архива года. */
+  journalArchiveDownload: (year: string) =>
+    downloadWithSession(api.journalArchiveUrl(year), "journal-" + year + ".zip"),
   auditExportUrl: (filter: Record<string, string | number | undefined> = {}) => {
     const p = new URLSearchParams();
     for (const [k, v] of Object.entries(filter)) if (v !== undefined && v !== "") p.set(k, String(v));
@@ -451,9 +486,9 @@ export const api = {
       body: JSON.stringify({ period, confirm, reason })
     }),
   /**
-   * Ссылка на выгрузку АРХИВА года (ZIP с журналом и вложениями). Именно ССЫЛКА:
-   * файл может быть большим, и браузер качает его потоком сам, не занимая память страницы.
-   * (Excel-выгрузка журнала — journalExportUrl выше, это разные вещи.)
+   * Адрес выгрузки АРХИВА года (ZIP с журналом и вложениями).
+   * Скачиваем через fetch с cookie сессии: обычный href из Electron уходит во внешний
+   * браузер, где сессии документооборота нет. Excel-выгрузка журнала — journalExportUrl.
    */
   journalArchiveUrl: (year: string) => "/api/journal/export?year=" + encodeURIComponent(year),
   /**
