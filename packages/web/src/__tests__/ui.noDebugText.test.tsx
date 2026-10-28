@@ -258,12 +258,6 @@ describe("в интерфейсе нет служебного текста ра�
     expectClean(container, "На утверждении");
   });
 
-  it("«На подтверждении» (аппарат)", async () => {
-    const { container } = render(<ApprovalList mode="confirm" />);
-    await waitFor(() => expect(container.textContent).toContain("Ответы руководителя"));
-    expectClean(container, "На подтверждении");
-  });
-
   it("«Журнал регистрации»", async () => {
     const { container } = render(<Journal />);
     await waitFor(() => expect(container.textContent).toContain("Журнал"));

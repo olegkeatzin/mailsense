@@ -634,7 +634,7 @@ export interface CaseRecord {
 export type NotificationSeverity = "info" | "warning" | "danger";
 
 /** Раздел интерфейса, в который ведёт уведомление (§7 контракта). */
-export type NotificationLink = "tasks" | "approvals" | "confirmation" | "board" | "journal";
+export type NotificationLink = "tasks" | "approvals" | "board" | "journal";
 
 /** Уведомление центра уведомлений (§6 контракта). */
 export interface AppNotification {

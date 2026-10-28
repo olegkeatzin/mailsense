@@ -42,13 +42,6 @@ export default function AccountSidebar() {
     ...(can("journal.view") ? [{ key: "journal", icon: <FileTextOutlined />, label: "Журнал" }] : []),
     ...(can("journal.register") ? [{ key: "incoming", icon: <InboxOutlined />, label: "На регистрацию" }] : []),
     ...(can("resolution.approve") ? [{ key: "approvals", icon: <AuditOutlined />, label: "На утверждении" }] : []),
-    // «На подтверждении» — рабочее место АППАРАТА: он подтверждает разбор ответов,
-    // пришедших письмом. Раздел был объявлен в AppSection, но нигде не смонтирован,
-    // и очередь была недостижима из интерфейса (дефект, А1 приложения к контракту).
-    // Решения за человека по-прежнему не принимает система: аппарат читает письмо сам.
-    ...(can("resolution.dispatch")
-      ? [{ key: "confirmation", icon: <AuditOutlined />, label: "На подтверждении" }]
-      : []),
     ...(can("task.view") ? [{ key: "tasks", icon: <CheckSquareOutlined />, label: "Мои задачи" }] : []),
     ...(can("resolution.create") ? [{ key: "board", icon: <ProjectOutlined />, label: "Резолюции" }] : [])
   ];

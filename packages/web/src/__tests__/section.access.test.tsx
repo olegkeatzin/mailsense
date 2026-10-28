@@ -12,7 +12,6 @@ jest.mock("../api", () => ({
   },
   resolutionApi: {
     forApproval: jest.fn(),
-    forConfirmation: jest.fn(),
     executorCandidates: jest.fn(),
     myTasks: jest.fn(),
     board: jest.fn()
@@ -26,7 +25,7 @@ import type { AuthStatus, AuthUser } from "../types";
 
 const initial = useStore.getState();
 
-/** Администратор: у него есть всё, включая подтверждение разбора. */
+/** Администратор: у него есть всё. */
 const admin = {
   id: "u-admin",
   email: "admin@stand.test",
@@ -35,7 +34,7 @@ const admin = {
   roles: ["admin"]
 } as unknown as AuthUser;
 
-/** Исполнитель Петрова: ни подтверждения разбора, ни поручения — обычный сотрудник. */
+/** Исполнитель Петрова: обычный сотрудник без управленческих разделов. */
 const executor = {
   id: "u-petrova",
   email: "petrova_ma@stand.test",
@@ -63,36 +62,34 @@ describe("раздел не переживает смену пользовате
     (api.accounts as jest.Mock).mockResolvedValue([]);
     (api.emails as jest.Mock).mockResolvedValue([]);
     (api.logout as jest.Mock).mockResolvedValue({ ok: true });
-    (resolutionApi.forConfirmation as jest.Mock).mockResolvedValue({ items: [], total: 0 });
+    (resolutionApi.forApproval as jest.Mock).mockResolvedValue({ items: [], total: 0 });
     (resolutionApi.executorCandidates as jest.Mock).mockResolvedValue([]);
   });
 
   /**
-   * Сценарий QA: администратор стоял на «На подтверждении», вышел, вошёл исполнитель.
-   * Раздел аппарата восстанавливался исполнителю, и приложение в фоне просило
-   * for-confirmation и executor-candidates — 403 в консоли у роли без прав.
+   * Сценарий QA: администратор стоял на «На утверждении», вышел, вошёл исполнитель.
+   * Раздел не должен восстанавливаться исполнителю и тянуть чужие запросы.
    */
-  it("админ стоял на confirmation → вошёл исполнитель: раздел сброшен, чужих запросов нет", async () => {
-    asUser(admin, "confirmation");
+  it("админ стоял на approvals → вошёл исполнитель: раздел сброшен, чужих запросов нет", async () => {
+    asUser(admin, "approvals");
     (api.login as jest.Mock).mockResolvedValue({ user: executor, expiresAt: "" });
 
     await useStore.getState().login("petrova_ma", "secret");
 
     expect(useStore.getState().authUser?.email).toBe("petrova_ma@stand.test");
-    expect(useStore.getState().section).not.toBe("confirmation");
+    expect(useStore.getState().section).not.toBe("approvals");
     // Первый доступный по правам: у исполнителя есть journal.view.
     expect(useStore.getState().section).toBe("journal");
 
-    // Раздел «На подтверждении» у исполнителя не грузит данные вообще.
-    render(<ApprovalList mode="confirm" />);
+    render(<ApprovalList />);
 
     expect(await screen.findByText("Недостаточно прав для этого раздела")).not.toBeNull();
-    expect(resolutionApi.forConfirmation).not.toHaveBeenCalled();
+    expect(resolutionApi.forApproval).not.toHaveBeenCalled();
     expect(resolutionApi.executorCandidates).not.toHaveBeenCalled();
   });
 
   it("выход сбрасывает раздел: следующий пользователь не наследует чужой выбор", async () => {
-    asUser(admin, "confirmation");
+    asUser(admin, "approvals");
 
     await useStore.getState().logout();
 
@@ -102,7 +99,7 @@ describe("раздел не переживает смену пользовате
   it("раздел, на который нет прав, не открывается и программно", () => {
     asUser(executor, "mail");
 
-    useStore.getState().setSection("confirmation");
+    useStore.getState().setSection("approvals");
 
     expect(useStore.getState().section).toBe("mail");
   });
@@ -123,11 +120,11 @@ describe("выбор доступного раздела по правам", () 
     [["task.view"], "tasks"],
     [["resolution.create"], "board"],
     [["resolution.approve"], "approvals"],
-    [["resolution.dispatch"], "confirmation"],
+    [["resolution.dispatch"], "mail"],
     [[], "mail"]
   ])("права %j → первый доступный раздел %s", (permissions, expected) => {
     const can = (p: string) => (permissions as string[]).includes(p);
-    expect(resolveSection("confirmation", can as never)).toBe(expected);
+    expect(resolveSection("approvals", can as never)).toBe(expected);
   });
 
   it("доступный запрошенный раздел остаётся прежним", () => {

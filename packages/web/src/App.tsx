@@ -409,9 +409,7 @@ export default function App() {
               ? "Журнал регистрации"
               : section === "approvals"
                 ? "На утверждении"
-                : section === "confirmation"
-                  ? "На подтверждении"
-                  : section === "tasks"
+                : section === "tasks"
                   ? "Мои задачи"
                   : section === "board"
                     ? "Резолюции"
@@ -496,9 +494,6 @@ export default function App() {
           <Journal />
         ) : section === "approvals" ? (
           <ApprovalList />
-        ) : section === "confirmation" ? (
-          // Очередь аппарата «подтвердить разбор ответа, пришедшего письмом» (А1).
-          <ApprovalList mode="confirm" />
         ) : section === "tasks" ? (
           <MyTasks />
         ) : section === "board" ? (

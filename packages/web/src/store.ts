@@ -27,7 +27,6 @@ export type AppSection =
   | "journal"
   | "incoming"
   | "approvals"
-  | "confirmation"
   | "tasks"
   | "board";
 
@@ -40,18 +39,17 @@ export const SECTION_PERMISSIONS: Record<AppSection, Permission | null> = {
   journal: "journal.view",
   incoming: "journal.register",
   approvals: "resolution.approve",
-  confirmation: "resolution.dispatch",
   tasks: "task.view",
   board: "resolution.create"
 };
 
 /** Порядок выбора первого доступного раздела — тот же, что в боковом меню. */
-export const SECTION_ORDER: AppSection[] = ["journal", "incoming", "approvals", "confirmation", "tasks", "board"];
+export const SECTION_ORDER: AppSection[] = ["journal", "incoming", "approvals", "tasks", "board"];
 
 /**
  * Раздел, доступный по правам.
  *
- * Раздел не должен переживать смену пользователя: администратор стоял на «На подтверждении»,
+ * Раздел не должен переживать смену пользователя: администратор стоял на «На утверждении»,
  * вошёл исполнитель — и приложение в фоне просило чужие маршруты, а в консоль уходил 403
  * (дефект, найденный QA в браузере). Поэтому при смене пользователя раздел пересматривается,
  * а не восстанавливается как есть: недоступный заменяется первым доступным, иначе — почтой.
