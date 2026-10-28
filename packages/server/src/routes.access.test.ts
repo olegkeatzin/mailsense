@@ -771,6 +771,49 @@ describe("пересылка руководителю: сначала захва
    * человек из окна, а сервер только записывает связь — и адрес можно ВПИСАТЬ,
    * даже если в каталоге почты у человека нет.
    */
+  it("руководителю уходит пересылка оригинала с вложениями, а не служебная записка", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mailsense-forward-"));
+    const file = path.join(dir, "scan.pdf");
+    fs.writeFileSync(file, "pdf");
+    mockedDocflow.getDocument.mockResolvedValueOnce({
+      id: "doc-1",
+      regNumber: "вх1",
+      summary: "Приглашение на ВКС",
+      emailId: "mail-1"
+    });
+    mockedCore.getEmailView.mockReturnValueOnce({
+      id: "mail-1",
+      from: { address: "sender@outside.test", name: "Отправитель" },
+      subject: "Письмо вх1",
+      messageId: "<m-1@outside.test>",
+      references: [],
+      bodyText: "Уважаемые коллеги! Приглашаем на ВКС.",
+      date: "2026-10-28T10:00:00.000Z",
+      attachments: []
+    });
+    mockedCore.listAttachments.mockReturnValueOnce([
+      { id: "att-1", filename: "scan.pdf", mimeType: "application/pdf", size: 3, storagePath: file }
+    ]);
+    mockedDocflow.forwardToManager.mockResolvedValueOnce({ id: "res-1", status: "pending_approval" });
+    mockedDocflow.attachRequestEmail.mockResolvedValueOnce({ id: "res-1", status: "pending_approval" });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/forward", {
+      token: token("secretary"),
+      body: { documentId: "doc-1", toUserId: "u-manager" }
+    });
+
+    expect(res.status).toBe(201);
+    expect(mockedCore.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        subject: "Fwd: Письмо вх1",
+        bodyText: expect.stringContaining("Уважаемые коллеги! Приглашаем на ВКС."),
+        attachments: [expect.objectContaining({ filename: "scan.pdf", data: "cGRm" })],
+        inReplyToMessageId: null
+      })
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("письмо из окна: сервер ничего не шлёт, связь записывается, адрес — вписанный", async () => {
     mockedDocflow.forwardToManager.mockImplementationOnce(async () => ({ id: "res-9", status: "pending_approval" }));
     mockedDocflow.attachRequestEmail.mockImplementationOnce(async (id: string, emailId: string) => ({

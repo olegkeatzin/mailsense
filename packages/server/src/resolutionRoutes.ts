@@ -583,9 +583,29 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       // Письмо-источник: из него берём тему и цепочку, чтобы ответ руководителя
       // нашёлся в том же треде, а не повис отдельно.
       const source = doc.emailId ? getEmailView(doc.emailId) : null;
+      // Руководителю пересылаем САМО письмо, а не только служебную записку:
+      // так он видит текст и вложения, на которые накладывает резолюцию.
       const subject = source?.subject
-        ? (source.subject.startsWith("Re:") ? source.subject : "Re: " + source.subject)
+        ? (/^((fwd|fw|re):)/i.test(source.subject) ? source.subject : "Fwd: " + source.subject)
         : "Письмо " + (doc.regNumber || "без номера") + " — прошу наложить резолюцию";
+      const originalText = (source?.bodyText ?? "").trim();
+      const originalHead = source
+        ? [
+            "— Пересылаемое письмо —",
+            "От: " + (source.from?.name || source.from?.address || "не указан"),
+            "Тема: " + (source.subject || "без темы"),
+            source.date ? "Дата: " + source.date : ""
+          ].filter(Boolean).join("\n")
+        : "";
+      const attachments = source
+        ? listAttachments(source.id)
+            .filter((a) => a.storagePath && fs.existsSync(a.storagePath))
+            .map((a) => ({
+              filename: a.filename,
+              mimeType: a.mimeType,
+              data: fs.readFileSync(a.storagePath!).toString("base64")
+            }))
+        : [];
 
       const bodyText = [
         (recipientName || recipientEmail) + ", добрый день!",
@@ -596,10 +616,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
         source?.from ? "Отправитель: " + (source.from.name || source.from.address) : "",
         "",
         "Прошу указать поручение и исполнителя.",
+        ...(originalHead || originalText ? ["", originalHead, "", originalText] : []),
         "",
         "—",
         "Аппарат генерального директора"
-      ].filter((line) => line !== "").join("\n");
+      ].join("\n");
 
       // ⚠️ Порядок как в /dispatch: сначала захват (forwardToManager — он же запрещает
       // повторную пересылку), и только потом письмо. Раньше двойной клик отправлял
@@ -622,9 +643,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           to: [{ address: recipientEmail, name: recipientName || undefined }],
           subject,
           bodyText,
-          inReplyToEmailId: source?.id ?? null,
-          inReplyToMessageId: source?.messageId ?? null,
-          references: source?.messageId ? [source.messageId] : []
+          // Это пересылка, а не ответ: новое письмо в отдельном треде.
+          attachments,
+          inReplyToEmailId: null,
+          inReplyToMessageId: null,
+          references: []
         });
       } catch (err) {
         // Письмо не ушло — снимаем пересылку, иначе аппарат не сможет повторить:
