@@ -198,8 +198,12 @@ function NotificationsPanel({ open, onClose }: { open: boolean; onClose: () => v
     // Порядок: пометить прочитанным, закрыть панель, перейти (§2.8).
     void readOne(n);
     onClose();
-    if (n.link === "journal" && n.entityType === "document") requestDocument(n.entityId);
-    if (n.link) setSection(n.link);
+    // Старые уведомления могли сохранить ссылку на удалённую вкладку «На подтверждении».
+    // Ведём их в резолюции: отчёт по поручению виден в карточке.
+    const link = n.link as string | null;
+    const target = link === "confirmation" ? "board" : n.link;
+    if (target === "journal" && n.entityType === "document") requestDocument(n.entityId);
+    if (target) setSection(target);
   };
 
   const readAll = async () => {

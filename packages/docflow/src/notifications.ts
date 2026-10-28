@@ -61,7 +61,8 @@ export const NOTIFICATION_SEVERITY: Record<NotificationKind, NotificationSeverit
 const LINK_BY_KIND: Record<NotificationKind, NotificationLink> = {
   "resolution.assigned": "tasks",
   "resolution.approved": "board",
-  "resolution.reported": "confirmation",
+  // Отчёты смотрят в резолюциях: отдельной вкладки подтверждения больше нет.
+  "resolution.reported": "board",
   "resolution.closed": "journal",
   "resolution.due_soon": "tasks",
   "resolution.due_today": "tasks",
