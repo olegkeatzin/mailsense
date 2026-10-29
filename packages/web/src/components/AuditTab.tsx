@@ -267,6 +267,7 @@ export default function AuditTab() {
     {
       title: "Что изменилось",
       key: "diff",
+      width: 380,
       render: (_v, r) => {
         // Вход — не изменение полей: в колонке «Действие» уже написано «Вход в систему».
         if (r.action === "login") return <span style={{ color: "#767676" }}>—</span>;
@@ -274,7 +275,10 @@ export default function AuditTab() {
         // Сырой идентификатор доступен только в подсказке — в тексте его быть не должно.
         if (d.text) {
           return (
-            <span style={{ fontSize: 12 }} title={d.rawIds.length ? d.rawIds.join(", ") : undefined}>
+            <span
+              style={{ fontSize: 12, whiteSpace: "normal", wordBreak: "break-word" }}
+              title={d.rawIds.length ? d.rawIds.join(", ") : undefined}
+            >
               {d.text}
             </span>
           );
@@ -345,6 +349,10 @@ export default function AuditTab() {
         rowKey="id"
         size="small"
         loading={loading}
+        tableLayout="fixed"
+        // На узком окне колонки не должны наезжать друг на друга: таблица получает
+        // горизонтальную прокрутку, а «Что изменилось» переносится по словам.
+        scroll={{ x: 1060 }}
         columns={columns}
         dataSource={entries}
         pagination={{ pageSize: 50, showSizeChanger: false }}
