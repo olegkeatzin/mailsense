@@ -9,6 +9,7 @@ import type { AuditEntry } from "../types";
 import {
   ACTION_TITLES,
   ENTITY_TITLES,
+  ENTITY_TITLES_PLURAL,
   actionTitle,
   entityTitle,
   fieldTitle,
@@ -32,7 +33,11 @@ const ACTION_OPTIONS = [
 
 const ENTITY_OPTIONS = [
   { value: "", label: "Все объекты" },
-  ...Object.entries(ENTITY_TITLES).map(([value, label]) => ({ value, label: label + "ы" }))
+  ...Object.entries(ENTITY_TITLES).map(([value, label]) => ({
+    value,
+    // Явные формы множественного числа: «Поручение» + «ы» давало «Поручениеы».
+    label: ENTITY_TITLES_PLURAL[value] ?? label
+  }))
 ];
 
 /** Красным помечаем отказы и неудачи — по известным действиям, а не по сырому ключу. */

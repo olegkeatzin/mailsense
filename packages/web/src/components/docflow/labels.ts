@@ -78,6 +78,20 @@ export const ENTITY_TITLES: Record<string, string> = {
   deadline_preset: "Типовой срок"
 };
 
+/** Подписи для фильтра «Все объекты»: множественное число не собирается суффиксом. */
+export const ENTITY_TITLES_PLURAL: Record<string, string> = {
+  document: "Документы",
+  resolution: "Поручения",
+  notification: "Уведомления",
+  sort_rule: "Правила сортировки",
+  user: "Пользователи",
+  number_rule: "Правила нумерации",
+  case: "Дела",
+  correspondent: "Корреспонденты",
+  settings: "Настройки",
+  deadline_preset: "Типовые сроки"
+};
+
 export const ENTITY_UNKNOWN = "Другой объект";
 
 export function entityTitle(entity: string | null | undefined): string {

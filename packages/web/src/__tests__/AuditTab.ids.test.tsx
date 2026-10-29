@@ -115,6 +115,20 @@ describe("аудит: значения-идентификаторы разреш
    * способами: живьём (сколько запросов делает компонент) и чистой функцией, которая
    * решает, что спрашивать, — без таймеров и кликов, чтобы тест не «залипал».
    */
+  it("фильтр объектов показывает формы множественного числа без «ы»", async () => {
+    render(<AuditTab />);
+    await waitFor(() => expect(api.audit).toHaveBeenCalled());
+
+    const entitySelect = screen.getAllByRole("combobox")[1];
+    fireEvent.mouseDown(entitySelect);
+
+    expect(await screen.findByText("Поручения")).not.toBeNull();
+    expect(screen.getByText("Уведомления")).not.toBeNull();
+    expect(screen.getByText("Правила сортировки")).not.toBeNull();
+    expect(screen.getByText("Пользователи")).not.toBeNull();
+    expect(screen.queryByText("Поручениеы")).toBeNull();
+  });
+
   it("D8: один запрос на уникальный id, повторный проход ничего не добавляет", async () => {
     // Самый злой случай: ни один идентификатор не разрешается.
     (resolutionApi.get as jest.Mock).mockRejectedValue(new Error("404 Not Found"));
