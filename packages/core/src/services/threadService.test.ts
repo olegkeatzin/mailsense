@@ -123,6 +123,26 @@ describe("assignThread", () => {
     expect(threadOf(b)).toBe(threadOf(a));
   });
 
+  test("НЕ склеивает Fwd: (без темы) из разных документов", () => {
+    const a = addEmail({
+      messageId: "empty-a@t",
+      subject: "Fwd: (без темы)",
+      date: "2026-03-05T10:00:00Z",
+      inReplyTo: "missing-a@t",
+      references: ["missing-a@t"]
+    });
+    assignThread(a);
+    const b = addEmail({
+      messageId: "empty-b@t",
+      subject: "Fwd: (без темы)",
+      date: "2026-03-06T10:00:00Z",
+      inReplyTo: "missing-b@t",
+      references: ["missing-b@t"]
+    });
+    assignThread(b);
+    expect(threadOf(b)).not.toBe(threadOf(a));
+  });
+
   test("НЕ склеивает одинаковые темы без признаков ответа", () => {
     const a = addEmail({ messageId: "news-a@t", subject: "Уведомление о новом счете за ЖКУ", date: "2026-03-01T10:00:00Z" });
     assignThread(a);

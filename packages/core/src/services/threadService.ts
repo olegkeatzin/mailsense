@@ -56,6 +56,18 @@ function unique(list: string[]): string[] {
   return [...new Set(list.filter(Boolean))];
 }
 
+/**
+ * Тема-заглушка не связывает письма разных документов.
+ *
+ * «Fwd: (без темы)» — типичная пересылка вложения: у пяти писем по двум разным
+ * документам тема одинаковая, и фолбэк по теме склеивал их в одну «беседу».
+ * Для таких тем связь строим только по In-Reply-To / References.
+ */
+function canMergeBySubject(subject: string): boolean {
+  const norm = normalizeSubject(subject).replace(/[\s.!?]+$/g, "").trim();
+  return !!norm && norm !== "(без темы)" && norm !== "без темы" && norm !== "(no subject)" && norm !== "no subject";
+}
+
 /** Гарантирует, что у письма-родителя есть беседа. */
 function ensureThreadForParent(parent: Email, messageId: string): string {
   if (parent.threadId) return parent.threadId;
@@ -117,7 +129,7 @@ export function assignThread(email: Email): string {
     for (const other of matchedThreads) mergeThreads(other, threadId);
   } else {
     let bySubject: string | null = null;
-    if (refs.length > 0 || email.inReplyTo || hasReplyPrefix(email.subject)) {
+    if (canMergeBySubject(email.subject) && (refs.length > 0 || email.inReplyTo || hasReplyPrefix(email.subject))) {
       bySubject = findThreadByNormalizedSubject(accountId, normalizeSubject(email.subject))?.id ?? null;
     }
     threadId = bySubject ?? createThread(accountId, email.messageId, normalizeSubject(email.subject)).id;
@@ -190,7 +202,10 @@ export function rebuildThreads(accountId?: string): number {
         return;
       }
       const replyish = !!e.inReplyTo || (e.references?.length ?? 0) > 0 || hasReplyPrefix(e.subject);
-      if (replyish) union(existing, i);
+      // «Fwd: (без темы)» не связывает разные документы: только явные заголовки.
+      if (replyish && canMergeBySubject(e.subject) && canMergeBySubject(emails[existing].subject)) {
+        union(existing, i);
+      }
     });
 
     // 3) Материализация групп в беседы.
