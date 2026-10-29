@@ -535,54 +535,20 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                           </Button>
                         ) : null}
 
-                        {/* Отправка — только аппарат и только после утверждения. */}
+                        {/* Аппарат не отправляет письмо: он только передаёт задачу исполнителям. */}
                         {r.status === "approved" && can("resolution.dispatch") ? (
                           <Button
                             size="small"
                             type="primary"
-                            onClick={() => {
-                              // Без выбранного ящика письмо не уходит: «первый подходящий» не подставляем.
-                              const problem = edmsMailProblem(edms.settings);
-                              if (problem) {
-                                message.warning(problem);
-                                return;
-                              }
+                            onClick={() =>
                               void actResolution(
                                 r.id,
-                                () => resolutionApi.dispatch(r.id, edmsAccountId ?? undefined),
-                                "Отправлено исполнителям"
-                              );
-                            }}
+                                () => resolutionApi.dispatch(r.id),
+                                "Задача передана исполнителям"
+                              )
+                            }
                           >
-                            Отправить исполнителям
-                          </Button>
-                        ) : null}
-                        {/* То же письмо, но с правкой текста в обычном окне письма. */}
-                        {r.status === "approved" && can("resolution.dispatch") ? (
-                          <Button
-                            size="small"
-                            onClick={() => {
-                              const head = r.documentNumber ? "Поручение " + r.documentNumber : "Поручение";
-                              const bodyText = [
-                                r.text || "",
-                                "",
-                                r.deadline ? "Срок: " + r.deadline.split("-").reverse().join(".") : "Срок не указан.",
-                                "",
-                                "—",
-                                "Аппарат"
-                              ]
-                                .filter((line) => line !== "")
-                                .join("\n");
-                              openEdmsCompose({
-                                documentId: documentId ?? "",
-                                subject: head + ": " + (r.text || "").slice(0, 60),
-                                bodyText,
-                                kind: "dispatch",
-                                resolutionId: r.id
-                              });
-                            }}
-                          >
-                            Открыть окно письма (править)
+                            Передать исполнителям
                           </Button>
                         ) : null}
                       </Space>

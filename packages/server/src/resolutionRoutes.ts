@@ -1276,86 +1276,24 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     })
   );
 
-  /** Отправка исполнителям: только аппарат и только после утверждения. */
+  /**
+   * Передача задачи исполнителям. Аппарат НЕ отправляет письмо: резолюцию
+   * руководитель уже отправил сам, а аппарат только фиксирует данные и создаёт задачи.
+   */
   app.post(
     "/api/docflow/resolutions/:id/dispatch",
     ...dispatch,
     asyncHandler(async (req, res) => {
       const b = req.body ?? {};
-      const detail = await getResolutionDetail(req.params.id);
-      if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
-      const withEmail = detail.assignees.filter((a) => !!a.email);
-      if (!withEmail.length) throw new AppError("У исполнителей не заполнены адреса", 400, "no_emails");
-
-      // Тот же помощник, что в /forward: одна логика выбора ящика на оба маршрута.
-      const account = await resolveSendAccount(req.user?.id ?? null, b.accountId ? String(b.accountId) : null);
-
-      // Одно письмо на всех исполнителей — как в бумажном журнале, где в графе 8
-      // перечислены все. Разные письма раздули бы переписку и разошлись бы по тредам.
-      const doc = await getDocument(detail.documentId);
-      const source = doc?.emailId ? getEmailView(doc.emailId) : null;
-      const responsible = withEmail.find((a) => a.kind === "responsible") ?? withEmail[0];
-
-      const bodyText = [
-        "Поручение по документу " + (detail.documentNumber || "без номера") + ".",
-        "",
-        detail.text,
-        "",
-        detail.deadline ? "Срок: " + detail.deadline.split("-").reverse().join(".") : "Срок не указан.",
-        "Ответственный: " + responsible.fullName,
-        withEmail.length > 1
-          ? "Соисполнители: " + withEmail.filter((a) => a.userId !== responsible.userId).map((a) => a.fullName).join(", ")
-          : "",
-        "",
-        "—",
-        "Аппарат генерального директора"
-      ].filter((l) => l !== "").join("\n");
-
-      // ⚠️ Порядок шагов зафиксирован решением ведущего: СНАЧАЛА переход в «отправлено»,
-      // и только потом письмо. Переход идёт в транзакции с FOR UPDATE (docflow) и служит
-      // захватом поручения. Раньше письмо уходило до записи перехода: два одновременных
-      // нажатия «Отправить» отправляли исполнителям ДВА письма, а записывалось одно.
       const claimed = await dispatchResolution(req.params.id, actorOf(req), {
         comment: str(b.comment)
       });
-
-      // ⚠️ Письмо уже отправил человек из окна письма (emailId): второй раз НЕ шлём,
-      // только фиксируем связь. Иначе исполнители получали бы дубль, а человек —
-      // «отправлено дважды» (жалоба заказчика: молчаливая отправка без окна).
+      // Совместимость со старым клиентом: если он сам отправил письмо, фиксируем связь.
       const providedEmailId = b.emailId ? String(b.emailId) : "";
       if (providedEmailId) {
         return res.json(await attachDispatchEmail(req.params.id, providedEmailId, actorOf(req)));
       }
-
-      let sent: { emailId: string };
-      try {
-        sent = await sendEmail({
-          accountId: account.id,
-          to: withEmail.map((a) => ({ address: a.email, name: a.fullName })),
-          subject: "Поручение " + (detail.documentNumber || "") + ": " + detail.text.slice(0, 60),
-          bodyText,
-          // Ссылаемся на исходное письмо: переписка по делу остаётся одной цепочкой.
-          inReplyToEmailId: source?.id ?? null,
-          inReplyToMessageId: source?.messageId ?? null,
-          references: source?.messageId ? [source.messageId] : []
-        });
-      } catch (err) {
-        // Шаг 4: письмо не ушло — возвращаем поручение в «утверждено», чтобы аппарат
-        // мог повторить. Откат тоже может отказать (например, исполнитель уже отчитался),
-        // но наружу уходит ИСХОДНАЯ ошибка: аппарат должен узнать про почту, а не про откат.
-        await revertDispatch(req.params.id, actorOf(req), "Почтовый сервер не принял письмо: " + (err as Error).message)
-          .catch((revertError: Error) => {
-            logger.warn(
-              { err: revertError.message, resolutionId: req.params.id },
-              "Не удалось откатить отправку поручения — поручение осталось в «отправлено»"
-            );
-            return claimed;
-          });
-        throw err;
-      }
-
-      // Шаг 3: письмо ушло — записываем его идентификатор (журнал и карточка поручения).
-      res.json(await attachDispatchEmail(req.params.id, sent.emailId, actorOf(req)));
+      res.json(claimed);
     })
   );
 

@@ -629,11 +629,26 @@ describe("отказ не доходит до изменения данных", 
   });
 });
 
-describe("отправка поручения: захват → письмо → запись письма", () => {
-  /**
-   * Аппарат отправил письмо из окна (правил текст) — сервер не должен слать второй раз.
-   */
-  it("письмо из окна: сервер не шлёт, только записывает связь", async () => {
+describe("передача задачи: только переход, без письма", () => {
+  it("аппарат передаёт задачу, но не отправляет письмо исполнителям", async () => {
+    const order: string[] = [];
+    mockedDocflow.dispatchResolution.mockImplementationOnce(async () => {
+      order.push("переход");
+      return { id: "res-1", status: "sent" };
+    });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
+      token: token("secretary"),
+      body: {}
+    });
+
+    expect(res.status).toBe(200);
+    expect(order).toEqual(["переход"]);
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
+    expect(res.body).toMatchObject({ id: "res-1", status: "sent" });
+  });
+
+  it("старый клиент с готовым письмом только фиксирует связь", async () => {
     mockedDocflow.dispatchResolution.mockImplementationOnce(async () => ({ id: "res-1", status: "sent" }));
     mockedDocflow.attachDispatchEmail.mockImplementationOnce(async (id: string, emailId: string) => ({
       id,
@@ -652,34 +667,7 @@ describe("отправка поручения: захват → письмо →
     expect(res.body).toMatchObject({ dispatchEmailId: "mail-out-2" });
   });
 
-  it("шаги идут по порядку: переход, письмо, запись идентификатора", async () => {
-    const order: string[] = [];
-    mockedDocflow.dispatchResolution.mockImplementationOnce(async () => {
-      order.push("переход");
-      return { id: "res-1", status: "sent" };
-    });
-    mockedCore.sendEmail.mockImplementationOnce(async () => {
-      order.push("письмо");
-      return { emailId: "sent-1", messageId: "<sent-1@stand.test>" };
-    });
-    mockedDocflow.attachDispatchEmail.mockImplementationOnce(async (id: string, emailId: string) => {
-      order.push("запись письма");
-      return { id, status: "sent", dispatchEmailId: emailId };
-    });
-
-    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
-      token: token("secretary"),
-      body: {}
-    });
-
-    expect(res.status).toBe(200);
-    expect(order).toEqual(["переход", "письмо", "запись письма"]);
-    // Идентификатор письма вернулся клиенту — значит записан и в карточке поручения.
-    expect(res.body).toMatchObject({ dispatchEmailId: "sent-1" });
-  });
-
-  it("проигравший гонку запрос не отправляет второе письмо", async () => {
-    // docflow отдаёт 409 второму переходу (SELECT ... FOR UPDATE) — письма быть не должно.
+  it("проигравший гонку запрос не отправляет письмо", async () => {
     const AppError = (docflow as unknown as { AppError: new (m: string, s: number, c: string) => Error }).AppError;
     mockedDocflow.dispatchResolution
       .mockImplementationOnce(async () => ({ id: "res-1", status: "sent" }))
@@ -699,40 +687,7 @@ describe("отправка поручения: захват → письмо →
     ]);
 
     expect([first.status, second.status].sort()).toEqual([200, 409]);
-    expect(mockedCore.sendEmail).toHaveBeenCalledTimes(1);
-  });
-
-  it("падение отправки: поручение возвращается в «утверждено», наружу — исходная ошибка", async () => {
-    mockedCore.sendEmail.mockRejectedValueOnce(new Error("SMTP 550: ящик отверг письмо"));
-
-    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
-      token: token("secretary"),
-      body: {}
-    });
-
-    expect(res.status).toBe(500);
-    expect(res.text).not.toContain("SMTP");
-    // Откат выполнен: аппарат увидит поручение снова готовым к отправке.
-    expect(mockedDocflow.revertDispatch).toHaveBeenCalledTimes(1);
-    expect(String(mockedDocflow.revertDispatch.mock.calls[0][2])).toContain("Почтовый сервер не принял письмо");
-    expect(mockedDocflow.attachDispatchEmail).not.toHaveBeenCalled();
-  });
-
-  it("отказ самого отката не подменяет исходную ошибку почты", async () => {
-    const AppError = (docflow as unknown as { AppError: new (m: string, s: number, c: string) => Error }).AppError;
-    mockedCore.sendEmail.mockRejectedValueOnce(new Error("SMTP 550"));
-    mockedDocflow.revertDispatch.mockRejectedValueOnce(
-      new AppError("Исполнитель уже отчитался", 409, "bad_state")
-    );
-
-    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/dispatch", {
-      token: token("secretary"),
-      body: {}
-    });
-
-    expect(res.status).toBe(500);
-    expect(res.text).not.toContain("SMTP");
-    expect(res.text).not.toContain("отчитался");
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
   });
 });
 
