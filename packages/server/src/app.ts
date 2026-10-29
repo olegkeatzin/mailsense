@@ -60,6 +60,7 @@ import {
   testAiConnection,
   testConnection,
   testSmtpConnection,
+  testSmtpInput,
   updateAccountById,
   removeDraft,
   saveDraft,
@@ -614,8 +615,18 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
   app.post(
     "/api/accounts/test",
     asyncHandler(async (req, res) => {
-      const result = await testConnection(req.body as AccountInput);
-      res.json(result);
+      const input = req.body as AccountInput;
+      const incoming = await testConnection(input);
+      // Одна кнопка проверяет и получение, и отправку. Отдельный SMTP-пароль
+      // может быть уже сохранён — тогда для существующего ящика берём его из базы.
+      const savedId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
+      const outgoing =
+        !input.smtpPassword && savedId && ownAccount(req, savedId)
+          ? await testSmtpConnection(savedId)
+          : await testSmtpInput(input);
+      if (!incoming.ok) return res.json({ ...incoming, smtp: outgoing });
+      if (!outgoing.ok) return res.json({ ...outgoing, incoming });
+      res.json({ ok: true, incoming, smtp: outgoing });
     })
   );
 

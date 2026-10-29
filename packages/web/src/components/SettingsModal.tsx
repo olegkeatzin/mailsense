@@ -61,7 +61,6 @@ export function AccountTab() {
   const loadAccounts = useStore((s) => s.loadAccounts);
   const [form] = Form.useForm();
   const [testing, setTesting] = useState(false);
-  const [testingSmtp, setTestingSmtp] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
   /**
@@ -232,27 +231,13 @@ export function AccountTab() {
     }
     setTesting(true);
     try {
-      const r = await api.testAccount(valuesToInput(v));
-      if (r.ok) message.success("Подключение успешно");
-      else message.error(r.error || "Ошибка подключения");
+      const r = await api.testAccount(valuesToInput(v), editingId ?? undefined);
+      if (r.ok) message.success("Получение и отправка: подключение успешно");
+      else message.error(r.error || "Проверка почты не прошла");
     } catch (e) {
       message.error(humanError(e));
     } finally {
       setTesting(false);
-    }
-  };
-
-  const testSmtp = async () => {
-    if (!editingId) return;
-    setTestingSmtp(true);
-    try {
-      const r = await api.testSmtp(editingId);
-      if (r.ok) message.success("SMTP: подключение успешно");
-      else message.error(r.error || "Ошибка SMTP");
-    } catch (e) {
-      message.error(humanError(e));
-    } finally {
-      setTestingSmtp(false);
     }
   };
 
@@ -484,13 +469,8 @@ export function AccountTab() {
             {editingId ? "Сохранить" : "Добавить"}
           </Button>
           <Button loading={testing} onClick={() => void testAccount()}>
-            Проверить подключение
+            Проверить почту
           </Button>
-          {editingId && (
-            <Button loading={testingSmtp} onClick={() => void testSmtp()}>
-              Проверить SMTP
-            </Button>
-          )}
           <Button onClick={closeEdit}>Отмена</Button>
         </Space>
       </Form>

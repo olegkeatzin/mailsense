@@ -143,6 +143,9 @@ export function coreMockModule(): Record<string, unknown> {
     // Приём писем (T30): у FetchResult есть счётчик известных-вне-диапазона — форма обязана быть полной.
     fetchEmails: jest.fn(async () => ({ added: 0, skipped: 0, knownOutOfRange: 0 })),
     sendEmail: jest.fn(async () => ({ emailId: "sent-1", messageId: "<sent-1@stand.test>" })),
+    testConnection: jest.fn(async () => ({ ok: true })),
+    testSmtpConnection: jest.fn(async () => ({ ok: true })),
+    testSmtpInput: jest.fn(async () => ({ ok: true })),
     ComposeInputError,
     // Шаблон письма (T27): маршрут обязан пробросить useAccountSignature как есть.
     buildComposeTemplate: jest.fn((input: Record<string, unknown>) => ({

@@ -194,6 +194,17 @@ describe("проверка подключения", () => {
     expect(res.error).toContain("сертификат");
   });
 
+  test("неверный пароль объясняется по-русски, а не «Command failed»", async () => {
+    mockCreateImap.mockReturnValue({
+      connect: jest.fn(async () => {
+        throw Object.assign(new Error("Command failed"), { authenticationFailed: true });
+      }),
+      disconnect: jest.fn()
+    });
+    const res = await testConnection(input());
+    expect(res).toEqual({ ok: false, error: "Неправильный логин или пароль" });
+  });
+
   test("без пароля подключение не проверяется", async () => {
     const res = await testConnection(input({ password: "" }));
     expect(res.ok).toBe(false);

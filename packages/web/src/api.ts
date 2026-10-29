@@ -189,10 +189,10 @@ export const api = {
   updateAccount: (id: string, input: AccountInput) =>
     request<Account>("/api/accounts/" + id, { method: "PUT", body: JSON.stringify(input) }),
   deleteAccount: (id: string) => request<{ ok: boolean }>("/api/accounts/" + id, { method: "DELETE" }),
-  testAccount: (input: AccountInput) =>
+  testAccount: (input: AccountInput, accountId?: string) =>
     request<{ ok: boolean; error?: string }>("/api/accounts/test", {
       method: "POST",
-      body: JSON.stringify(input)
+      body: JSON.stringify(accountId ? { ...input, accountId } : input)
     }),
   testSmtp: (id: string) =>
     request<{ ok: boolean; error?: string }>("/api/accounts/" + id + "/test-smtp", { method: "POST" }),

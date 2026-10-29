@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { logger } from "../logger.js";
 import { getContext } from "../context.js";
 import { getAccount, insertAttachment, insertEmail } from "../repos.js";
-import { buildConnector, decryptPassword, decryptSmtpPassword } from "./accountService.js";
+import { buildConnector, decryptPassword, decryptSmtpPassword, friendlyMailError } from "./accountService.js";
 import { assignThread } from "./threadService.js";
 import { buildSmtpTransport, sendSmtp, wrapMessageId } from "../mail/smtpSender.js";
 import { classifyKind } from "../mail/parser.js";
@@ -242,7 +242,7 @@ export async function testSmtpConnection(accountId: string): Promise<{ ok: boole
     await transport.verify();
     return { ok: true };
   } catch (err) {
-    return { ok: false, error: (err as Error).message };
+    return { ok: false, error: friendlyMailError(err) };
   } finally {
     transport.close();
   }

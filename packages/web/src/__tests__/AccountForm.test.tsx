@@ -55,6 +55,24 @@ afterEach(() => {
   useStore.setState({ ...initial });
 });
 
+it("проверяет получение и отправку одной кнопкой", async () => {
+  (api.testAccount as jest.Mock).mockResolvedValue({ ok: true });
+  render(<AccountTab />);
+  await waitFor(() => expect(api.mailDefaults).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: "Добавить аккаунт" }));
+  fireEvent.change(await screen.findByLabelText("Логин"), { target: { value: "post@mail.test" } });
+  fireEvent.change(screen.getByLabelText("Пароль"), { target: { value: "secret" } });
+
+  expect(screen.queryByRole("button", { name: /Проверить SMTP/ })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Проверить почту" }));
+
+  await waitFor(() => expect(api.testAccount).toHaveBeenCalledTimes(1));
+  expect((api.testAccount as jest.Mock).mock.calls[0][0]).toMatchObject({
+    username: "post@mail.test",
+    password: "secret"
+  });
+});
+
 it("добавляет ящик по логину и паролю, не открывая «Дополнительно»", async () => {
   render(<AccountTab />);
 
