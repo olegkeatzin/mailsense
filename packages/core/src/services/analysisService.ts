@@ -96,10 +96,33 @@ export function getProgress(): AnalysisProgress {
   return { ...progress, queueLength: queueLength(), done: totalDone, total: totalQueued };
 }
 
-/** Применяет настройки параллельности к очередям. */
+/**
+ * Применяет настройки параллельности к очередям.
+ *
+ * Настройки общие для сервера: у работников нет своих «прав ИИ», поэтому админская
+ * настройка обязана дойти до очереди каждого анализа. Значения пишем в журнал только
+ * при изменении — по нему видно, что применилось, а что осталось на уровне модели.
+ */
+let appliedSummary = -1;
+let appliedOcr = -1;
 function configureQueues(): void {
-  analysisQueue.concurrency = getAnalysisConcurrency();
-  ocrQueue.concurrency = getOcrConcurrency();
+  const summary = getAnalysisConcurrency();
+  const ocr = getOcrConcurrency();
+  analysisQueue.concurrency = summary;
+  ocrQueue.concurrency = ocr;
+  if (summary !== appliedSummary || ocr !== appliedOcr) {
+    appliedSummary = summary;
+    appliedOcr = ocr;
+    logger.info(
+      { summaryConcurrency: summary, ocrConcurrency: ocr },
+      "Параллельность ИИ применена из настроек"
+    );
+  }
+}
+
+/** Применить новые настройки сразу после сохранения админом, не дожидаясь письма. */
+export function applyAnalysisConcurrency(): void {
+  configureQueues();
 }
 
 export function enqueue(emailId: string): void {

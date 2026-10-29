@@ -6,6 +6,7 @@ import {
   analyzeAllPending,
   analyzeEmail,
   analyzeEmails,
+  applyAnalysisConcurrency,
   analyzeRange,
   cancelAnalysis,
   classifyKind,
@@ -434,6 +435,9 @@ export async function createApp(options: CreateAppOptions = {}): Promise<express
 
   app.put("/api/ai/config", requirePermission("settings.manage"), (req, res) => {
     setAiConfig(req.body ?? {});
+    // Не ждём следующего письма: уже стоящая очередь должна принять новую
+    // параллельность сразу, иначе админ видит «задал 3, а работает 2».
+    applyAnalysisConcurrency();
     res.json(getAiConfig());
   });
 

@@ -146,6 +146,7 @@ export function coreMockModule(): Record<string, unknown> {
     testConnection: jest.fn(async () => ({ ok: true })),
     testSmtpConnection: jest.fn(async () => ({ ok: true })),
     testSmtpInput: jest.fn(async () => ({ ok: true })),
+    applyAnalysisConcurrency: jest.fn(),
     ComposeInputError,
     // Шаблон письма (T27): маршрут обязан пробросить useAccountSignature как есть.
     buildComposeTemplate: jest.fn((input: Record<string, unknown>) => ({
