@@ -143,7 +143,8 @@ beforeEach(async () => {
       ts
     ]);
   }
-  await sql("DELETE FROM docflow_migrations WHERE version = 7");
+  // 7 засевает шаблоны, 12 дополняет уведомление о закрытии автором.
+  await sql("DELETE FROM docflow_migrations WHERE version IN (7, 12)");
   await runDocflowMigrations(getDocflowPool());
   const doc = await registerDocument({ summary: "Письмо о марафоне", sender: "АО «ОПК»" }, secretary);
   documentId = doc.id;
@@ -266,6 +267,13 @@ describe("отчёт и закрытие", () => {
     expect(await kindsOf(signer.id)).toEqual(["resolution.closed"]);
     expect(await kindsOf(executorA.id)).toEqual(["resolution.closed"]);
     expect(await kindsOf(executorB.id)).toEqual(["resolution.closed"]);
+    // Руководитель и исполнители должны видеть, кто закрыл поручение.
+    const bodies = await getDocflowPool().query<{ body: string }>(
+      "SELECT body FROM notifications WHERE user_id = $1",
+      [signer.id]
+    );
+    expect(bodies.rows[0].body).toContain("Закрыл");
+    expect(bodies.rows[0].body).toContain(secretary.name);
   });
 
   test("автозакрытие по отчёту ответственного тоже сообщает о закрытии", async () => {

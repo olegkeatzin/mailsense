@@ -782,6 +782,9 @@ describe("отчёт об исполнении (этап 4)", () => {
     const id = await sent();
     const closed = await closeResolution(id, secretary, "Исполнено по докладу");
     expect(closed.status).toBe("done");
+    const detail = await getResolutionDetail(id);
+    expect(detail!.closedByName).toBe(secretary.name);
+    expect(detail!.history[detail!.history.length - 1]?.step).toBe("closed");
   });
 
   test("закрыть можно только отправленное поручение", async () => {

@@ -42,7 +42,7 @@ export interface ResolutionAssignee {
 
 export interface ResolutionHistoryEntry {
   id: string;
-  step: "requested" | "approved" | "rejected" | "confirmed" | "dispatched" | "cancelled";
+  step: "requested" | "approved" | "rejected" | "confirmed" | "dispatched" | "closed" | "cancelled";
   actorId: string | null;
   actorName: string;
   method: "app" | "email" | "manual" | null;
@@ -57,6 +57,7 @@ export const RESOLUTION_STEP_TITLES: Record<ResolutionHistoryEntry["step"], stri
   rejected: "Возвращено на доработку",
   confirmed: "Аппарат подтвердил утверждение",
   dispatched: "Отправлено исполнителям",
+  closed: "Поручение закрыто",
   cancelled: "Отменено"
 };
 
@@ -95,6 +96,8 @@ export interface Resolution {
   approvedByName: string;
   dispatchedByName: string;
   confirmedByName: string;
+  /** Кто закрыл поручение — обязательно для закрытых аппаратом. */
+  closedByName?: string;
   /** Письма, из которых состоит дело: от входящего до отправки исполнителям. */
   requestEmailId: string | null;
   approvalEmailId: string | null;

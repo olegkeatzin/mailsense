@@ -61,6 +61,7 @@ function CardBody({ r, onOpen }: { r: Resolution; onOpen?: (documentId: string) 
         подготовил: {r.preparedByName || "—"}
         {r.approvedByName ? " · утвердил: " + r.approvedByName : ""}
         {r.dispatchedByName ? " · отправил: " + r.dispatchedByName : ""}
+        {r.closedByName ? " · закрыл: " + r.closedByName : ""}
       </div>
     </Card>
   );

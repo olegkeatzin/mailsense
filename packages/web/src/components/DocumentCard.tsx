@@ -496,6 +496,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                         подготовил: {r.preparedByName || "—"}
                         {r.approvedByName ? " · утвердил: " + r.approvedByName : ""}
                         {r.dispatchedByName ? " · отправил: " + r.dispatchedByName : ""}
+                        {r.closedByName ? " · закрыл: " + r.closedByName : ""}
                       </div>
                       <Space wrap size={4}>
                         {r.status === "draft" && can("resolution.create") ? (

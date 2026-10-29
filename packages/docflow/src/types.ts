@@ -342,6 +342,7 @@ export type ApprovalStep =
   | "rejected"
   | "confirmed"
   | "dispatched"
+  | "closed"
   | "cancelled"
   | "dispatch_failed";
 
@@ -417,6 +418,8 @@ export interface ResolutionDetail extends ResolutionRecord {
   approvedByName: string;
   dispatchedByName: string;
   confirmedByName: string;
+  /** Кто закрыл поручение (аппарат или система) — видно в карточке и истории. */
+  closedByName: string;
 }
 
 export interface ResolutionApprovalEntry {

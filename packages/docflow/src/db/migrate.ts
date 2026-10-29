@@ -528,6 +528,15 @@ ALTER TABLE roles ADD COLUMN IF NOT EXISTS permissions TEXT;
     sql: `-- Папка вложений зарегистрированного документа на сервере (mailDocs/<вх><год>_<дата>).
 -- NULL = папка ещё не создана; сервер заполнит её при открытии карточки/скачивании.
 ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_files_path TEXT;`
+  },
+  {
+    // В уведомлении о закрытии должно быть видно, кто закрыл поручение:
+    // иначе руководитель и исполнитель не знают, чьё это решение.
+    version: 12,
+    name: "notification_closed_author",
+    sql: `UPDATE notification_templates
+SET body = 'Поручение закрыто: {text}. Закрыл: {author}'
+WHERE key = 'resolution.closed';`
   }
 ];
 

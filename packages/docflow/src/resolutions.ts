@@ -258,7 +258,9 @@ async function resolutionDetails(ids: string[]): Promise<Map<string, ResolutionD
       preparedByName: nameOf(rec.preparedBy),
       approvedByName: nameOf(rec.approvedBy),
       dispatchedByName: nameOf(rec.dispatchedBy),
-      confirmedByName: nameOf(rec.confirmedBy)
+      confirmedByName: nameOf(rec.confirmedBy),
+      closedByName:
+        (history.get(rec.id) ?? []).filter((h) => h.step === "closed").pop()?.actorName ?? ""
     });
   }
   return out;
@@ -1573,7 +1575,7 @@ export async function closeResolution(
   return applyTransition(id, actor, {
     from: ["sent"],
     to: "done",
-    step: "dispatched",
+    step: "closed",
     comment,
     action: "resolution.done",
     afterChange: (tx, row) => notifyClosed(tx, row, actor)
