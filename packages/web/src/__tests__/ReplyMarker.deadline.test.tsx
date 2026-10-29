@@ -31,7 +31,7 @@ const item = {
 };
 
 /**
- * Живой прогон QA: подписант набрал срок 12.10.2026 и нажал «Отметить и утвердить» —
+ * Живой прогон QA: подписант набрал срок 12.10.2026 и нажал «Внести в журнал» —
  * в резолюции deadline остался null. Проверяем, теряется ли набранная дата.
  */
 describe("срок в модалке «Резолюция руководителя»", () => {
@@ -66,7 +66,7 @@ describe("срок в модалке «Резолюция руководител
     const input = screen.getByPlaceholderText("не указан");
     fireEvent.change(input, { target: { value: "12.10.2026" } });
     // Пользователь сразу нажимает кнопку — как в живом прогоне.
-    fireEvent.click(screen.getByRole("button", { name: "Отметить и утвердить" }));
+    fireEvent.click(screen.getByRole("button", { name: "Внести в журнал" }));
 
     await waitFor(() => expect(resolutionApi.markApproval).toHaveBeenCalledTimes(1));
     const payload = (resolutionApi.markApproval as jest.Mock).mock.calls[0][1];
@@ -78,7 +78,7 @@ describe("срок в модалке «Резолюция руководител
 
     const input = screen.getByPlaceholderText("не указан");
     fireEvent.change(input, { target: { value: "2026-10-12" } });
-    fireEvent.click(screen.getByRole("button", { name: "Отметить и утвердить" }));
+    fireEvent.click(screen.getByRole("button", { name: "Внести в журнал" }));
 
     await waitFor(() => expect(resolutionApi.markApproval).toHaveBeenCalledTimes(1));
     expect((resolutionApi.markApproval as jest.Mock).mock.calls[0][1].deadline).toBe("2026-10-12");
@@ -87,7 +87,7 @@ describe("срок в модалке «Резолюция руководител
   it("срок не вводили — на сервер уходит null, а не выдуманная дата", async () => {
     await openModalAndFill();
 
-    fireEvent.click(screen.getByRole("button", { name: "Отметить и утвердить" }));
+    fireEvent.click(screen.getByRole("button", { name: "Внести в журнал" }));
 
     await waitFor(() => expect(resolutionApi.markApproval).toHaveBeenCalledTimes(1));
     expect((resolutionApi.markApproval as jest.Mock).mock.calls[0][1].deadline).toBeNull();

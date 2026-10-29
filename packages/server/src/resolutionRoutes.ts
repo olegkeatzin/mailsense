@@ -978,13 +978,18 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           { id: signer.id, name: signer.fullName }
         );
       }
+      const confirmed = await confirmEmailApproval(req.params.id, actorOf(req), {
+        approvedBy: signer.id,
+        text: b.text !== undefined ? String(b.text) : undefined,
+        assignees: Array.isArray(b.assignees) ? b.assignees : undefined,
+        deadline: b.deadline !== undefined ? b.deadline : undefined,
+        priority: b.priority !== undefined ? b.priority : undefined
+      });
+      // Руководитель уже отправил резолюцию письмом: аппарат только вносит данные
+      // и ставит задачи. Второго письма руководителю/исполнителям не отправляем.
       res.json(
-        await confirmEmailApproval(req.params.id, actorOf(req), {
-          approvedBy: signer.id,
-          text: b.text !== undefined ? String(b.text) : undefined,
-          assignees: Array.isArray(b.assignees) ? b.assignees : undefined,
-          deadline: b.deadline !== undefined ? b.deadline : undefined,
-          priority: b.priority !== undefined ? b.priority : undefined
+        await dispatchResolution(confirmed.id, actorOf(req), {
+          comment: "Резолюция руководителя внесена аппаратом по письму"
         })
       );
     })
