@@ -120,15 +120,37 @@ export async function suggestFields(
   if (!reply) return { text: "", source: "none" };
 
   const cfg = getAiConfig();
+  // Контекст поручения улучшает черновик: модель видит, что именно поручено,
+  // и не считает ответ «не отчётом» только из-за короткой фразы.
+  let context: { documentNumber: string; taskText: string } | undefined;
+  try {
+    const found = await findReplyContext(emailId);
+    if (found[0]) context = { documentNumber: found[0].documentNumber, taskText: found[0].taskText };
+  } catch {
+    /* контекст необязателен */
+  }
   try {
     if (kind === "report") {
-      const a = await analyzeReportReply(cfg, { documentNumber: "", taskText: "", replyText: reply });
-      return a.summary ? { text: a.summary, source: "ai" } : { text: "", source: "none" };
+      const a = await analyzeReportReply(cfg, {
+        documentNumber: context?.documentNumber ?? "",
+        taskText: context?.taskText ?? "",
+        replyText: reply
+      });
+      if (a.summary) return { text: a.summary, source: "ai" };
+    } else {
+      const text = await extractApprovalInstruction(cfg, { replyText: reply });
+      if (text) return { text, source: "ai" };
     }
-    const text = await extractApprovalInstruction(cfg, { replyText: reply });
-    return text ? { text, source: "ai" } : { text: "", source: "none" };
   } catch (err) {
     logger.warn({ emailId, kind, err: (err as Error).message }, "Не удалось предложить поля");
-    return { text: "", source: "none" };
   }
+
+  // Модель недоступна или не увидела отчёт — не оставляем человека с пустым полем:
+  // отдаём очищенный текст письма как черновик, который он обязан проверить.
+  const fallback = reply
+    .replace(/\r/g, "")
+    .split(/\n(?:--\s*|—\s*|>|С уважением,?\s*$)/i)[0]
+    .trim()
+    .slice(0, 300);
+  return { text: fallback, source: "none" };
 }
