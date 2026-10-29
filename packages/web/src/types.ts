@@ -559,10 +559,13 @@ export interface IncomingItem {
   accountId: string;
   subject: string;
   from: { name?: string; address: string } | null;
+  to?: Array<{ name?: string; address: string }>;
   date: string | null;
   analysisStatus: string;
   externalNumber: string | null;
   sendDate: string | null;
+  /** Начало текста письма: видно, о чём оно, даже пока ИИ не разобрал. */
+  bodyPreview?: string;
   summary: string;
   priority: number | null;
   tags: string[];

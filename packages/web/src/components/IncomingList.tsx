@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Card, Checkbox, Empty, Segmented, Space, Spin, Tag, Tooltip } from "antd";
+import { Alert, Button, Card, Checkbox, Empty, Segmented, Space, Spin, Tag, Tooltip, Typography } from "antd";
 import { CheckCircleOutlined, FileAddOutlined, FlagOutlined, ReloadOutlined, RollbackOutlined, TagOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api";
@@ -23,6 +23,7 @@ export default function IncomingList() {
   const can = useStore((s) => s.can);
   const select = useStore((s) => s.select);
   const requestRegister = useStore((s) => s.requestRegister);
+  const accounts = useStore((s) => s.accounts);
   const [items, setItems] = useState<IncomingItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -132,6 +133,8 @@ export default function IncomingList() {
             {items.map((e) => {
               const labels = e.sortLabels ?? [];
               const notes = e.sortNotes ?? [];
+              const account = accounts.find((a) => a.id === e.accountId);
+              const recipients = (e.to ?? []).map((a) => a.name || a.address).filter(Boolean).join(", ");
               return (
                 <Card
                   key={e.emailId}
@@ -161,9 +164,30 @@ export default function IncomingList() {
                     </Button>
                   }
                 >
-                  <div style={{ fontWeight: 500, marginBottom: 4 }}>{e.subject}</div>
-                  {e.summary && <div style={{ color: "#555", marginBottom: 6 }}>{e.summary}</div>}
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{e.subject || "(без темы)"}</div>
+                  {recipients ? (
+                    <div style={{ color: "#595959", fontSize: 12, marginBottom: 4 }}>
+                      Кому: {recipients}
+                    </div>
+                  ) : null}
+                  {e.bodyPreview || e.summary ? (
+                    <Typography.Paragraph
+                      type="secondary"
+                      style={{ marginBottom: 8, whiteSpace: "pre-wrap" }}
+                      ellipsis={{ rows: 3, tooltip: e.summary || e.bodyPreview }}
+                    >
+                      {e.summary || e.bodyPreview}
+                    </Typography.Paragraph>
+                  ) : (
+                    <div style={{ color: "#8c8c8c", fontSize: 12, marginBottom: 8 }}>
+                      Текст письма пуст — проверьте вложения
+                    </div>
+                  )}
                   <Space size={4} wrap>
+                    {account?.username ? <Tag>Ящик: {account.username}</Tag> : null}
+                    {account?.settings?.displayName && account.settings.displayName !== account.username ? (
+                      <Tag>{account.settings.displayName}</Tag>
+                    ) : null}
                     {e.externalNumber && <Tag color="blue">№ {e.externalNumber}</Tag>}
                     {e.sendDate && <Tag>от {dayjs(e.sendDate).format("DD.MM.YYYY")}</Tag>}
                     {e.attachmentsCount > 0 && <Tag>{e.attachmentsCount} влож.</Tag>}

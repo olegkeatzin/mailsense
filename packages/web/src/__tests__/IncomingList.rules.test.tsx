@@ -71,6 +71,26 @@ describe("«Входящие на регистрацию»: правила то�
     expect(screen.getByText("Проверить срок ответа по регламенту")).not.toBeNull();
   });
 
+  it("карточка показывает получателя, ящик и начало текста, а не только тему", async () => {
+    useStore.setState({
+      accounts: [{ id: "acc-1", username: "post@mail.test", settings: {} } as never]
+    });
+    mockIncoming.mockResolvedValue({
+      items: [
+        item({
+          to: [{ name: "Лысенко О.Д.", address: "lisenko_od@mail.test" }],
+          bodyPreview: "Направляю поступившее письмо для наложения резолюции."
+        })
+      ],
+      total: 1
+    });
+    render(<IncomingList />);
+
+    expect(await screen.findByText(/Кому: Лысенко О.Д./)).not.toBeNull();
+    expect(screen.getByText(/Направляю поступившее письмо/)).not.toBeNull();
+    expect(screen.getByText("Ящик: post@mail.test")).not.toBeNull();
+  });
+
   it("метка не даёт и не отнимает право зарегистрировать", async () => {
     render(<IncomingList />);
 

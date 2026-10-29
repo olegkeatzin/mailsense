@@ -605,10 +605,13 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
         accountId: e.accountId,
         subject: e.subject,
         from: e.from,
+        to: e.to ?? [],
         date: e.date,
         analysisStatus: e.analysisStatus,
         externalNumber: e.externalNumber,
         sendDate: e.sendDate,
+        // Даже без ИИ аппарат должен видеть, о чём письмо: тема одна ничего не говорит.
+        bodyPreview: (e.bodyText ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
         summary: e.analysis?.summary ?? "",
         priority: e.analysis?.priority ?? null,
         tags: e.analysis?.tags ?? [],
