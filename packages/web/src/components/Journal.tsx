@@ -218,6 +218,21 @@ export default function Journal() {
       }
     },
     {
+      title: (
+        <Tooltip title="Дата закрытия последнего поручения по документу">
+          <span>Исполнено</span>
+        </Tooltip>
+      ),
+      key: "completed",
+      width: 110,
+      render: (_v, r) =>
+        r.resolution?.completedAt ? (
+          <span>{dayjs(r.resolution.completedAt).format("DD.MM.YYYY")}</span>
+        ) : (
+          <span style={{ color: "#767676" }}>—</span>
+        )
+    },
+    {
       title: "№ дела",
       dataIndex: "caseNumber",
       width: 100,
@@ -328,7 +343,7 @@ export default function Journal() {
         loading={loading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1700 }}
+        scroll={{ x: 1810 }}
         onRow={(r) => ({
           onClick: () => setOpenId(r.id),
           // Строку открывают и с клавиатуры: раньше карточка документа была доступна только мышью.

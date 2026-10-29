@@ -130,6 +130,8 @@ export interface DocumentResolutionBrief {
   status: string;
   deadline: string | null;
   assignees: string[];
+  /** Когда поручение закрыто; null — ещё исполняется. */
+  completedAt?: string | null;
 }
 
 export interface TaskSourceEmail {

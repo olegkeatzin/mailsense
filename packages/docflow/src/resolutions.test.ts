@@ -816,6 +816,21 @@ describe("поручения для списка журнала", () => {
     expect(brief.assignees).toEqual([executorA.name]);
   });
 
+  it("после закрытия отдаёт дату исполнения для журнала", async () => {
+    const created = await createResolution(
+      { documentId, text: "Закрыть для журнала", assignees: [{ userId: executorA.id, kind: "responsible" }] },
+      secretary
+    );
+    await requestApproval(created.id, secretary);
+    await approveResolution(created.id, director);
+    await dispatchResolution(created.id, secretary);
+    await closeResolution(created.id, secretary, "Исполнено");
+
+    const brief = (await resolutionsByDocument([documentId])).get(documentId)!;
+    expect(brief.completedAt).toBeTruthy();
+    expect(Number.isNaN(Date.parse(brief.completedAt!))).toBe(false);
+  });
+
   it("из двух поручений берётся последнее, а чужой документ не попадает", async () => {
     await createResolution(
       { documentId, text: "Первое", assignees: [{ userId: executorA.id, kind: "responsible" }] },

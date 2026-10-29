@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, Empty, List, Modal, Space, Spin, Typography, message } from "antd";
+import { Button, Empty, List, Modal, Spin, Typography, message } from "antd";
 import { DownloadOutlined, FolderOpenOutlined } from "@ant-design/icons";
 import { api } from "../api";
 import { humanError } from "../utils/humanError";
@@ -91,25 +91,22 @@ export function DocumentFilesButton({
               size="small"
               dataSource={files}
               renderItem={(f) => (
-                <List.Item
-                  actions={[
-                    <Button
-                      key="download"
-                      type="link"
-                      icon={<DownloadOutlined />}
-                      loading={busy === f.name}
-                      onClick={() => void download(f.name)}
-                    >
-                      Скачать
-                    </Button>
-                  ]}
-                >
-                  <Space direction="vertical" size={0}>
-                    <span>{f.name}</span>
+                <List.Item style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ wordBreak: "break-all" }}>{f.name}</div>
                     <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                       {(f.size / 1024).toFixed(1)} КБ
                     </Typography.Text>
-                  </Space>
+                  </div>
+                  <Button
+                    type="link"
+                    icon={<DownloadOutlined />}
+                    loading={busy === f.name}
+                    style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}
+                    onClick={() => void download(f.name)}
+                  >
+                    Скачать
+                  </Button>
                 </List.Item>
               )}
             />

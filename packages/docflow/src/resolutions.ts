@@ -1113,6 +1113,8 @@ export interface DocumentResolutionBrief {
   status: string;
   deadline: string | null;
   assignees: string[];
+  /** Дата закрытия поручения; null — ещё не исполнено. */
+  completedAt: string | null;
 }
 
 /**
@@ -1135,7 +1137,8 @@ export async function resolutionsByDocument(
       text: resolutions.text,
       status: resolutions.status,
       deadline: resolutions.deadline,
-      createdAt: resolutions.createdAt
+      createdAt: resolutions.createdAt,
+      updatedAt: resolutions.updatedAt
     })
     .from(resolutions)
     .where(inArray(resolutions.documentId, ids))
@@ -1148,7 +1151,9 @@ export async function resolutionsByDocument(
       text: r.text,
       status: r.status,
       deadline: r.deadline,
-      assignees: (assignees.get(r.id) ?? []).map((a) => a.fullName)
+      assignees: (assignees.get(r.id) ?? []).map((a) => a.fullName),
+      // Для журнала: когда поручение реально закрыто, а не когда его последний раз трогали.
+      completedAt: r.status === "done" ? new Date(r.updatedAt).toISOString() : null
     });
   }
   return out;

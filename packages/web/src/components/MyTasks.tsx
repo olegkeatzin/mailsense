@@ -127,6 +127,8 @@ export function MyTasks() {
   const [reportFor, setReportFor] = useState<TaskItem | null>(null);
   const [reportText, setReportText] = useState("");
   const [reportBusy, setReportBusy] = useState(false);
+  const [reportEmailBusy, setReportEmailBusy] = useState(false);
+  const openEdmsCompose = useStore((s) => s.openEdmsCompose);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -278,6 +280,33 @@ export function MyTasks() {
   if (loading) return <Spin style={{ margin: 24 }} />;
 
   /** Отправляет отчёт и перечитывает список: поручение может закрыться сразу. */
+  /** Обычное окно письма: текст отчёта и получатели уже подготовлены сервером. */
+  async function openReportEmail() {
+    if (!reportFor) return;
+    if (!reportText.trim()) {
+      message.warning("Опишите, что сделано — пустой отчёт не принимается");
+      return;
+    }
+    setReportEmailBusy(true);
+    try {
+      const draft = await resolutionApi.reportEmail(reportFor.resolutionId, reportText);
+      openEdmsCompose({
+        documentId: draft.documentId,
+        subject: draft.subject,
+        bodyText: draft.bodyText,
+        to: draft.to,
+        kind: "report",
+        resolutionId: reportFor.resolutionId,
+        accountId: draft.accountId
+      });
+      setReportFor(null);
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setReportEmailBusy(false);
+    }
+  }
+
   async function submitReport() {
     if (!reportFor) return;
     if (!reportText.trim()) {
@@ -320,10 +349,19 @@ export function MyTasks() {
       <Modal
         open={!!reportFor}
         title={"Отчёт по документу " + (reportFor?.documentNumber ?? "")}
-        okText="Отправить отчёт"
         confirmLoading={reportBusy}
         onCancel={() => setReportFor(null)}
-        onOk={() => void submitReport()}
+        footer={[
+          <Button key="cancel" onClick={() => setReportFor(null)}>
+            Отмена
+          </Button>,
+          <Button key="mail" loading={reportEmailBusy} onClick={() => void openReportEmail()}>
+            Открыть окно письма
+          </Button>,
+          <Button key="submit" type="primary" loading={reportBusy} onClick={() => void submitReport()}>
+            Отправить отчёт
+          </Button>
+        ]}
       >
         <div style={{ color: "#666", fontSize: 13, marginBottom: 8 }}>{reportFor?.text}</div>
         <Input.TextArea
