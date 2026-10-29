@@ -628,6 +628,17 @@ function ComposerForm({
             // переход и связь — второй раз не шлёт.
             await resolutionApi.dispatch(edms.resolutionId, accountId, { emailId: sent.emailId });
             message.success("Письмо отправлено, поручение передано исполнителям");
+          } else if (edms.kind === "report" && edms.resolutionId) {
+            // Письмо с отчётом уже отправлено человеком; фиксируем отчёт и связь,
+            // автоотправку отключаем, иначе руководитель получит два письма.
+            await resolutionApi.report(
+              edms.resolutionId,
+              htmlToPlainText(bodyHtml),
+              sent.emailId,
+              accountId,
+              true
+            );
+            message.success("Письмо с отчётом отправлено, отчёт зарегистрирован");
           } else {
             // В «Кому» адрес хранится в формате «Имя <a@b>». Серверу нужен чистый адрес:
             // раньше сюда уходила строка с угловыми скобками, и связь падала с bad_email.
@@ -825,7 +836,7 @@ export default function Composer() {
     const validFilter = accountFilter && accounts.some((a) => a.id === accountFilter) ? accountFilter : null;
     if (compose.edms) {
       setTemplate({
-        accountId: validFilter || accounts[0]?.id || "",
+        accountId: compose.edms.accountId || validFilter || accounts[0]?.id || "",
         mode: "new",
         inReplyToEmailId: null,
         subject: compose.edms.subject,

@@ -435,11 +435,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     };
   }
 
-  /**
-   * Отчёт, сданный в приложении, тоже должен уйти письмом — ответом на письмо
-   * с резолюцией. Иначе руководитель и аппарат видят отчёт только в карточке.
-   */
-  async function sendReportEmail(resolutionId: string, text: string, actor: Actor) {
+  /** Письмо с отчётом: получатели, тема и текст — общие для автоотправки и окна письма. */
+  async function buildReportEmail(resolutionId: string, text: string, actor: Actor) {
     const detail = await getResolutionDetail(resolutionId);
     if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
     const sourceId =
@@ -487,18 +484,33 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       actor.name
     ].join("\n");
 
-    return sendEmail({
+    return {
+      resolutionId,
+      documentId: detail.documentId,
       accountId: account.id,
       to: recipients,
       subject,
       bodyText,
-      inReplyToEmailId: sourceMail?.id ?? null,
-      inReplyToMessageId: sourceMail?.messageId ?? null,
-      references: sourceMail?.messageId
-        ? [...(sourceMail.references ?? []), sourceMail.messageId]
-        : (sourceMail?.references ?? []),
+      sourceEmailId: sourceMail?.id ?? null,
+      sourceMessageId: sourceMail?.messageId ?? null,
+      sourceReferences: sourceMail?.references ?? []
+    };
+  }
+
+  async function sendReportEmail(resolutionId: string, text: string, actor: Actor) {
+    const draft = await buildReportEmail(resolutionId, text, actor);
+    return sendEmail({
+      accountId: draft.accountId,
+      to: draft.to,
+      subject: draft.subject,
+      bodyText: draft.bodyText,
+      inReplyToEmailId: draft.sourceEmailId,
+      inReplyToMessageId: draft.sourceMessageId,
+      references: draft.sourceMessageId
+        ? [...draft.sourceReferences, draft.sourceMessageId]
+        : draft.sourceReferences,
       headers: {
-        "X-MailSense-EDMS": "doc=" + detail.documentId + "; res=" + resolutionId + "; kind=report; v=1"
+        "X-MailSense-EDMS": "doc=" + draft.documentId + "; res=" + resolutionId + "; kind=report; v=1"
       }
     });
   }
@@ -1398,6 +1410,17 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     })
   );
 
+  /** Черновик письма с отчётом для окна письма: получатели, тема и текст. */
+  app.get(
+    "/api/docflow/resolutions/:id/report-email",
+    ...report,
+    asyncHandler(async (req, res) => {
+      if (!req.user) throw new AppError("Требуется вход", 401, "unauthorized");
+      const text = typeof req.query.text === "string" ? req.query.text : "";
+      res.json(await buildReportEmail(req.params.id, text, actorOf(req)));
+    })
+  );
+
   /** Отчёт исполнителя об исполнении (этап 4). */
   app.post(
     "/api/docflow/resolutions/:id/report",
@@ -1415,10 +1438,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       );
       scheduleStatsRecompute(reported);
 
-      // Отчёт из приложения отправляем письмом. Отчёт из письма (emailId) уже
-      // пришёл почтой — второй раз не шлём.
+      // Отчёт отправляем письмом всегда — даже если его отметили по уже полученному
+      // письму: руководитель и аппарат должны получить его ответом на резолюцию.
+      // Окно письма, которое отправило отчёт само, передаёт skipReportEmail=true.
       let reportEmailSent = true;
-      if (!b.emailId) {
+      if (b.skipReportEmail !== true) {
         try {
           await sendReportEmail(req.params.id, text, actorOf(req));
         } catch (err) {

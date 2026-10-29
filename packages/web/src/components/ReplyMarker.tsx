@@ -60,6 +60,7 @@ function fromTask(t: TaskItem, userId: string, fullName: string): ReplyContextIt
  */
 export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: () => void }) {
   const can = useStore((s) => s.can);
+  const openEdmsCompose = useStore((s) => s.openEdmsCompose);
   const authUser = useStore((s) => s.authUser);
   const me = authUser?.id;
   const [items, setItems] = useState<ReplyContextItem[]>([]);
@@ -76,6 +77,7 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
   } | null>(null);
   const [text, setText] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  const [reportEmailBusy, setReportEmailBusy] = useState(false);
   const [saving, setSaving] = useState(false);
   const [assignees, setAssignees] = useState<string[]>([]);
   const [responsible, setResponsible] = useState<string | undefined>();
@@ -258,6 +260,29 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
     }
   }
 
+  /** Открыть обычное окно письма с отчётом: получатели, тема и текст готовит сервер. */
+  async function openReportEmail() {
+    if (!mode || mode.kind !== "report") return;
+    setReportEmailBusy(true);
+    try {
+      const draft = await resolutionApi.reportEmail(mode.item.resolutionId, text);
+      openEdmsCompose({
+        documentId: draft.documentId,
+        subject: draft.subject,
+        bodyText: draft.bodyText,
+        to: draft.to,
+        kind: "report",
+        resolutionId: mode.item.resolutionId,
+        accountId: draft.accountId
+      });
+      setMode(null);
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setReportEmailBusy(false);
+    }
+  }
+
   async function submit() {
     if (!mode) return;
     if (!text.trim()) {
@@ -314,8 +339,12 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
         message.success("Отчёт принят");
       } else {
         // Исполнитель сам регистрирует свой отчёт, отправленный из Outlook.
-        await resolutionApi.report(mode.item.resolutionId, text, emailId);
-        message.success("Отчёт зарегистрирован");
+        const saved = await resolutionApi.report(mode.item.resolutionId, text, emailId);
+        if (saved.reportEmailSent === false) {
+          message.warning("Отчёт сохранён, но письмо руководителю и аппарату не ушло");
+        } else {
+          message.success("Отчёт зарегистрирован, письмо ушло руководителю и аппарату");
+        }
       }
       setMode(null);
       await load();
@@ -522,11 +551,20 @@ export function ReplyMarker({ emailId, onMarked }: { emailId: string; onMarked: 
               }
             />
           </Form.Item>
-          <Button icon={<RobotOutlined />} loading={aiBusy} onClick={() => void fillWithAi()}>
-            Заполнить с помощью ИИ
-          </Button>
+          <Space wrap>
+            <Button icon={<RobotOutlined />} loading={aiBusy} onClick={() => void fillWithAi()}>
+              Заполнить с помощью ИИ
+            </Button>
+            {mode?.kind === "report" ? (
+              <Button loading={reportEmailBusy} onClick={() => void openReportEmail()}>
+                Открыть окно письма
+              </Button>
+            ) : null}
+          </Space>
           <div style={{ fontSize: 12, color: "#595959", margin: "6px 0 14px" }}>
-            Черновик по тексту письма. Проверьте: отвечает за формулировку человек.
+            {mode?.kind === "report"
+              ? "Можно сразу отправить отчёт или открыть обычное окно письма и отредактировать его."
+              : "Черновик по тексту письма. Проверьте: отвечает за формулировку человек."}
           </div>
 
           {mode?.kind === "approval" ? (

@@ -12,6 +12,15 @@ jest.mock("../api", () => ({
     confirmReport: jest.fn(),
     approve: jest.fn().mockResolvedValue({}),
     report: jest.fn().mockResolvedValue({}),
+    reportEmail: jest.fn().mockResolvedValue({
+      resolutionId: "res-1",
+      documentId: "doc-1",
+      accountId: "acc-1",
+      to: [{ address: "boss@stand.test", name: "Руководитель" }],
+      subject: "Re: Письмо вх1",
+      bodyText: "Отчёт по поручению",
+      sourceEmailId: "e-1"
+    }),
     createApprovedFromEmail: jest.fn().mockResolvedValue({}),
     forApproval: jest.fn().mockResolvedValue({ items: [], total: 0 }),
     board: jest.fn().mockResolvedValue([]),
@@ -142,6 +151,27 @@ it("руководитель может создать резолюцию по �
   fireEvent.mouseDown(combo);
   fireEvent.change(combo, { target: { value: "p@mail.test" } });
   expect(await screen.findByText("Мария Петрова")).not.toBeNull();
+});
+
+it("отчёт можно открыть обычным окном письма и отредактировать", async () => {
+  asUser("u-executor", ["journal.view", "task.report"]);
+  (resolutionApi.replyContext as jest.Mock).mockResolvedValue([reportItem]);
+
+  render(<ReplyMarker emailId="e-1" onMarked={jest.fn()} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Это мой отчёт" }));
+  fireEvent.change(await screen.findByPlaceholderText("Кратко: что сделано и с каким результатом"), {
+    target: { value: "Ответ отправлен" }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Открыть окно письма" }));
+
+  await waitFor(() => {
+    const edms = useStore.getState().compose.edms;
+    expect(edms?.kind).toBe("report");
+    expect(edms?.resolutionId).toBe("res-1");
+    expect(edms?.to).toEqual([{ address: "boss@stand.test", name: "Руководитель" }]);
+  });
+  expect(resolutionApi.reportEmail).toHaveBeenCalledWith("res-1", "Ответ отправлен");
+  useStore.getState().closeCompose();
 });
 
 it("исполнитель сам регистрирует свой отчёт из письма", async () => {

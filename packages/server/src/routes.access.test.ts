@@ -478,7 +478,9 @@ const CASES: RouteCase[] = [
 const MATRIX_EXCEPTIONS = new Set([
   "POST /api/docflow/resolutions/:id/mark-approval",
   // Ссылки на письма проверяются отдельным тестом: они зависят от копий в ящиках.
-  "GET /api/docflow/resolutions/:id/email-links"
+  "GET /api/docflow/resolutions/:id/email-links",
+  // Черновик письма с отчётом использует те же получатели, что и отправка.
+  "GET /api/docflow/resolutions/:id/report-email"
 ]);
 
 let expressApp: express.Express;
@@ -931,12 +933,40 @@ describe("отчёт исполнителя из приложения", () => {
     );
   });
 
-  it("отчёт, пришедший письмом, второй раз не отправляется", async () => {
+  it("отчёт, отмеченный по письму, тоже пересылается руководителю и аппарату", async () => {
+    mockedDocflow.reportExecution.mockResolvedValueOnce({ id: "res-1", status: "done" });
+
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/report", {
+      token: token("executor"),
+      body: { text: "Отчёт из письма", emailId: "mail-1" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedCore.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ bodyText: expect.stringContaining("Отчёт из письма") })
+    );
+  });
+
+  it("черновик письма с отчётом отдаёт получателей и текст", async () => {
+    const res = await request(app.baseUrl, "GET", "/api/docflow/resolutions/res-1/report-email?text=Готово", {
+      token: token("executor")
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({
+      resolutionId: "res-1",
+      to: expect.arrayContaining([expect.objectContaining({ address: "stand@mail.test" })]),
+      bodyText: expect.stringContaining("Готово")
+    });
+    expect(mockedCore.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("окно письма с отчётом не отправляет второе письмо", async () => {
     mockedDocflow.reportExecution.mockResolvedValueOnce({ id: "res-1", status: "done" });
 
     await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/report", {
       token: token("executor"),
-      body: { text: "Отчёт из письма", emailId: "mail-1" }
+      body: { text: "Отчёт из окна", emailId: "sent-1", skipReportEmail: true }
     });
 
     expect(mockedCore.sendEmail).not.toHaveBeenCalled();

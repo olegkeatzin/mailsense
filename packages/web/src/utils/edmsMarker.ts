@@ -8,7 +8,7 @@
 export function edmsMarkerHeader(input: {
   documentId?: string | null;
   resolutionId?: string | null;
-  kind?: "forward" | "dispatch" | null;
+  kind?: "forward" | "dispatch" | "report" | null;
 }): Record<string, string> {
   const value =
     "doc=" +

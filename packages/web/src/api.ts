@@ -769,11 +769,29 @@ export const resolutionApi = {
 
 
   /** Отчёт исполнителя об исполнении: описывает, что сделано (этап 4). */
-  report(id: string, text: string, emailId?: string | null, accountId?: string) {
+  report(id: string, text: string, emailId?: string | null, accountId?: string, skipReportEmail = false) {
     return request<Resolution & { reportEmailSent?: boolean }>("/api/docflow/resolutions/" + id + "/report", {
       method: "POST",
-      body: JSON.stringify(accountId ? { text, emailId, accountId } : { text, emailId })
+      body: JSON.stringify({
+        text,
+        emailId,
+        ...(accountId ? { accountId } : {}),
+        ...(skipReportEmail ? { skipReportEmail: true } : {})
+      })
     });
+  },
+
+  /** Черновик письма с отчётом: получатели, тема и текст для обычного окна письма. */
+  reportEmail(id: string, text: string) {
+    return request<{
+      resolutionId: string;
+      documentId: string;
+      accountId: string;
+      to: Array<{ address: string; name?: string }>;
+      subject: string;
+      bodyText: string;
+      sourceEmailId: string | null;
+    }>("/api/docflow/resolutions/" + encodeURIComponent(id) + "/report-email?text=" + encodeURIComponent(text));
   },
 
   /** Закрытие поручения аппаратом: исполнитель отчитался письмом или лично. */

@@ -137,10 +137,12 @@ interface State extends FilterState {
       documentId: string;
       subject: string;
       bodyText: string;
-      /** «forward» — письмо руководителю, «dispatch» — поручение исполнителям. */
-      kind?: "forward" | "dispatch";
-      /** Для dispatch: к какому поручению привязать отправленное письмо. */
+      /** «forward» — письмо руководителю, «dispatch» — поручение, «report» — отчёт. */
+      kind?: "forward" | "dispatch" | "report";
+      /** Для dispatch/report: к какому поручению привязать отправленное письмо. */
       resolutionId?: string;
+      /** Ящик отправки: у отчёта его выбирает исполнитель. */
+      accountId?: string;
       /**
        * Кому письмо руководителю: выбранный в окне «Направить» получатель переносится
        * в окно письма, чтобы человеку не приходилось выбирать его второй раз.
@@ -158,8 +160,9 @@ interface State extends FilterState {
     documentId: string;
     subject: string;
     bodyText: string;
-    kind?: "forward" | "dispatch";
+    kind?: "forward" | "dispatch" | "report";
     resolutionId?: string;
+    accountId?: string;
     to?: EmailAddress[];
     toUserId?: string;
     toEmail?: string;
