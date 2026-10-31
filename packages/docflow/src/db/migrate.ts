@@ -578,6 +578,310 @@ BEGIN
   END IF;
 END $$;
 `
+  },
+  {
+    // Комментарии к таблицам и полям: их видно в ERD/клиенте БД без чтения кода.
+    version: 14,
+    name: "column_comments",
+    sql: `
+COMMENT ON TABLE users IS 'Пользователи СЭД: синхронизированные из AD и локальные учётные записи.';
+COMMENT ON COLUMN users.id IS 'Идентификатор пользователя (внутренний UUID).';
+COMMENT ON COLUMN users.ldap_uid IS 'sAMAccountName/логин из каталога AD.';
+COMMENT ON COLUMN users.ldap_uid_key IS 'Нормализованный ключ логина AD для поиска без учёта регистра.';
+COMMENT ON COLUMN users.ldap_dn IS 'Полный DN пользователя в каталоге AD.';
+COMMENT ON COLUMN users.email IS 'Адрес электронной почты работника.';
+COMMENT ON COLUMN users.full_name IS 'ФИО работника.';
+COMMENT ON COLUMN users.department IS 'Подразделение из каталога.';
+COMMENT ON COLUMN users.position IS 'Должность из каталога.';
+COMMENT ON COLUMN users.manager_dn IS 'DN руководителя в каталоге AD.';
+COMMENT ON COLUMN users.manager_id IS 'Идентификатор руководителя в этой таблице.';
+COMMENT ON COLUMN users.phone IS 'Телефон работника.';
+COMMENT ON COLUMN users.source IS 'Источник записи: ldap, local или manual.';
+COMMENT ON COLUMN users.password_hash IS 'Хэш пароля локальной учётной записи; для AD пуст.';
+COMMENT ON COLUMN users.is_active IS 'Активность по данным каталога.';
+COMMENT ON COLUMN users.blocked IS 'Ручная блокировка администратором.';
+COMMENT ON COLUMN users.last_login_at IS 'Время последнего успешного входа.';
+COMMENT ON COLUMN users.created_at IS 'Когда запись создана.';
+COMMENT ON COLUMN users.updated_at IS 'Когда запись последний раз изменена.';
+
+COMMENT ON TABLE roles IS 'Роли СЭД и их права.';
+COMMENT ON COLUMN roles.id IS 'Идентификатор роли.';
+COMMENT ON COLUMN roles.name IS 'Название роли.';
+COMMENT ON COLUMN roles.description IS 'Описание роли.';
+COMMENT ON COLUMN roles.sort_order IS 'Порядок роли в интерфейсе.';
+COMMENT ON COLUMN roles.is_system IS 'Встроенная роль, которую нельзя удалить.';
+COMMENT ON COLUMN roles.permissions IS 'JSON-массив прав роли; NULL — права ещё не засеяны.';
+
+COMMENT ON TABLE user_roles IS 'Связь пользователей и ролей.';
+COMMENT ON COLUMN user_roles.user_id IS 'Пользователь.';
+COMMENT ON COLUMN user_roles.role_id IS 'Роль.';
+COMMENT ON COLUMN user_roles.granted_at IS 'Когда роль выдана.';
+COMMENT ON COLUMN user_roles.granted_by IS 'Кто выдал роль.';
+
+COMMENT ON TABLE sessions IS 'Серверные сессии входа в СЭД.';
+COMMENT ON COLUMN sessions.id IS 'SHA-256 токена сессии; сам токен не хранится.';
+COMMENT ON COLUMN sessions.user_id IS 'Пользователь сессии.';
+COMMENT ON COLUMN sessions.created_at IS 'Когда сессия создана.';
+COMMENT ON COLUMN sessions.expires_at IS 'Когда сессия истекает.';
+COMMENT ON COLUMN sessions.last_seen_at IS 'Последняя активность сессии.';
+COMMENT ON COLUMN sessions.user_agent IS 'User-Agent клиента.';
+COMMENT ON COLUMN sessions.ip IS 'IP-адрес клиента.';
+
+COMMENT ON TABLE audit_log IS 'Неизменяемый журнал действий: кто, когда и что изменил.';
+COMMENT ON COLUMN audit_log.id IS 'Идентификатор записи аудита.';
+COMMENT ON COLUMN audit_log.user_id IS 'Идентификатор автора; без FK, чтобы история переживала удаление пользователя.';
+COMMENT ON COLUMN audit_log.user_name IS 'ФИО автора на момент события.';
+COMMENT ON COLUMN audit_log.action IS 'Код действия, например journal.register.';
+COMMENT ON COLUMN audit_log.entity_type IS 'Тип изменённого объекта.';
+COMMENT ON COLUMN audit_log.entity_id IS 'Идентификатор изменённого объекта.';
+COMMENT ON COLUMN audit_log.old_value IS 'Состояние до изменения в JSON.';
+COMMENT ON COLUMN audit_log.new_value IS 'Состояние после изменения в JSON.';
+COMMENT ON COLUMN audit_log.created_at IS 'Время события.';
+
+COMMENT ON TABLE settings IS 'Общие настройки серверной части СЭД.';
+COMMENT ON COLUMN settings.key IS 'Имя настройки.';
+COMMENT ON COLUMN settings.value IS 'Значение настройки в строковом виде.';
+
+COMMENT ON TABLE user_settings IS 'Личные настройки работника в СЭД.';
+COMMENT ON COLUMN user_settings.user_id IS 'Пользователь.';
+COMMENT ON COLUMN user_settings.key IS 'Имя личной настройки, например edms.workAccountId.';
+COMMENT ON COLUMN user_settings.value IS 'Значение настройки.';
+COMMENT ON COLUMN user_settings.updated_at IS 'Когда настройка изменена.';
+
+COMMENT ON TABLE documents IS 'Журнал входящих документов.';
+COMMENT ON COLUMN documents.id IS 'Идентификатор документа.';
+COMMENT ON COLUMN documents.reg_number IS 'Регистрационный номер вида вх1.';
+COMMENT ON COLUMN documents.reg_number_numeric IS 'Числовая часть номера для правильной сортировки.';
+COMMENT ON COLUMN documents.reg_period IS 'Период нумерации, обычно год.';
+COMMENT ON COLUMN documents.reg_date IS 'Дата регистрации.';
+COMMENT ON COLUMN documents.doc_number IS 'Номер документа отправителя.';
+COMMENT ON COLUMN documents.doc_date IS 'Дата документа отправителя.';
+COMMENT ON COLUMN documents.sender IS 'Отправитель, как указан в документе.';
+COMMENT ON COLUMN documents.summary IS 'Краткое содержание документа.';
+COMMENT ON COLUMN documents.sheets_count IS 'Количество листов.';
+COMMENT ON COLUMN documents.case_number IS 'Номер дела.';
+COMMENT ON COLUMN documents.document_name IS 'Наименование документа.';
+COMMENT ON COLUMN documents.status IS 'Состояние документа: new, on_resolution, in_progress, executed, archived.';
+COMMENT ON COLUMN documents.email_id IS 'ID исходного письма в почтовой SQLite; FK между базами нет.';
+COMMENT ON COLUMN documents.doc_files_path IS 'Папка вложений дела на сервере; NULL — ещё не создана.';
+COMMENT ON COLUMN documents.correspondent_id IS 'Ссылка на correspondents.id; NULL — отправитель не сопоставлен.';
+COMMENT ON COLUMN documents.created_by IS 'Кто зарегистрировал документ.';
+COMMENT ON COLUMN documents.created_at IS 'Когда документ создан.';
+COMMENT ON COLUMN documents.updated_at IS 'Когда документ последний раз изменён.';
+COMMENT ON COLUMN documents.archived_at IS 'Когда документ выгружен в архив.';
+
+COMMENT ON TABLE document_emails IS 'Связь документа с письмами: входящее, резолюция, отчёт.';
+COMMENT ON COLUMN document_emails.document_id IS 'Документ.';
+COMMENT ON COLUMN document_emails.email_id IS 'ID письма в почтовой SQLite; FK между базами нет.';
+COMMENT ON COLUMN document_emails.role IS 'Роль письма в деле: source, resolution, report и т.п.';
+COMMENT ON COLUMN document_emails.linked_at IS 'Когда письмо привязано.';
+COMMENT ON COLUMN document_emails.linked_by IS 'Кто привязал письмо.';
+
+COMMENT ON TABLE number_counters IS 'Счётчики номеров по потоку и периоду.';
+COMMENT ON COLUMN number_counters.stream IS 'Поток нумерации, например incoming.';
+COMMENT ON COLUMN number_counters.period IS 'Период нумерации.';
+COMMENT ON COLUMN number_counters.last_number IS 'Последний выданный номер.';
+
+COMMENT ON TABLE number_rules IS 'Правила нумерации по потокам.';
+COMMENT ON COLUMN number_rules.stream IS 'Поток нумерации.';
+COMMENT ON COLUMN number_rules.prefix IS 'Префикс номера.';
+COMMENT ON COLUMN number_rules.reset IS 'Периодичность сброса счётчика.';
+COMMENT ON COLUMN number_rules.template IS 'Необязательный шаблон номера.';
+
+COMMENT ON TABLE number_archives IS 'Выгруженные и закрытые периоды журнала.';
+COMMENT ON COLUMN number_archives.id IS 'Идентификатор архива.';
+COMMENT ON COLUMN number_archives.stream IS 'Поток нумерации.';
+COMMENT ON COLUMN number_archives.period IS 'Закрытый период.';
+COMMENT ON COLUMN number_archives.file_name IS 'Имя файла выгрузки.';
+COMMENT ON COLUMN number_archives.document_count IS 'Сколько документов в архиве.';
+COMMENT ON COLUMN number_archives.created_at IS 'Когда архив создан.';
+COMMENT ON COLUMN number_archives.created_by IS 'Кто закрыл период.';
+
+COMMENT ON TABLE case_nomenclature IS 'Номенклатура дел.';
+COMMENT ON COLUMN case_nomenclature.id IS 'Идентификатор дела.';
+COMMENT ON COLUMN case_nomenclature.code IS 'Код дела.';
+COMMENT ON COLUMN case_nomenclature.title IS 'Название дела.';
+COMMENT ON COLUMN case_nomenclature.is_active IS 'Можно ли выбирать дело.';
+COMMENT ON COLUMN case_nomenclature.sort_order IS 'Порядок в списке.';
+COMMENT ON COLUMN case_nomenclature.created_at IS 'Когда дело создано.';
+COMMENT ON COLUMN case_nomenclature.updated_at IS 'Когда дело изменено.';
+
+COMMENT ON TABLE correspondents IS 'Справочник корреспондентов: организации и лица, от которых получены документы.';
+COMMENT ON COLUMN correspondents.id IS 'Идентификатор корреспондента.';
+COMMENT ON COLUMN correspondents.name IS 'Полное название корреспондента.';
+COMMENT ON COLUMN correspondents.short_name IS 'Краткое название.';
+COMMENT ON COLUMN correspondents.inn IS 'ИНН корреспондента.';
+COMMENT ON COLUMN correspondents.is_active IS 'Можно ли выбирать корреспондента.';
+COMMENT ON COLUMN correspondents.created_at IS 'Когда корреспондент создан.';
+COMMENT ON COLUMN correspondents.updated_at IS 'Когда корреспондент изменён.';
+
+COMMENT ON TABLE deadline_presets IS 'Типовые сроки исполнения.';
+COMMENT ON COLUMN deadline_presets.id IS 'Идентификатор срока.';
+COMMENT ON COLUMN deadline_presets.title IS 'Название срока.';
+COMMENT ON COLUMN deadline_presets.days IS 'Количество дней.';
+COMMENT ON COLUMN deadline_presets.is_active IS 'Показывать ли срок в форме.';
+COMMENT ON COLUMN deadline_presets.sort_order IS 'Порядок в списке.';
+COMMENT ON COLUMN deadline_presets.is_workday IS 'Считать ли дни рабочими.';
+
+COMMENT ON TABLE resolution_templates IS 'Шаблоны текста резолюций.';
+COMMENT ON COLUMN resolution_templates.id IS 'Идентификатор шаблона.';
+COMMENT ON COLUMN resolution_templates.title IS 'Название шаблона.';
+COMMENT ON COLUMN resolution_templates.body IS 'Текст шаблона.';
+COMMENT ON COLUMN resolution_templates.is_active IS 'Показывать ли шаблон.';
+COMMENT ON COLUMN resolution_templates.sort_order IS 'Порядок в списке.';
+
+COMMENT ON TABLE resolutions IS 'Резолюции по документам.';
+COMMENT ON COLUMN resolutions.id IS 'Идентификатор резолюции.';
+COMMENT ON COLUMN resolutions.document_id IS 'Документ, к которому относится резолюция.';
+COMMENT ON COLUMN resolutions.text IS 'Текст поручения.';
+COMMENT ON COLUMN resolutions.source_text IS 'Исходный текст до правок.';
+COMMENT ON COLUMN resolutions.source_kind IS 'Источник: manual, ai, email, forwarded.';
+COMMENT ON COLUMN resolutions.status IS 'Состояние резолюции.';
+COMMENT ON COLUMN resolutions.priority IS 'Приоритет поручения.';
+COMMENT ON COLUMN resolutions.deadline IS 'Срок исполнения.';
+COMMENT ON COLUMN resolutions.prepared_by IS 'Кто подготовил резолюцию.';
+COMMENT ON COLUMN resolutions.approved_by IS 'Кто утвердил резолюцию.';
+COMMENT ON COLUMN resolutions.approved_at IS 'Когда резолюция утверждена.';
+COMMENT ON COLUMN resolutions.approval_method IS 'Способ утверждения: app или email.';
+COMMENT ON COLUMN resolutions.confirmed_by IS 'Кто подтвердил ответ письмом.';
+COMMENT ON COLUMN resolutions.confirmed_at IS 'Когда подтверждён ответ письмом.';
+COMMENT ON COLUMN resolutions.dispatched_by IS 'Кто передал поручение исполнителям.';
+COMMENT ON COLUMN resolutions.dispatched_at IS 'Когда поручение передано исполнителям.';
+COMMENT ON COLUMN resolutions.request_email_id IS 'ID письма-запроса руководителю.';
+COMMENT ON COLUMN resolutions.approval_email_id IS 'ID письма-ответа руководителя.';
+COMMENT ON COLUMN resolutions.dispatch_email_id IS 'ID письма-поручения исполнителям.';
+COMMENT ON COLUMN resolutions.created_at IS 'Когда резолюция создана.';
+COMMENT ON COLUMN resolutions.updated_at IS 'Когда резолюция изменена.';
+
+COMMENT ON TABLE resolution_assignees IS 'Исполнители резолюции и их отчёты.';
+COMMENT ON COLUMN resolution_assignees.resolution_id IS 'Резолюция.';
+COMMENT ON COLUMN resolution_assignees.user_id IS 'Исполнитель.';
+COMMENT ON COLUMN resolution_assignees.kind IS 'Роль исполнителя: responsible или coexecutor.';
+COMMENT ON COLUMN resolution_assignees.received_at IS 'Когда исполнитель получил поручение.';
+COMMENT ON COLUMN resolution_assignees.report_text IS 'Текст отчёта исполнителя.';
+COMMENT ON COLUMN resolution_assignees.report_at IS 'Когда отчёт принят.';
+COMMENT ON COLUMN resolution_assignees.report_email_id IS 'ID письма-отчёта в почтовой SQLite.';
+COMMENT ON COLUMN resolution_assignees.report_summary IS 'Краткая суть отчёта, предложенная моделью.';
+COMMENT ON COLUMN resolution_assignees.report_proposed_at IS 'Когда модель предложила отчёт.';
+COMMENT ON COLUMN resolution_assignees.created_at IS 'Когда исполнитель назначен.';
+
+COMMENT ON TABLE resolution_approvals IS 'История шагов утверждения и передачи резолюции.';
+COMMENT ON COLUMN resolution_approvals.id IS 'Идентификатор шага.';
+COMMENT ON COLUMN resolution_approvals.resolution_id IS 'Резолюция.';
+COMMENT ON COLUMN resolution_approvals.step IS 'Шаг: requested, approved, rejected, confirmed, dispatched, closed, cancelled.';
+COMMENT ON COLUMN resolution_approvals.actor_id IS 'Кто выполнил шаг; без FK, чтобы история сохранялась.';
+COMMENT ON COLUMN resolution_approvals.actor_name IS 'ФИО автора шага на момент события.';
+COMMENT ON COLUMN resolution_approvals.method IS 'Способ шага: app, email или manual.';
+COMMENT ON COLUMN resolution_approvals.comment IS 'Комментарий к шагу.';
+COMMENT ON COLUMN resolution_approvals.email_id IS 'ID письма, если шаг связан с почтой.';
+COMMENT ON COLUMN resolution_approvals.created_at IS 'Время шага.';
+
+COMMENT ON TABLE notifications IS 'Уведомления центра уведомлений.';
+COMMENT ON COLUMN notifications.id IS 'Идентификатор уведомления.';
+COMMENT ON COLUMN notifications.user_id IS 'Получатель уведомления.';
+COMMENT ON COLUMN notifications.kind IS 'Вид уведомления.';
+COMMENT ON COLUMN notifications.entity_type IS 'Тип объекта уведомления.';
+COMMENT ON COLUMN notifications.entity_id IS 'Идентификатор объекта уведомления.';
+COMMENT ON COLUMN notifications.title IS 'Заголовок уведомления.';
+COMMENT ON COLUMN notifications.body IS 'Текст уведомления.';
+COMMENT ON COLUMN notifications.severity IS 'Важность: info, warning, danger.';
+COMMENT ON COLUMN notifications.dedupe_key IS 'Ключ идемпотентности уведомления.';
+COMMENT ON COLUMN notifications.created_at IS 'Когда уведомление создано.';
+COMMENT ON COLUMN notifications.read_at IS 'Когда уведомление прочитано; NULL — непрочитано.';
+
+COMMENT ON TABLE notification_templates IS 'Шаблоны текстов уведомлений.';
+COMMENT ON COLUMN notification_templates.key IS 'Вид уведомления.';
+COMMENT ON COLUMN notification_templates.title IS 'Шаблон заголовка.';
+COMMENT ON COLUMN notification_templates.body IS 'Шаблон текста.';
+COMMENT ON COLUMN notification_templates.is_active IS 'Включён ли вид уведомления.';
+COMMENT ON COLUMN notification_templates.updated_at IS 'Когда шаблон изменён.';
+
+COMMENT ON TABLE mail_sort_rules IS 'Правила сортировки почты; только подсказки, не регистрация.';
+COMMENT ON COLUMN mail_sort_rules.id IS 'Идентификатор правила.';
+COMMENT ON COLUMN mail_sort_rules.name IS 'Название правила.';
+COMMENT ON COLUMN mail_sort_rules.is_active IS 'Включено ли правило.';
+COMMENT ON COLUMN mail_sort_rules.sort_order IS 'Порядок применения.';
+COMMENT ON COLUMN mail_sort_rules.match_from IS 'Условие по отправителю.';
+COMMENT ON COLUMN mail_sort_rules.match_to IS 'Условие по получателю.';
+COMMENT ON COLUMN mail_sort_rules.match_subject IS 'Условие по теме.';
+COMMENT ON COLUMN mail_sort_rules.label IS 'Метка, которую ставит правило.';
+COMMENT ON COLUMN mail_sort_rules.priority IS 'Подсказка приоритета.';
+COMMENT ON COLUMN mail_sort_rules.note IS 'Подсказка аппарату.';
+COMMENT ON COLUMN mail_sort_rules.created_by IS 'Кто создал правило.';
+COMMENT ON COLUMN mail_sort_rules.created_at IS 'Когда правило создано.';
+COMMENT ON COLUMN mail_sort_rules.updated_at IS 'Когда правило изменено.';
+
+COMMENT ON TABLE user_activity_stats IS 'Агрегат активности пользователей для будущих подсказок.';
+COMMENT ON COLUMN user_activity_stats.user_id IS 'Пользователь.';
+COMMENT ON COLUMN user_activity_stats.documents_registered IS 'Сколько документов зарегистрировал.';
+COMMENT ON COLUMN user_activity_stats.tasks_assigned IS 'Сколько задач назначено.';
+COMMENT ON COLUMN user_activity_stats.tasks_reported IS 'Сколько отчётов сдано.';
+COMMENT ON COLUMN user_activity_stats.tasks_open IS 'Сколько задач открыто.';
+COMMENT ON COLUMN user_activity_stats.tasks_overdue IS 'Сколько задач просрочено.';
+COMMENT ON COLUMN user_activity_stats.resolutions_prepared IS 'Сколько резолюций подготовил.';
+COMMENT ON COLUMN user_activity_stats.resolutions_approved IS 'Сколько резолюций утвердил.';
+COMMENT ON COLUMN user_activity_stats.resolutions_dispatched IS 'Сколько резолюций передал исполнителям.';
+COMMENT ON COLUMN user_activity_stats.avg_execution_days IS 'Среднее время исполнения.';
+COMMENT ON COLUMN user_activity_stats.correspondence_orgs IS 'Топ организаций-корреспондентов.';
+COMMENT ON COLUMN user_activity_stats.top_tags IS 'Топ тегов.';
+COMMENT ON COLUMN user_activity_stats.top_categories IS 'Топ категорий.';
+COMMENT ON COLUMN user_activity_stats.request_departments IS 'Топ подразделений-заявителей.';
+COMMENT ON COLUMN user_activity_stats.authors IS 'Топ авторов.';
+COMMENT ON COLUMN user_activity_stats.raw_fingerprint IS 'Хэш исходных данных для пропуска пересчёта.';
+COMMENT ON COLUMN user_activity_stats.computed_at IS 'Когда агрегат посчитан.';
+
+COMMENT ON TABLE user_activity_stats_monthly IS 'Месячная разбивка агрегата активности.';
+COMMENT ON COLUMN user_activity_stats_monthly.user_id IS 'Пользователь.';
+COMMENT ON COLUMN user_activity_stats_monthly.period IS 'Месяц в формате ГГГГ-ММ.';
+COMMENT ON COLUMN user_activity_stats_monthly.documents_registered IS 'Документов за месяц.';
+COMMENT ON COLUMN user_activity_stats_monthly.tasks_assigned IS 'Задач за месяц.';
+COMMENT ON COLUMN user_activity_stats_monthly.tasks_reported IS 'Отчётов за месяц.';
+COMMENT ON COLUMN user_activity_stats_monthly.correspondence_orgs IS 'Топ организаций за месяц.';
+COMMENT ON COLUMN user_activity_stats_monthly.top_tags IS 'Топ тегов за месяц.';
+COMMENT ON COLUMN user_activity_stats_monthly.top_categories IS 'Топ категорий за месяц.';
+COMMENT ON COLUMN user_activity_stats_monthly.computed_at IS 'Когда агрегат посчитан.';
+
+COMMENT ON TABLE docflow_migrations IS 'Применённые миграции схемы документооборота.';
+COMMENT ON COLUMN docflow_migrations.version IS 'Номер миграции.';
+COMMENT ON COLUMN docflow_migrations.name IS 'Имя миграции.';
+COMMENT ON COLUMN docflow_migrations.applied_at IS 'Когда миграция применена.';
+`
+  },
+  {
+    // Пользовательские ссылки тоже оформляем внешними ключами. ON DELETE SET NULL
+    // сохраняет документы и историю, но не оставляет «висячих» идентификаторов.
+    version: 15,
+    name: "user_references_fk",
+    sql: `
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT * FROM (VALUES
+      ('users', 'manager_id'),
+      ('documents', 'created_by'),
+      ('document_emails', 'linked_by'),
+      ('resolutions', 'prepared_by'),
+      ('resolutions', 'approved_by'),
+      ('resolutions', 'confirmed_by'),
+      ('resolutions', 'dispatched_by'),
+      ('resolution_approvals', 'actor_id'),
+      ('number_archives', 'created_by'),
+      ('mail_sort_rules', 'created_by')
+    ) AS v(tbl, col)
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = r.tbl || '_' || r.col || '_fkey'
+    ) THEN
+      EXECUTE format(
+        'ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES users(id) ON DELETE SET NULL',
+        r.tbl, r.tbl || '_' || r.col || '_fkey', r.col
+      );
+    END IF;
+  END LOOP;
+END $$;
+`
   }
 ];
 
