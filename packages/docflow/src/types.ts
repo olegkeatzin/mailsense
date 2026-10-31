@@ -282,6 +282,8 @@ export interface CorrespondentRecord {
   shortName: string;
   inn: string;
   isActive: boolean;
+  /** Почтовые адреса, закреплённые за корреспондентом. */
+  emails: string[];
 }
 
 /** Найденный дубль при регистрации: письмо уже зарегистрировано или похожий документ. */

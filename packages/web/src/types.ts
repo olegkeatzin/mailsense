@@ -590,6 +590,7 @@ export interface IncomingItem {
 export interface RegisterSuggest {
   emailId: string;
   sender: string;
+  senderEmail?: string | null;
   summary: string;
   docNumber: string;
   docDate: string;
@@ -631,6 +632,16 @@ export interface CaseRecord {
   title: string;
   isActive: boolean;
   sortOrder: number;
+}
+
+export interface CorrespondentRecord {
+  id: string;
+  name: string;
+  shortName: string;
+  inn: string;
+  isActive: boolean;
+  /** Закреплённые почтовые адреса. */
+  emails: string[];
 }
 
 // ---------------- Этап 5: уведомления и правила сортировки ----------------

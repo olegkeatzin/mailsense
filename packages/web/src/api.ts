@@ -9,6 +9,7 @@ import type {
   CaseRecord,
   ComposeInput,
   ComposeTemplate,
+  CorrespondentRecord,
   DocumentCard,
   DocumentPage,
   DocumentRecord,
@@ -518,6 +519,12 @@ export const api = {
       attachments: number;
     };
   },
+
+  correspondents: (onlyActive = false) =>
+    request<CorrespondentRecord[]>("/api/docflow/correspondents" + (onlyActive ? "?active=1" : "")),
+  saveCorrespondent: (
+    c: Partial<CorrespondentRecord> & { name: string }
+  ) => request<CorrespondentRecord>("/api/docflow/correspondents", { method: "POST", body: JSON.stringify(c) }),
 
   cases: (onlyActive = false) =>
     request<CaseRecord[]>("/api/docflow/cases" + (onlyActive ? "?active=1" : "")),

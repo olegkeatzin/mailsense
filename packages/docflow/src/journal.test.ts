@@ -407,15 +407,26 @@ describe("прослеживаемость: кто и что сделал", () =
   });
 
   test("корреспондент создаётся и связывается с документом по отправителю", async () => {
-    const first = await registerDocument({ summary: "Первый", sender: "АО «Тест-Корр»" }, secretary);
+    const first = await registerDocument(
+      { summary: "Первый", sender: "АО «Тест-Корр»", senderEmail: "Info@Test-Corr.ru" },
+      secretary
+    );
     expect(first.correspondentId).toBeTruthy();
 
     const rows = await getDocflowPool().query<{ id: string; name: string }>(
       "SELECT id, name FROM correspondents"
     );
     expect(rows.rows).toEqual([{ id: first.correspondentId, name: "АО «Тест-Корр»" }]);
+    const mapped = await getDocflowPool().query<{ email: string }>(
+      "SELECT email FROM correspondent_emails WHERE correspondent_id = $1",
+      [first.correspondentId]
+    );
+    expect(mapped.rows).toEqual([{ email: "info@test-corr.ru" }]);
 
-    const second = await registerDocument({ summary: "Второй", sender: "АО «Тест-Корр»" }, secretary);
+    const second = await registerDocument(
+      { summary: "Второй", sender: "Другое имя", senderEmail: "info@test-corr.ru" },
+      secretary
+    );
     expect(second.correspondentId).toBe(first.correspondentId);
     expect(await getDocflowPool().query("SELECT 1 FROM correspondents")).toMatchObject({ rowCount: 1 });
   });

@@ -20,7 +20,7 @@ export function settingsTabKeys(can: (permission: Permission) => boolean, canUse
     ...(can("users.manage") ? ["users", "roles", "docflow"] : []),
     ...(can("journal.view") || can("settings.manage") ? ["numbering"] : []),
     ...(can("audit.view") ? ["audit"] : []),
-    ...(can("settings.manage") ? ["service", "sorting", "notifications", "ai"] : []),
+    ...(can("settings.manage") ? ["service", "correspondents", "sorting", "notifications", "ai"] : []),
     "templates",
     "ldap"
   ];

@@ -848,10 +848,43 @@ COMMENT ON COLUMN docflow_migrations.applied_at IS 'Когда миграция 
 `
   },
   {
-    // Пользовательские ссылки тоже оформляем внешними ключами. ON DELETE SET NULL
-    // сохраняет документы и историю, но не оставляет «висячих» идентификаторов.
+    // Номер оставлен для баз, где эта миграция успела примениться в промежуточной
+    // сборке. Внешние ключи на авторов/историю здесь сознательно не ставим: акторы
+    // и старые записи должны переживать удаление пользователя, а тестовые стенды
+    // создают документы от служебных идентификаторов без строки в users.
     version: 15,
     name: "user_references_fk",
+    sql: `-- No-op: см. version 17, где оставшиеся ключи снимаются.`
+  },
+  {
+    // Ящики, закреплённые за корреспондентом: письмо с такого адреса
+    // автоматически относится к этой организации/лицу.
+    version: 16,
+    name: "correspondent_emails",
+    sql: `
+CREATE TABLE IF NOT EXISTS correspondent_emails (
+  email TEXT PRIMARY KEY,
+  correspondent_id TEXT NOT NULL REFERENCES correspondents(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  created_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS correspondent_emails_correspondent_idx
+  ON correspondent_emails(correspondent_id);
+
+COMMENT ON TABLE correspondent_emails IS 'Почтовые ящики, закреплённые за корреспондентами.';
+COMMENT ON COLUMN correspondent_emails.email IS 'Адрес в нижнем регистре; уникален среди всех корреспондентов.';
+COMMENT ON COLUMN correspondent_emails.correspondent_id IS 'Корреспондент, за которым закреплён ящик.';
+COMMENT ON COLUMN correspondent_emails.created_at IS 'Когда ящик закреплён.';
+COMMENT ON COLUMN correspondent_emails.created_by IS 'Кто закрепил ящик.';
+`
+  },
+  {
+    // Убираем внешние ключи на пользовательские ссылки, если они успели появиться
+    // в промежуточной сборке. Это авторы/история: их идентификаторы должны
+    // сохраняться даже при удалении пользователя.
+    version: 17,
+    name: "drop_user_reference_fks",
     sql: `
 DO $$
 DECLARE r record;
@@ -867,18 +900,14 @@ BEGIN
       ('resolutions', 'dispatched_by'),
       ('resolution_approvals', 'actor_id'),
       ('number_archives', 'created_by'),
-      ('mail_sort_rules', 'created_by')
+      ('mail_sort_rules', 'created_by'),
+      ('correspondent_emails', 'created_by')
     ) AS v(tbl, col)
   LOOP
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_constraint
-      WHERE conname = r.tbl || '_' || r.col || '_fkey'
-    ) THEN
-      EXECUTE format(
-        'ALTER TABLE %I ADD CONSTRAINT %I FOREIGN KEY (%I) REFERENCES users(id) ON DELETE SET NULL',
-        r.tbl, r.tbl || '_' || r.col || '_fkey', r.col
-      );
-    END IF;
+    EXECUTE format(
+      'ALTER TABLE %I DROP CONSTRAINT IF EXISTS %I',
+      r.tbl, r.tbl || '_' || r.col || '_fkey'
+    );
   END LOOP;
 END $$;
 `

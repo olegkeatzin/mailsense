@@ -36,6 +36,7 @@ import { ServiceAccountAdmin } from "./ServiceAccountAdmin";
 import { MailProfileTab } from "./MailProfileTab";
 import { ServerAddressCard } from "./ServerAddressCard";
 import { NotificationsTab } from "./sorting/NotificationsTab";
+import { CorrespondentsTab } from "./CorrespondentsTab";
 import { RolesEditor } from "./RolesEditor";
 import { settingsTabKeys } from "../settingsTabs";
 import type { Account, AccountInput, AiConfig, DirectoryStatus, LdapSettings, MailDefaults, MailServerDefaults, Template } from "../types";
@@ -1245,6 +1246,7 @@ export default function SettingsModal() {
     { key: "audit", label: "Аудит", children: <AuditTab /> },
     // Служебные ящики: администратор выбирает внутренний и внешний ящики предприятия.
     { key: "service", label: "Служебные ящики", children: <ServiceAccountAdmin key={reloadKey} /> },
+    { key: "correspondents", label: "Корреспонденты", children: <CorrespondentsTab /> },
     // Этап 5: правила сортировки и настройки уведомлений — обе под settings.manage.
     { key: "sorting", label: "Правила сортировки", children: <SortingRulesTab key={reloadKey} /> },
     { key: "notifications", label: "Уведомления", children: <NotificationsTab key={reloadKey} /> },
@@ -1263,7 +1265,7 @@ export default function SettingsModal() {
     { group: "Предприятие", keys: ["general"] },
     { group: "Почта", keys: ["mail", "profile", "connection"] },
     { group: "Документооборот", keys: ["users", "roles", "docflow", "numbering", "audit"] },
-    { group: "Правила предприятия", keys: ["service", "sorting", "notifications", "templates"] },
+    { group: "Правила предприятия", keys: ["service", "correspondents", "sorting", "notifications", "templates"] },
     { group: "Служба", keys: ["ldap", "ai"] }
   ];
   const knownKeys = new Set(SETTINGS_CATEGORIES.flatMap((c) => c.keys));

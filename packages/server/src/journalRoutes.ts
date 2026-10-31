@@ -523,7 +523,8 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
             name: String(b.name),
             shortName: b.shortName ? String(b.shortName) : "",
             inn: b.inn ? String(b.inn) : "",
-            isActive: b.isActive !== false
+            isActive: b.isActive !== false,
+            emails: Array.isArray(b.emails) ? b.emails.map(String) : undefined
           },
           actorOf(req)
         )
@@ -659,6 +660,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       res.json({
         emailId,
         sender: mail.from ? mail.from.name || mail.from.address : "",
+        senderEmail: mail.from?.address ?? null,
         summary: mail.analysis?.summary || mail.subject || "",
         docNumber: mail.externalNumber ?? "",
         docDate: mail.sendDate ?? "",
@@ -722,8 +724,11 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
     ...register,
     asyncHandler(async (req, res) => {
       const b = req.body ?? {};
+      // Адрес отправителя письма: по нему ищем закреплённого корреспондента.
+      const sourceEmail = b.emailId ? getEmailView(String(b.emailId)) : null;
       const doc = await registerDocument(
         {
+          senderEmail: sourceEmail?.from?.address ?? null,
           docNumber: b.docNumber !== undefined ? String(b.docNumber) : undefined,
           docDate: b.docDate ? String(b.docDate) : null,
           sender: b.sender !== undefined ? String(b.sender) : undefined,

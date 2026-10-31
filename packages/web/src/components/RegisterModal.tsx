@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Select, Space, Spin, message } from "antd";
+import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Select, Space, Spin, message } from "antd";
 import dayjs from "dayjs";
 import { api } from "../api";
-import type { CaseRecord, DuplicateMatch, RegisterSuggest } from "../types";
+import type { CaseRecord, CorrespondentRecord, DuplicateMatch, RegisterSuggest } from "../types";
 import { humanError } from "../utils/humanError";
 
 /**
@@ -63,6 +63,10 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
   const [suggest, setSuggest] = useState<RegisterSuggest | null>(null);
   const [dups, setDups] = useState<DuplicateMatch[]>([]);
   const [cases, setCases] = useState<CaseRecord[]>([]);
+  const [correspondents, setCorrespondents] = useState<CorrespondentRecord[]>([]);
+  const [corrOpen, setCorrOpen] = useState(false);
+  const [corrSaving, setCorrSaving] = useState(false);
+  const [corrForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   /** Номер, который присвоит база. Подсказка: настоящий выдаётся при регистрации. */
@@ -90,16 +94,24 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
     Promise.all([
       api.journalSuggest(emailId),
       api.cases(true).catch(() => []),
-      api.nextRegNumber().catch(() => null)
+      api.nextRegNumber().catch(() => null),
+      // Старые тесты/клиенты могут не знать маршрут справочника.
+      (typeof api.correspondents === "function" ? api.correspondents(true) : Promise.resolve([])).catch(() => [])
     ])
-      .then(([s, c, n]) => {
+      .then(([s, c, n, corr]) => {
         setSuggest(s);
         setCases(c);
         setNextNumber(n?.regNumber ?? null);
+        setCorrespondents(corr);
+        const senderEmail = (s.senderEmail ?? "").toLowerCase();
+        const mapped = senderEmail
+          ? corr.find((x) => x.emails.some((e) => e.toLowerCase() === senderEmail))
+          : undefined;
         form.setFieldsValue({
           docNumber: s.docNumber,
           docDate: s.docDate ? dayjs(s.docDate) : null,
-          sender: s.sender,
+          sender: mapped?.name ?? s.sender,
+          correspondentId: mapped?.id ?? undefined,
           summary: s.summary,
           sheetsCount: s.sheetsCount,
           documentName: s.documentName
@@ -109,6 +121,40 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
       .catch((err) => message.error("Не удалось получить данные письма: " + humanError(err)))
       .finally(() => setLoading(false));
   }, [emailId, form, checkDuplicates]);
+
+  function openCreateCorrespondent() {
+    corrForm.setFieldsValue({
+      name: form.getFieldValue("sender") || "",
+      shortName: "",
+      inn: "",
+      emails: suggest?.senderEmail ? [suggest.senderEmail] : []
+    });
+    setCorrOpen(true);
+  }
+
+  async function createCorrespondent() {
+    const values = await corrForm.validateFields();
+    setCorrSaving(true);
+    try {
+      const saved = await api.saveCorrespondent({
+        name: String(values.name ?? "").trim(),
+        shortName: values.shortName ?? "",
+        inn: values.inn ?? "",
+        isActive: true,
+        emails: Array.isArray(values.emails) ? values.emails : []
+      });
+      setCorrespondents((prev) =>
+        [...prev.filter((c) => c.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name, "ru"))
+      );
+      form.setFieldsValue({ correspondentId: saved.id, sender: saved.name });
+      setCorrOpen(false);
+      corrForm.resetFields();
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setCorrSaving(false);
+    }
+  }
 
   const submit = async () => {
     const values = await form.validateFields();
@@ -123,6 +169,7 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
         summary: values.summary ?? "",
         sheetsCount: values.sheetsCount ?? null,
         caseNumber: values.caseNumber || null,
+        correspondentId: values.correspondentId || null,
         documentName: values.documentName ?? ""
       });
       message.success("Документ зарегистрирован: " + doc.regNumber);
@@ -202,6 +249,23 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
               <Input placeholder="организация-отправитель" />
             </Form.Item>
 
+            <Form.Item label="Корреспондент" name="correspondentId">
+              <Space.Compact style={{ width: "100%" }}>
+                <Select
+                  allowClear
+                  showSearch
+                  optionFilterProp="label"
+                  placeholder="выберите или создайте по отправителю"
+                  style={{ flex: 1 }}
+                  options={correspondents.map((c) => ({
+                    value: c.id,
+                    label: c.name + (c.emails.length ? " · " + c.emails.join(", ") : "")
+                  }))}
+                />
+                <Button onClick={openCreateCorrespondent}>Создать</Button>
+              </Space.Compact>
+            </Form.Item>
+
             <Form.Item label="Краткое содержание" name="summary">
               <Input.TextArea
                 autoSize={{ minRows: 2, maxRows: 5 }}
@@ -222,6 +286,34 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
               </Form.Item>
             </Space>
           </Form>
+
+          <Modal
+            open={corrOpen}
+            title="Новый корреспондент"
+            okText="Создать"
+            confirmLoading={corrSaving}
+            onCancel={() => setCorrOpen(false)}
+            onOk={() => void createCorrespondent()}
+          >
+            <Form form={corrForm} layout="vertical" size="small">
+              <Form.Item label="Наименование" name="name" rules={[{ required: true, message: "Укажите наименование" }]}>
+                <Input placeholder="АО «Рога и копыта»" />
+              </Form.Item>
+              <Form.Item label="Краткое наименование" name="shortName">
+                <Input placeholder="Рога и копыта" />
+              </Form.Item>
+              <Form.Item label="ИНН" name="inn">
+                <Input />
+              </Form.Item>
+              <Form.Item
+                label="Почтовые ящики"
+                name="emails"
+                extra="Письма с этих адресов будут автоматически считаться письмами корреспондента."
+              >
+                <Select mode="tags" tokenSeparators={[",", ";", " "]} placeholder="info@example.ru" />
+              </Form.Item>
+            </Form>
+          </Modal>
         </Space>
       )}
     </RegisterShell>

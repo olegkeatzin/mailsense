@@ -282,6 +282,16 @@ export const correspondents = pgTable(
   (t) => ({ nameIdx: index("correspondents_name_idx").on(t.name) })
 );
 
+/** Почтовые ящики, закреплённые за корреспондентом: письма с них считаются его письмами. */
+export const correspondentEmails = pgTable("correspondent_emails", {
+  email: text("email").primaryKey(),
+  correspondentId: text("correspondent_id")
+    .notNull()
+    .references(() => correspondents.id, { onDelete: "cascade" }),
+  createdAt: text("created_at").notNull(),
+  createdBy: text("created_by")
+});
+
 export const deadlinePresets = pgTable("deadline_presets", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
@@ -518,6 +528,7 @@ export const docflowSchema = {
   numberArchives,
   caseNomenclature,
   correspondents,
+  correspondentEmails,
   deadlinePresets,
   resolutionTemplates,
   resolutions,
@@ -539,6 +550,7 @@ export type DbDocument = typeof documents.$inferSelect;
 export type DbDocumentEmail = typeof documentEmails.$inferSelect;
 export type DbCaseNomenclature = typeof caseNomenclature.$inferSelect;
 export type DbCorrespondent = typeof correspondents.$inferSelect;
+export type DbCorrespondentEmail = typeof correspondentEmails.$inferSelect;
 export type DbResolution = typeof resolutions.$inferSelect;
 export type DbResolutionAssignee = typeof resolutionAssignees.$inferSelect;
 export type DbResolutionApproval = typeof resolutionApprovals.$inferSelect;

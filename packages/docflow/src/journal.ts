@@ -8,7 +8,7 @@
 import { companyDayIso } from "./companyDay.js";
 import { randomUUID } from "node:crypto";
 import type { PoolClient } from "pg";
-import { and, asc, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { getDocflowDb, getDocflowPool } from "./db/index.js";
 import { docflowSchema } from "./db/schema.js";
 import { writeAudit } from "./audit.js";
@@ -40,7 +40,17 @@ import type {
   NumberingState
 } from "./types.js";
 
-const { documents, documentEmails, numberRules, numberArchives, caseNomenclature, correspondents, users, auditLog } = docflowSchema;
+const {
+  documents,
+  documentEmails,
+  numberRules,
+  numberArchives,
+  caseNomenclature,
+  correspondents,
+  correspondentEmails,
+  users,
+  auditLog
+} = docflowSchema;
 
 /** count(*) в PostgreSQL приходит как bigint (строкой) — приводим к int в запросе. */
 const countExpr = sql.raw("count(*)::int");
@@ -312,6 +322,8 @@ async function lockCounterRow(client: PoolClient, stream: string, period: string
 export interface RegisterInput extends DocumentInput {
   /** Дата регистрации; по умолчанию — сегодня. */
   regDate?: string;
+  /** Адрес отправителя письма: по нему ищем закреплённого корреспондента. */
+  senderEmail?: string | null;
 }
 
 /**
@@ -380,9 +392,19 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
       }
     }
 
-    // Корреспондент: явно выбранный или автоматически по отправителю.
-    // Раньше correspondent_id оставался NULL и не был связан со справочником.
+    // Корреспондент: явно выбранный, по закреплённому ящику или автоматически
+    // по отправителю. Раньше correspondent_id оставался NULL без связи со справочником.
     let correspondentId = input.correspondentId ?? null;
+    const senderEmail = (input.senderEmail ?? "").trim().toLowerCase();
+    if (!correspondentId && senderEmail) {
+      const mapped = await client.query<{ id: string }>(
+        "SELECT ce.correspondent_id AS id FROM correspondent_emails ce " +
+          "JOIN correspondents c ON c.id = ce.correspondent_id " +
+          "WHERE lower(ce.email) = lower($1) AND c.is_active = TRUE ORDER BY ce.created_at LIMIT 1",
+        [senderEmail]
+      );
+      if (mapped.rows[0]) correspondentId = mapped.rows[0].id;
+    }
     if (!correspondentId && (input.sender ?? "").trim()) {
       const sender = String(input.sender).trim();
       const found = await client.query<{ id: string }>(
@@ -405,9 +427,17 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
           action: "journal.correspondent.create",
           entityType: "correspondent",
           entityId: correspondentId,
-          newValue: { name: sender }
+          newValue: { name: sender, email: senderEmail || null }
         });
       }
+    }
+    // Регистрация закрепляет адрес отправителя за выбранным/созданным корреспондентом.
+    if (correspondentId && senderEmail) {
+      await client.query(
+        "INSERT INTO correspondent_emails (email, correspondent_id, created_at, created_by) " +
+          "VALUES ($1,$2,$3,$4) ON CONFLICT (email) DO NOTHING",
+        [senderEmail, correspondentId, now(), actor.id]
+      );
     }
 
     const num = await takeNextNumber(client, "incoming", period);
@@ -1002,60 +1032,108 @@ export async function saveCase(
   return { id, code: values.code, title: values.title, isActive: values.isActive, sortOrder: values.sortOrder };
 }
 
+function normalizeCorrespondentEmail(value: string): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function uniqueEmails(list: string[] | undefined): string[] {
+  return [...new Set((list ?? []).map(normalizeCorrespondentEmail).filter(Boolean))];
+}
+
 export async function listCorrespondents(onlyActive = false): Promise<CorrespondentRecord[]> {
   const db = getDocflowDb();
   const rows = onlyActive
     ? await db.select().from(correspondents).where(eq(correspondents.isActive, true))
     : await db.select().from(correspondents);
+  const ids = rows.map((r) => r.id);
+  const mappings = ids.length
+    ? await db.select().from(correspondentEmails).where(inArray(correspondentEmails.correspondentId, ids))
+    : [];
+  const emails = new Map<string, string[]>();
+  for (const m of mappings) {
+    const list = emails.get(m.correspondentId) ?? [];
+    list.push(m.email);
+    emails.set(m.correspondentId, list);
+  }
   return rows
-    .map((r) => ({ id: r.id, name: r.name, shortName: r.shortName, inn: r.inn, isActive: r.isActive }))
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      shortName: r.shortName,
+      inn: r.inn,
+      isActive: r.isActive,
+      emails: (emails.get(r.id) ?? []).sort((a, b) => a.localeCompare(b, "ru"))
+    }))
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
 }
 
-/** Находит или создаёт корреспондента по имени (вызывается при регистрации). */
-export async function ensureCorrespondent(name: string, actor: Actor): Promise<CorrespondentRecord | null> {
+/** Находит или создаёт корреспондента по имени и закрепляет за ним почтовый адрес. */
+export async function ensureCorrespondent(
+  name: string,
+  actor: Actor,
+  email?: string | null
+): Promise<CorrespondentRecord | null> {
   const trimmed = (name ?? "").trim();
   if (!trimmed) return null;
+  const normalizedEmail = normalizeCorrespondentEmail(email ?? "");
   const db = getDocflowDb();
-  const found = await db.select().from(correspondents).where(ilike(correspondents.name, trimmed)).limit(1);
-  if (found[0]) {
-    return {
-      id: found[0].id,
-      name: found[0].name,
-      shortName: found[0].shortName,
-      inn: found[0].inn,
-      isActive: found[0].isActive
-    };
-  }
+  // Сравнение именно по значению: ILIKE с % и _ в названии работал бы как шаблон.
+  const found = await db
+    .select()
+    .from(correspondents)
+    .where(sql`lower(${correspondents.name}) = lower(${trimmed})`)
+    .limit(1);
+  let id = found[0]?.id ?? "";
   const ts = now();
-  const id = randomUUID();
-  // Корреспондент создаётся вместе со следом: справочник не должен пополняться молча.
   await db.transaction(async (tx) => {
-    await tx
-      .insert(correspondents)
-      .values({ id, name: trimmed, shortName: "", inn: "", isActive: true, createdAt: ts, updatedAt: ts });
-    await insertAudit(
-      {
-        userId: actor.id,
-        userName: actor.name,
-        action: "journal.correspondent.create",
-        entityType: "correspondent",
-        entityId: id,
-        newValue: { name: trimmed }
-      },
-      tx
-    );
+    if (!id) {
+      id = randomUUID();
+      await tx
+        .insert(correspondents)
+        .values({ id, name: trimmed, shortName: "", inn: "", isActive: true, createdAt: ts, updatedAt: ts });
+      await insertAudit(
+        {
+          userId: actor.id,
+          userName: actor.name,
+          action: "journal.correspondent.create",
+          entityType: "correspondent",
+          entityId: id,
+          newValue: { name: trimmed, email: normalizedEmail || null }
+        },
+        tx
+      );
+    }
+    if (normalizedEmail) {
+      // Если адрес уже закреплён за другим корреспондентом, не перетираем его молча.
+      await tx
+        .insert(correspondentEmails)
+        .values({ email: normalizedEmail, correspondentId: id, createdAt: ts, createdBy: actor.id })
+        .onConflictDoNothing();
+    }
   });
-  return { id, name: trimmed, shortName: "", inn: "", isActive: true };
+  const emails = normalizedEmail
+    ? (await db.select().from(correspondentEmails).where(eq(correspondentEmails.correspondentId, id))).map((m) => m.email)
+    : [];
+  const row = (await db.select().from(correspondents).where(eq(correspondents.id, id)).limit(1))[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    name: row.name,
+    shortName: row.shortName,
+    inn: row.inn,
+    isActive: row.isActive,
+    emails
+  };
 }
 
 export async function saveCorrespondent(
-  input: { id?: string; name: string; shortName?: string; inn?: string; isActive?: boolean },
+  input: { id?: string; name: string; shortName?: string; inn?: string; isActive?: boolean; emails?: string[] },
   actor: Actor
 ): Promise<CorrespondentRecord> {
   const db = getDocflowDb();
   const ts = now();
   const id = input.id ?? randomUUID();
+  const emails = input.emails === undefined ? undefined : uniqueEmails(input.emails);
   const values = {
     id,
     name: input.name,
@@ -1065,7 +1143,7 @@ export async function saveCorrespondent(
     createdAt: ts,
     updatedAt: ts
   };
-  // Правка справочника и след — одна транзакция.
+  // Правка справочника, закрепление адресов и след — одна транзакция.
   await db.transaction(async (tx) => {
     await tx
       .insert(correspondents)
@@ -1080,6 +1158,18 @@ export async function saveCorrespondent(
           updatedAt: ts
         }
       });
+    if (emails !== undefined) {
+      await tx.delete(correspondentEmails).where(eq(correspondentEmails.correspondentId, id));
+      for (const email of emails) {
+        await tx
+          .insert(correspondentEmails)
+          .values({ email, correspondentId: id, createdAt: ts, createdBy: actor.id })
+          .onConflictDoUpdate({
+            target: correspondentEmails.email,
+            set: { correspondentId: id }
+          });
+      }
+    }
     await insertAudit(
       {
         userId: actor.id,
@@ -1087,12 +1177,19 @@ export async function saveCorrespondent(
         action: "journal.correspondent.save",
         entityType: "correspondent",
         entityId: id,
-        newValue: values
+        newValue: { ...values, emails: emails ?? null }
       },
       tx
     );
   });
-  return { id, name: values.name, shortName: values.shortName, inn: values.inn, isActive: values.isActive };
+  return {
+    id,
+    name: values.name,
+    shortName: values.shortName,
+    inn: values.inn,
+    isActive: values.isActive,
+    emails: emails ?? []
+  };
 }
 
 /** Сколько документов в каждом статусе — для сводки над журналом. */

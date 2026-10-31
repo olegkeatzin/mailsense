@@ -28,7 +28,7 @@ describe("какие вкладки настроек видит роль", () =>
     const keys = settingsTabKeys(can(["settings.manage"]), true);
 
     expect(keys).toEqual(
-      expect.arrayContaining(["numbering", "service", "sorting", "notifications", "ai"])
+      expect.arrayContaining(["numbering", "service", "correspondents", "sorting", "notifications", "ai"])
     );
   });
 
