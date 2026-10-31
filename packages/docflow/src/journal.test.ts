@@ -406,6 +406,20 @@ describe("прослеживаемость: кто и что сделал", () =
     expect(entries[0].createdAt).toBeTruthy();
   });
 
+  test("корреспондент создаётся и связывается с документом по отправителю", async () => {
+    const first = await registerDocument({ summary: "Первый", sender: "АО «Тест-Корр»" }, secretary);
+    expect(first.correspondentId).toBeTruthy();
+
+    const rows = await getDocflowPool().query<{ id: string; name: string }>(
+      "SELECT id, name FROM correspondents"
+    );
+    expect(rows.rows).toEqual([{ id: first.correspondentId, name: "АО «Тест-Корр»" }]);
+
+    const second = await registerDocument({ summary: "Второй", sender: "АО «Тест-Корр»" }, secretary);
+    expect(second.correspondentId).toBe(first.correspondentId);
+    expect(await getDocflowPool().query("SELECT 1 FROM correspondents")).toMatchObject({ rowCount: 1 });
+  });
+
   test("в журнале видно, кто зарегистрировал документ", async () => {
     // ФИО автора подставляется в список — чтобы не открывать аудит ради этого.
     const db = getDocflowPool();

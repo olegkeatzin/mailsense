@@ -380,6 +380,36 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
       }
     }
 
+    // Корреспондент: явно выбранный или автоматически по отправителю.
+    // Раньше correspondent_id оставался NULL и не был связан со справочником.
+    let correspondentId = input.correspondentId ?? null;
+    if (!correspondentId && (input.sender ?? "").trim()) {
+      const sender = String(input.sender).trim();
+      const found = await client.query<{ id: string }>(
+        "SELECT id FROM correspondents WHERE lower(name) = lower($1) LIMIT 1",
+        [sender]
+      );
+      if (found.rows[0]) {
+        correspondentId = found.rows[0].id;
+      } else {
+        correspondentId = randomUUID();
+        const tsCorr = now();
+        await client.query(
+          "INSERT INTO correspondents (id, name, short_name, inn, is_active, created_at, updated_at) " +
+            "VALUES ($1,$2,'','',TRUE,$3,$3)",
+          [correspondentId, sender, tsCorr]
+        );
+        await auditInTx(client, {
+          userId: actor.id,
+          userName: actor.name,
+          action: "journal.correspondent.create",
+          entityType: "correspondent",
+          entityId: correspondentId,
+          newValue: { name: sender }
+        });
+      }
+    }
+
     const num = await takeNextNumber(client, "incoming", period);
     const regNumber = renderNumber(rule, period, num);
     const id = randomUUID();
@@ -405,7 +435,7 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
         input.documentName ?? "",
         "new",
         input.emailId ?? null,
-        input.correspondentId ?? null,
+        correspondentId,
         actor.id,
         ts
       ]

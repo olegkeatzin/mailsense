@@ -537,6 +537,47 @@ ALTER TABLE documents ADD COLUMN IF NOT EXISTS doc_files_path TEXT;`
     sql: `UPDATE notification_templates
 SET body = 'Поручение закрыто: {text}. Закрыл: {author}'
 WHERE key = 'resolution.closed';`
+  },
+  {
+    // correspondent_id был просто текстовым полем без связи со справочником.
+    // Заполняем его по отправителю и добавляем настоящий внешний ключ.
+    version: 13,
+    name: "documents_correspondent_fk",
+    sql: `
+INSERT INTO correspondents (id, name, short_name, inn, is_active, created_at, updated_at)
+SELECT gen_random_uuid(), d.sender, '', '', TRUE, now(), now()
+FROM documents d
+WHERE d.correspondent_id IS NULL
+  AND btrim(d.sender) <> ''
+  AND NOT EXISTS (
+    SELECT 1 FROM correspondents c WHERE lower(c.name) = lower(d.sender)
+  )
+GROUP BY d.sender;
+
+UPDATE documents d
+SET correspondent_id = c.id
+FROM correspondents c
+WHERE d.correspondent_id IS NULL
+  AND btrim(d.sender) <> ''
+  AND lower(c.name) = lower(d.sender);
+
+-- Старые «висячие» ссылки не должны помешать включить внешний ключ.
+UPDATE documents d
+SET correspondent_id = NULL
+WHERE d.correspondent_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM correspondents c WHERE c.id = d.correspondent_id);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'documents_correspondent_id_fkey'
+  ) THEN
+    ALTER TABLE documents
+      ADD CONSTRAINT documents_correspondent_id_fkey
+      FOREIGN KEY (correspondent_id) REFERENCES correspondents(id) ON DELETE SET NULL;
+  END IF;
+END $$;
+`
   }
 ];
 
