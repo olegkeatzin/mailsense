@@ -413,6 +413,8 @@ export type Permission =
   | "journal.archive"
   /** Отмена закрытия года: только администратор. */
   | "journal.reopen"
+  | "correspondents.view"
+  | "correspondents.manage"
   | "resolution.create"
   | "resolution.edit"
   | "resolution.approve"
@@ -520,6 +522,8 @@ export interface DocumentRecord {
   /** Папка вложений дела на сервере; null — ещё не создана. */
   docFilesPath?: string | null;
   correspondentId: string | null;
+  /** Наименование связанного корреспондента; null — не сопоставлен. */
+  correspondentName?: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -546,6 +550,7 @@ export interface DocumentCard extends DocumentRecord {
 export interface JournalFilter {
   search?: string;
   status?: DocumentStatus | "";
+  correspondentId?: string;
   period?: string;
   dateFrom?: string;
   dateTo?: string;
@@ -562,6 +567,9 @@ export interface IncomingItem {
   subject: string;
   from: { name?: string; address: string } | null;
   to?: Array<{ name?: string; address: string }>;
+  /** Корреспондент, за которым закреплён адрес отправителя. */
+  correspondentId?: string | null;
+  correspondentName?: string | null;
   date: string | null;
   analysisStatus: string;
   externalNumber: string | null;

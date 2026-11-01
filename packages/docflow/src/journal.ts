@@ -432,10 +432,13 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
       }
     }
     // Регистрация закрепляет адрес отправителя за выбранным/созданным корреспондентом.
+    // Явный выбор аппарата важнее прежней привязки; автоматическая привязка чужой адрес
+    // не перетирает.
     if (correspondentId && senderEmail) {
       await client.query(
         "INSERT INTO correspondent_emails (email, correspondent_id, created_at, created_by) " +
-          "VALUES ($1,$2,$3,$4) ON CONFLICT (email) DO NOTHING",
+          "VALUES ($1,$2,$3,$4) ON CONFLICT (email) " +
+          (input.correspondentId ? "DO UPDATE SET correspondent_id = EXCLUDED.correspondent_id" : "DO NOTHING"),
         [senderEmail, correspondentId, now(), actor.id]
       );
     }
@@ -520,8 +523,13 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
 // ---------------- Чтение ----------------
 
 export async function getDocument(id: string): Promise<DocumentRecord | null> {
-  const rows = await getDocflowDb().select().from(documents).where(eq(documents.id, id)).limit(1);
-  return rows[0] ? mapDocument(rows[0]) : null;
+  const rows = await getDocflowDb()
+    .select({ doc: documents, correspondentName: correspondents.name })
+    .from(documents)
+    .leftJoin(correspondents, eq(correspondents.id, documents.correspondentId))
+    .where(eq(documents.id, id))
+    .limit(1);
+  return rows[0] ? { ...mapDocument(rows[0].doc), correspondentName: rows[0].correspondentName ?? null } : null;
 }
 
 /** Документ, зарегистрированный по этому письму (если есть). */
@@ -580,9 +588,15 @@ export async function listDocuments(f: DocumentFilter = {}): Promise<DocumentPag
   const dir = f.order === "asc" ? asc : desc;
 
   const rows = await db
-    .select({ doc: documents, createdByName: users.fullName, emailsCount: emailsCountExpr })
+    .select({
+      doc: documents,
+      createdByName: users.fullName,
+      correspondentName: correspondents.name,
+      emailsCount: emailsCountExpr
+    })
     .from(documents)
     .leftJoin(users, eq(users.id, documents.createdBy))
+    .leftJoin(correspondents, eq(correspondents.id, documents.correspondentId))
     .where(where)
     .orderBy(dir(col))
     .limit(limit)
@@ -592,6 +606,7 @@ export async function listDocuments(f: DocumentFilter = {}): Promise<DocumentPag
   const items: DocumentListItem[] = rows.map((r) => ({
     ...mapDocument(r.doc),
     createdByName: r.createdByName ?? "",
+    correspondentName: r.correspondentName ?? null,
     emailsCount: Number(r.emailsCount ?? 0)
   }));
   return { items, total: Number(totalRows[0]?.n ?? 0) };
@@ -1065,6 +1080,25 @@ export async function listCorrespondents(onlyActive = false): Promise<Correspond
       emails: (emails.get(r.id) ?? []).sort((a, b) => a.localeCompare(b, "ru"))
     }))
     .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+}
+
+/** Карта «почтовый адрес → корреспондент» для списка писем и фильтра. */
+export async function correspondentNamesByEmails(
+  emails: Array<string | null | undefined>
+): Promise<Map<string, { id: string; name: string }>> {
+  const normalized = [...new Set(emails.map((e) => normalizeCorrespondentEmail(e ?? "")).filter(Boolean))];
+  if (!normalized.length) return new Map();
+  const db = getDocflowDb();
+  const rows = await db
+    .select({
+      email: correspondentEmails.email,
+      id: correspondents.id,
+      name: correspondents.name
+    })
+    .from(correspondentEmails)
+    .innerJoin(correspondents, eq(correspondents.id, correspondentEmails.correspondentId))
+    .where(inArray(correspondentEmails.email, normalized));
+  return new Map(rows.map((r) => [r.email, { id: r.id, name: r.name }]));
 }
 
 /** Находит или создаёт корреспондента по имени и закрепляет за ним почтовый адрес. */

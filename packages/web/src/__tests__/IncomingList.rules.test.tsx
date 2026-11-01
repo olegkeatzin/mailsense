@@ -1,5 +1,9 @@
 /** @jest-environment jsdom */
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+
+// AntD-карточки и порталы в этом файле на медленном стенде иногда не укладываются
+// в стандартные 5 секунд; это ограничение тестового раннера, а не ожидание продукта.
+jest.setTimeout(15000);
 import { installDomEnvironment } from "./dom";
 
 jest.mock("../api", () => ({ api: { journalIncoming: jest.fn() } }));

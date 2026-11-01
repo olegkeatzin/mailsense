@@ -911,6 +911,34 @@ BEGIN
   END LOOP;
 END $$;
 `
+  },
+  {
+    // Права справочника корреспондентов и стартовые права ролей.
+    // Администратор получает все права автоматически, но в базе его JSON надо обновить;
+    // аппарату и руководителю даём смотреть и управлять, исполнителю журнал по умолчанию
+    // больше не показываем.
+    version: 18,
+    name: "correspondent_permissions",
+    sql: `
+UPDATE roles
+SET permissions = (
+  SELECT jsonb_agg(DISTINCT t.value)::text
+  FROM jsonb_array_elements_text(
+    permissions::jsonb || '["correspondents.view","correspondents.manage"]'::jsonb
+  ) AS t(value)
+)
+WHERE id IN ('admin', 'secretary', 'manager')
+  AND permissions IS NOT NULL;
+
+UPDATE roles
+SET permissions = (
+  SELECT COALESCE(jsonb_agg(t.value), '[]'::jsonb)::text
+  FROM jsonb_array_elements_text(permissions::jsonb) AS t(value)
+  WHERE t.value <> 'journal.view'
+)
+WHERE id = 'executor'
+  AND permissions IS NOT NULL;
+`
   }
 ];
 

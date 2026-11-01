@@ -28,8 +28,14 @@ describe("какие вкладки настроек видит роль", () =>
     const keys = settingsTabKeys(can(["settings.manage"]), true);
 
     expect(keys).toEqual(
-      expect.arrayContaining(["numbering", "service", "correspondents", "sorting", "notifications", "ai"])
+      expect.arrayContaining(["numbering", "service", "sorting", "notifications", "ai"])
     );
+    expect(keys).not.toContain("correspondents");
+  });
+
+  it("correspondents.view открывает справочник корреспондентов отдельно", () => {
+    expect(settingsTabKeys(can(["correspondents.view"]), true)).toContain("correspondents");
+    expect(settingsTabKeys(can(["correspondents.view"]), true)).not.toContain("service");
   });
 
   it("journal.view открывает нумерацию на чтение", () => {

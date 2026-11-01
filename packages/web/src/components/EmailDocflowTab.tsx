@@ -62,9 +62,8 @@ export default function EmailDocflowTab({ emailId, letter }: { emailId: string; 
               <Tag>{DOCUMENT_STATUS_TITLES[doc.status]}</Tag>
             </Descriptions.Item>
             <Descriptions.Item label="Листов">{doc.sheetsCount ?? "—"}</Descriptions.Item>
-            <Descriptions.Item label="От кого получен" span={2}>
-              {doc.sender || "—"}
-            </Descriptions.Item>
+            <Descriptions.Item label="От кого получен">{doc.sender || "—"}</Descriptions.Item>
+            <Descriptions.Item label="Корреспондент">{doc.correspondentName || "—"}</Descriptions.Item>
             <Descriptions.Item label="Краткое содержание" span={2}>
               {doc.summary || "—"}
             </Descriptions.Item>

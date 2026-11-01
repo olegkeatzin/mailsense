@@ -60,17 +60,23 @@ describe("ограничения ТЗ п. 7 «Безопасность»", () =>
     expect(has("manager", "journal.view")).toBe(true);
     expect(has("manager", "journal.edit")).toBe(false);
     expect(has("manager", "journal.register")).toBe(false);
+    expect(has("manager", "correspondents.view")).toBe(true);
+    expect(has("manager", "correspondents.manage")).toBe(true);
   });
 
   test("аппарат ведёт журнал, но не правит утверждённую резолюцию", () => {
     expect(has("secretary", "journal.register")).toBe(true);
     expect(has("secretary", "journal.edit")).toBe(true);
+    expect(has("secretary", "correspondents.view")).toBe(true);
+    expect(has("secretary", "correspondents.manage")).toBe(true);
     expect(has("secretary", "resolution.edit")).toBe(false);
   });
 
   test("исполнитель не видит лишнего", () => {
     expect(has("executor", "task.view")).toBe(true);
     expect(has("executor", "task.report")).toBe(true);
+    // Журнал по умолчанию скрыт: доступ к нему — отдельное право, а не базовое.
+    expect(has("executor", "journal.view")).toBe(false);
     expect(has("executor", "journal.register")).toBe(false);
     expect(has("executor", "resolution.approve")).toBe(false);
   });

@@ -803,7 +803,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
    */
   app.get(
     "/api/docflow/resolutions/:id/email-links",
-    ...view,
+    // Исполнитель видит ссылки на письма своей задачи без доступа к журналу.
+    requireDocflowDb,
+    requireAnyPermission("journal.view", "task.view", "resolution.approve"),
     asyncHandler(async (req, res) => {
       const detail = await getResolutionDetail(req.params.id);
       if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
@@ -1160,7 +1162,10 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // -------- Карточка и шаги процесса --------
   app.get(
     "/api/docflow/resolutions/:id",
-    ...view,
+    // Карточку своей задачи исполнитель открывает по task.view, даже если журнал ему
+    // больше не виден. Видимость конкретной резолюции всё равно проверяет assertResolutionVisible.
+    requireDocflowDb,
+    requireAnyPermission("journal.view", "task.view", "resolution.approve"),
     asyncHandler(async (req, res) => {
       const detail = await getResolutionDetail(req.params.id);
       if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");

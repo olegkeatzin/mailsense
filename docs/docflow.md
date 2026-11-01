@@ -146,8 +146,9 @@ packages/server    @mailsense/server    REST API: связывает оба па
 
 | Право | admin | secretary | manager | executor | signer |
 |---|---|---|---|---|---|
-| `journal.view` | + | + | + | + | + |
+| `journal.view` | + | + | + | **—** | + |
 | `journal.register` / `journal.edit` | + | + | — | — | — |
+| `correspondents.view` / `correspondents.manage` | + | + | + | — | — |
 | `resolution.create` | + | + | + | — | — |
 | `resolution.approve` | + | **—** | + | — | **+** |
 | `resolution.dispatch` | + | **+** | — | — | **—** |
@@ -164,9 +165,13 @@ packages/server    @mailsense/server    REST API: связывает оба па
 не выдавая ему прав руководителя. В журнале остаётся, **кто именно** утвердил (`resolutions.approved_by`).
 
 Проверка — на сервере (`requirePermission`), UI лишь скрывает кнопки (`store.can()`).
+Исполнитель по умолчанию журнал не видит: `journal.view` снят с его стартовой роли. Права
+`correspondents.view` и `correspondents.manage` дают доступ к справочнику корреспондентов
+и выбору/созданию корреспондента при регистрации; администратор получает их автоматически.
 
 ⚠️ **Список всех резолюций и канбан закрыты от исполнителя** (решение заказчика 2026-10-05).
-Они требуют `resolution.create`, а не `journal.view`: последнее есть у всех ролей, и исполнитель
+Они требуют `resolution.create`, а не `journal.view`: последнее есть у аппарата, руководителя
+и подписанта, а исполнитель
 видел бы чужие сроки, тексты и соисполнителей. Свои поручения он видит в «Моих задачах»
 (`task.view`), очередь подписанта — в `/for-approval` (`resolution.approve`).
 Проверяется дважды: `routes.access.test.ts` (матрица) и `test_resolutions.mjs` (сквозной).

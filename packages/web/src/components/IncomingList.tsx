@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, Card, Checkbox, Empty, Segmented, Space, Spin, Tag, Tooltip, Typography } from "antd";
+import { Alert, Button, Card, Checkbox, Empty, Segmented, Select, Space, Spin, Tag, Tooltip, Typography } from "antd";
 import { CheckCircleOutlined, FileAddOutlined, FlagOutlined, ReloadOutlined, RollbackOutlined, TagOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api } from "../api";
 import { useStore } from "../store";
 import { priorityLabel } from "../utils";
-import type { IncomingItem } from "../types";
+import type { CorrespondentRecord, IncomingItem } from "../types";
 import { READY_STYLE, SOON_STYLE } from "./notifications/colors";
 import { ServiceAccountHint } from "./ServiceAccountHint";
 import { humanError } from "../utils/humanError";
@@ -25,6 +25,8 @@ export default function IncomingList() {
   const requestRegister = useStore((s) => s.requestRegister);
   const accounts = useStore((s) => s.accounts);
   const [items, setItems] = useState<IncomingItem[]>([]);
+  const [correspondents, setCorrespondents] = useState<CorrespondentRecord[]>([]);
+  const [correspondentId, setCorrespondentId] = useState<string>("");
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -50,6 +52,14 @@ export default function IncomingList() {
   }, [rulesOnly, sort]);
 
   useEffect(() => {
+    if (!can("correspondents.view") || typeof api.correspondents !== "function") return;
+    api
+      .correspondents(true)
+      .then(setCorrespondents)
+      .catch(() => setCorrespondents([]));
+  }, [can]);
+
+  useEffect(() => {
     // Права нет — очередь не запрашивается: иначе 403 в консоли у чужой роли.
     if (!can("journal.register")) {
       setLoading(false);
@@ -58,16 +68,37 @@ export default function IncomingList() {
     void load();
   }, [load, reloadKey]);
 
+  const visibleItems = correspondentId
+    ? items.filter((e) =>
+        correspondentId === "__none__" ? !e.correspondentId : e.correspondentId === correspondentId
+      )
+    : items;
+
   return (
     <div style={{ padding: 16, height: "100%", overflow: "auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <h3 style={{ margin: 0, flex: "1 1 240px" }}>
           Входящие на регистрацию
-          {items.length > 0 && <span style={{ color: "#595959", fontWeight: 400 }}> · {items.length}</span>}
+          {visibleItems.length > 0 && <span style={{ color: "#595959", fontWeight: 400 }}> · {visibleItems.length}</span>}
         </h3>
         <Checkbox checked={rulesOnly} onChange={(e) => setRulesOnly(e.target.checked)}>
           Только по правилам
         </Checkbox>
+        {can("correspondents.view") ? (
+          <Select
+            style={{ width: 230 }}
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="Все корреспонденты"
+            value={correspondentId || undefined}
+            options={[
+              ...correspondents.map((c) => ({ value: c.id, label: c.name })),
+              { value: "__none__", label: "Без корреспондента" }
+            ]}
+            onChange={(v) => setCorrespondentId(v ?? "")}
+          />
+        ) : null}
         <Segmented
           aria-label="Порядок писем"
           value={sort}
@@ -130,7 +161,7 @@ export default function IncomingList() {
             </div>
           ) : null}
           <Space direction="vertical" size="middle" style={{ width: "100%" }}>
-            {items.map((e) => {
+            {visibleItems.map((e) => {
               const labels = e.sortLabels ?? [];
               const notes = e.sortNotes ?? [];
               const account = accounts.find((a) => a.id === e.accountId);
@@ -185,6 +216,7 @@ export default function IncomingList() {
                   )}
                   <Space size={4} wrap>
                     {account?.username ? <Tag>Ящик: {account.username}</Tag> : null}
+                    {e.correspondentName ? <Tag color="purple">Корреспондент: {e.correspondentName}</Tag> : null}
                     {account?.settings?.displayName && account.settings.displayName !== account.username ? (
                       <Tag>{account.settings.displayName}</Tag>
                     ) : null}

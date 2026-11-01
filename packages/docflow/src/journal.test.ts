@@ -429,6 +429,12 @@ describe("прослеживаемость: кто и что сделал", () =
     );
     expect(second.correspondentId).toBe(first.correspondentId);
     expect(await getDocflowPool().query("SELECT 1 FROM correspondents")).toMatchObject({ rowCount: 1 });
+
+    const third = await registerDocument({ summary: "Третий", sender: "ООО «Другой»" }, secretary);
+    const filtered = await listDocuments({ correspondentId: first.correspondentId });
+    expect(filtered.items.map((d) => d.id).sort()).toEqual([first.id, second.id].sort());
+    expect(filtered.items.every((d) => d.correspondentName === "АО «Тест-Корр»")).toBe(true);
+    expect(filtered.items.some((d) => d.id === third.id)).toBe(false);
   });
 
   test("в журнале видно, кто зарегистрировал документ", async () => {

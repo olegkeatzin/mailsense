@@ -33,7 +33,8 @@ const READY = {
   smtpUsername: "ivanov@mail.test",
   smtpPasswordEncrypted: "ШИФР"
 };
-const SERVICE = { ...READY, id: "acc-service", username: "post@mail.test" };
+// Служебный ящик принадлежит предприятию, а не работнику: listAccountsForUser его не вернёт.
+const SERVICE = { ...READY, id: "acc-service", username: "post@mail.test", ownerUserId: "service" };
 /** Готовый к отправке, но ЧУЖОЙ ящик: например, директора или коллеги. */
 const FOREIGN = { ...READY, id: "acc-foreign", username: "director@mail.test", ownerUserId: "director" };
 /** Выданный ящик БЕЗ SMTP: почта только входящая (ровно случай Петровой на стенде, дефект T58). */

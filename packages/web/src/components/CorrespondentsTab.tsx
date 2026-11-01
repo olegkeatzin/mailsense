@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Form, Input, Modal, Select, Space, Switch, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { api } from "../api";
+import { useStore } from "../store";
 import type { CorrespondentRecord } from "../types";
 import { humanError } from "../utils/humanError";
 
@@ -12,6 +13,8 @@ import { humanError } from "../utils/humanError";
  * определять корреспондента при регистрации письма.
  */
 export function CorrespondentsTab() {
+  const can = useStore((s) => s.can);
+  const canManage = can("correspondents.manage");
   const [rows, setRows] = useState<CorrespondentRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
@@ -100,20 +103,23 @@ export function CorrespondentsTab() {
       title: "",
       key: "actions",
       width: 90,
-      render: (_v, r) => (
-        <Button size="small" type="link" onClick={() => edit(r)}>
-          Изменить
-        </Button>
-      )
+      render: (_v, r) =>
+        canManage ? (
+          <Button size="small" type="link" onClick={() => edit(r)}>
+            Изменить
+          </Button>
+        ) : null
     }
   ];
 
   return (
     <div>
       <Space style={{ marginBottom: 12 }} wrap>
-        <Button type="primary" onClick={() => edit(null)}>
-          Добавить корреспондента
-        </Button>
+        {canManage ? (
+          <Button type="primary" onClick={() => edit(null)}>
+            Добавить корреспондента
+          </Button>
+        ) : null}
         <Typography.Text type="secondary">
           Письма с закреплённых ящиков автоматически связываются с корреспондентом при регистрации.
         </Typography.Text>

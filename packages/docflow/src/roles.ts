@@ -27,6 +27,8 @@ export const PERMISSION_CATALOG: PermissionInfo[] = [
   { id: "journal.edit", title: "Править документы", group: "Журнал" },
   { id: "journal.archive", title: "Архивировать год", group: "Журнал" },
   { id: "journal.reopen", title: "Отменять закрытие года", group: "Журнал" },
+  { id: "correspondents.view", title: "Смотреть корреспондентов", group: "Корреспонденты" },
+  { id: "correspondents.manage", title: "Управлять корреспондентами", group: "Корреспонденты" },
   { id: "resolution.create", title: "Накладывать резолюцию", group: "Резолюции" },
   { id: "resolution.edit", title: "Править текст резолюции", group: "Резолюции" },
   { id: "resolution.approve", title: "Утверждать резолюцию", group: "Резолюции" },
@@ -91,6 +93,8 @@ export const BUILTIN_ROLES: RoleRecord[] = [
       "journal.register",
       "journal.edit",
       "journal.archive",
+      "correspondents.view",
+      "correspondents.manage",
       "resolution.create",
       "resolution.dispatch",
       "task.view",
@@ -106,6 +110,8 @@ export const BUILTIN_ROLES: RoleRecord[] = [
     sortOrder: 30,
     permissions: [
       "journal.view",
+      "correspondents.view",
+      "correspondents.manage",
       "resolution.create",
       "resolution.edit",
       "resolution.approve",
@@ -119,7 +125,8 @@ export const BUILTIN_ROLES: RoleRecord[] = [
     name: "Исполнитель",
     description: "Получение задач и отчёт об исполнении",
     sortOrder: 40,
-    permissions: ["journal.view", "task.view", "task.report", "notifications.view"],
+    // Исполнитель по умолчанию журнал не видит: доступ к журналу — отдельное право.
+    permissions: ["task.view", "task.report", "notifications.view"],
     isSystem: true
   },
   {

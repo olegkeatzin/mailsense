@@ -18,6 +18,7 @@ import { actionTitle, fieldTitle, formatValue } from "./docflow/labels";
 import {
   DOCUMENT_STATUS_TITLES,
   type AuditEntry,
+  type CorrespondentRecord,
   type DocumentCard as DocCard,
   type DocumentStatus,
   type User
@@ -56,6 +57,10 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
   const canUseMail = useStore((s) => s.canUseMail);
   const [doc, setDoc] = useState<DocCard | null>(null);
   const [history, setHistory] = useState<AuditEntry[]>([]);
+  const [correspondents, setCorrespondents] = useState<CorrespondentRecord[]>([]);
+  const [corrOpen, setCorrOpen] = useState(false);
+  const [corrName, setCorrName] = useState("");
+  const [corrSaving, setCorrSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
@@ -72,6 +77,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
   const [signers, setSigners] = useState<User[]>([]);
 
   const editable = can("journal.edit");
+  const canManageCorrespondents = can("correspondents.manage");
   /**
    * Ящик для писем СЭД (T53). Показываем выбор только там, где работник отправляет
    * (аппарат): у исполнителя выбора в действиях нет — он задаётся в личных настройках.
@@ -270,8 +276,17 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
         sheetsCount: d.sheetsCount,
         caseNumber: d.caseNumber,
         documentName: d.documentName,
+        correspondentId: d.correspondentId,
         status: d.status
       });
+      if (can("correspondents.view") && typeof api.correspondents === "function") {
+        api
+          .correspondents(true)
+          .then(setCorrespondents)
+          .catch(() => setCorrespondents([]));
+      } else {
+        setCorrespondents([]);
+      }
       // Историю изменений запрашиваем только при праве `audit.view`: у руководителя его нет,
       // и карточка сыпала 403 в консоль (заметно при разборе любого другого сбоя).
       if (can("audit.view")) {
@@ -312,6 +327,29 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       setSaving(false);
     }
   };
+
+  async function createCorrespondent() {
+    const name = corrName.trim();
+    if (!name) {
+      message.warning("Укажите наименование корреспондента");
+      return;
+    }
+    setCorrSaving(true);
+    try {
+      const saved = await api.saveCorrespondent({ name, isActive: true, emails: [] });
+      setCorrespondents((prev) =>
+        [...prev.filter((c) => c.id !== saved.id), saved].sort((a, b) => a.name.localeCompare(b.name, "ru"))
+      );
+      setDraft((prev) => ({ ...prev, correspondentId: saved.id }));
+      setCorrOpen(false);
+      setCorrName("");
+      message.success("Корреспондент создан");
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setCorrSaving(false);
+    }
+  }
 
   const fmtDate = (v: string | null | undefined) => (v ? dayjs(v).format("DD.MM.YYYY") : "");
 
@@ -393,6 +431,37 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                 <Input value={String(draft.sender ?? "")} onChange={(e) => setDraft({ ...draft, sender: e.target.value })} />
               ) : (
                 doc.sender || "—"
+              )}
+            </Descriptions.Item>
+            <Descriptions.Item label="Корреспондент" span={2}>
+              {editable ? (
+                <Space.Compact style={{ display: "flex", width: "100%" }}>
+                  <Select
+                    allowClear
+                    showSearch
+                    optionFilterProp="label"
+                    style={{ flex: "1 1 0", minWidth: 0, width: "auto" }}
+                    placeholder="выберите корреспондента"
+                    value={(draft.correspondentId as string | null | undefined) ?? undefined}
+                    options={correspondents.map((c) => ({
+                      value: c.id,
+                      label: c.name + (c.emails.length ? " · " + c.emails.join(", ") : "")
+                    }))}
+                    onChange={(v) => setDraft({ ...draft, correspondentId: v || null })}
+                  />
+                  {canManageCorrespondents ? (
+                    <Button
+                      onClick={() => {
+                        setCorrName(String(draft.sender ?? ""));
+                        setCorrOpen(true);
+                      }}
+                    >
+                      Создать
+                    </Button>
+                  ) : null}
+                </Space.Compact>
+              ) : (
+                doc.correspondentName || "не сопоставлен"
               )}
             </Descriptions.Item>
             <Descriptions.Item label="Краткое содержание" span={2}>
@@ -733,6 +802,26 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       </Modal>
 
       {/* Модалка вынесена наружу условия: она нужна и когда карточка ещё грузится. */}
+      <Modal
+        open={corrOpen}
+        title="Новый корреспондент"
+        okText="Создать"
+        cancelText="Отмена"
+        confirmLoading={corrSaving}
+        onCancel={() => setCorrOpen(false)}
+        onOk={() => void createCorrespondent()}
+      >
+        <Input
+          value={corrName}
+          placeholder="АО «Рога и копыта»"
+          onChange={(e) => setCorrName(e.target.value)}
+          onPressEnter={() => void createCorrespondent()}
+        />
+        <div style={{ color: "#595959", fontSize: 12, marginTop: 8 }}>
+          Почтовые ящики можно закрепить за корреспондентом в настройках.
+        </div>
+      </Modal>
+
       <ResolutionModal
         open={resolutionOpen}
         documentId={documentId ?? ""}

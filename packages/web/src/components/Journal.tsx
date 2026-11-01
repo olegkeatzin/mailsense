@@ -6,7 +6,12 @@ import dayjs from "dayjs";
 import { api, saveBlob } from "../api";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useStore } from "../store";
-import { DOCUMENT_STATUS_TITLES, type DocumentListItem, type DocumentStatus } from "../types";
+import {
+  DOCUMENT_STATUS_TITLES,
+  type CorrespondentRecord,
+  type DocumentListItem,
+  type DocumentStatus
+} from "../types";
 import DocumentCard from "./DocumentCard";
 import { DocumentFilesButton } from "./DocumentFiles";
 import { humanError } from "../utils/humanError";
@@ -62,6 +67,8 @@ export default function Journal() {
   // Пока пользователь печатает, запрос не уходит: иначе журнал спрашивается на каждую букву.
   const searchDebounced = useDebouncedValue(search, 300);
   const [status, setStatus] = useState<string>("");
+  const [correspondentId, setCorrespondentId] = useState<string>("");
+  const [correspondents, setCorrespondents] = useState<CorrespondentRecord[]>([]);
   const [period, setPeriod] = useState<string>("");
   const [range, setRange] = useState<[string, string]>(["", ""]);
   const [page, setPage] = useState(1);
@@ -71,11 +78,12 @@ export default function Journal() {
     () => ({
       search: searchDebounced.trim() || undefined,
       status: (status || undefined) as DocumentStatus | undefined,
+      correspondentId: correspondentId || undefined,
       period: period || undefined,
       dateFrom: range[0] || undefined,
       dateTo: range[1] || undefined
     }),
-    [searchDebounced, status, period, range]
+    [searchDebounced, status, correspondentId, period, range]
   );
 
   const load = useCallback(async () => {
@@ -99,6 +107,14 @@ export default function Journal() {
     }
     void load();
   }, [load, reloadKey]);
+
+  useEffect(() => {
+    if (!can("correspondents.view") || typeof api.correspondents !== "function") return;
+    api
+      .correspondents(true)
+      .then(setCorrespondents)
+      .catch(() => setCorrespondents([]));
+  }, [can]);
 
   useEffect(() => {
     if (!can("journal.view")) return;
@@ -156,6 +172,27 @@ export default function Journal() {
       width: 200,
       ellipsis: true,
       render: (v: string) => v || <span style={{ color: "#767676" }}>—</span>
+    },
+    {
+      title: "Корреспондент",
+      dataIndex: "correspondentName",
+      width: 210,
+      ellipsis: true,
+      render: (v: string | null | undefined, r) =>
+        v || (
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0, height: "auto" }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setOpenId(r.id);
+            }}
+            disabled={!can("journal.edit")}
+          >
+            {can("journal.edit") ? "Назначить" : "не сопоставлен"}
+          </Button>
+        )
     },
     {
       title: "Краткое содержание",
@@ -313,6 +350,21 @@ export default function Journal() {
             setPage(1);
           }}
         />
+        {can("correspondents.view") ? (
+          <Select
+            style={{ width: 220 }}
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            placeholder="Все корреспонденты"
+            value={correspondentId || undefined}
+            options={correspondents.map((c) => ({ value: c.id, label: c.name }))}
+            onChange={(v) => {
+              setCorrespondentId(v ?? "");
+              setPage(1);
+            }}
+          />
+        ) : null}
         <Select
           style={{ width: 130 }}
           value={period}
@@ -343,7 +395,7 @@ export default function Journal() {
         loading={loading}
         columns={columns}
         dataSource={rows}
-        scroll={{ x: 1810 }}
+        scroll={{ x: 2020 }}
         onRow={(r) => ({
           onClick: () => setOpenId(r.id),
           // Строку открывают и с клавиатуры: раньше карточка документа была доступна только мышью.

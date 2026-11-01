@@ -1,5 +1,5 @@
 import type express from "express";
-import { listAccountsForUser } from "@mailsense/core";
+import { getAccount, listAccountsForUser } from "@mailsense/core";
 import {
   AppError,
   EDMS_WORK_ACCOUNT_SETTING,
@@ -89,13 +89,26 @@ interface Worker {
 export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps): void {
   const { requireDocflowDb, asyncHandler, enterpriseHosts } = deps;
 
-  async function allowedFor(worker: Worker): Promise<AllowedMailbox[]> {
-    const [state, grantedAddresses] = await Promise.all([
-      getServiceAccountState(),
-      getAllowedWorkAccounts(worker.id)
-    ]);
+  /**
+   * Ящики, которые работник вправе видеть в списке: его собственные плюс служебный.
+   *
+   * ⚠️ Служебный ящик почти всегда принадлежит другому владельцу (или никому), поэтому
+   * listAccountsForUser его не возвращает. Без явного добавления getServiceAccountState
+   * сообщал «ящик задан», а список оставался пустым — интерфейс требовал выбрать ящик,
+   * которого не было в options.
+   */
+  function selectableAccounts(worker: Worker, serviceId: string | null): SendAccountLike[] {
+    const own = listAccountsForUser(worker.ownerKey) as SendAccountLike[];
+    if (!serviceId || own.some((a) => a.id === serviceId)) return own;
+    const service = getAccount(serviceId) as SendAccountLike | null;
+    return service ? [...own, service] : own;
+  }
+
+  async function allowedFor(worker: Worker, serviceId?: string | null): Promise<AllowedMailbox[]> {
+    const state = serviceId === undefined ? await getServiceAccountState() : { accountId: serviceId };
+    const grantedAddresses = await getAllowedWorkAccounts(worker.id);
     return allowedMailboxes({
-      accounts: listAccountsForUser(worker.ownerKey) as SendAccountLike[],
+      accounts: selectableAccounts(worker, state.accountId),
       serviceId: state.accountId,
       grantedAddresses,
       workerLogins: worker.logins,
@@ -104,11 +117,11 @@ export function mountMyEdmsMailRoutes(app: express.Express, deps: MyEdmsMailDeps
   }
 
   async function payloadFor(worker: Worker): Promise<MyEdmsMailPayload> {
-    const accounts = listAccountsForUser(worker.ownerKey) as SendAccountLike[];
-    const [state, personalId, allowed] = await Promise.all([
-      getServiceAccountState(),
+    const state = await getServiceAccountState();
+    const accounts = selectableAccounts(worker, state.accountId);
+    const [personalId, allowed] = await Promise.all([
       getUserSetting(worker.id, EDMS_WORK_ACCOUNT_SETTING),
-      allowedFor(worker)
+      allowedFor(worker, state.accountId)
     ]);
     const personal = personalId ? accounts.find((a) => a.id === personalId) ?? null : null;
 

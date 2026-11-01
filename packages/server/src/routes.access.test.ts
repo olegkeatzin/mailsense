@@ -67,6 +67,19 @@ const CASES: RouteCase[] = [
     allowed: ["admin"]
   },
   {
+    what: "GET /api/docflow/correspondents — справочник видят администратор, аппарат и руководитель",
+    method: "GET",
+    path: "/api/docflow/correspondents",
+    allowed: ["admin", "secretary", "manager"]
+  },
+  {
+    what: "POST /api/docflow/correspondents — управляют администратор, аппарат и руководитель",
+    method: "POST",
+    path: "/api/docflow/correspondents",
+    body: { name: "АО «Рога и копыта»", emails: ["info@roga.test"] },
+    allowed: ["admin", "secretary", "manager"]
+  },
+  {
     what: "PATCH /api/docflow/journal/:id — руководитель НЕ правит журнал",
     method: "PATCH",
     path: "/api/docflow/journal/doc-1",
@@ -123,10 +136,11 @@ const CASES: RouteCase[] = [
     ok: 201
   },
   {
-    what: "GET /api/roles — справочник ролей виден всем, кто видит журнал",
+    what: "GET /api/roles — справочник ролей виден тем, у кого есть журнал или администрирование",
     method: "GET",
     path: "/api/roles",
-    allowed: [...ROLES]
+    // Исполнитель больше не видит журнал по умолчанию, значит и справочник ролей ему не нужен.
+    allowed: ["admin", "secretary", "manager", "signer"]
   },
   {
     what: "POST /api/docflow/resolutions — черновик готовит аппарат и руководитель (подписант не готовит)",

@@ -32,6 +32,8 @@ export type Permission =
   | "resolution.dispatch"
   | "task.view"
   | "task.report"
+  | "correspondents.view"
+  | "correspondents.manage"
   | "users.manage"
   | "settings.manage"
   | "audit.view"
@@ -180,6 +182,8 @@ export interface DocumentRecord {
   /** Папка вложений дела на сервере; null — ещё не создана. */
   docFilesPath: string | null;
   correspondentId: string | null;
+  /** Наименование связанного корреспондента; null — не сопоставлен. */
+  correspondentName?: string | null;
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;

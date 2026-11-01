@@ -3,6 +3,7 @@ import { Alert, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Selec
 import dayjs from "dayjs";
 import { api } from "../api";
 import type { CaseRecord, CorrespondentRecord, DuplicateMatch, RegisterSuggest } from "../types";
+import { useStore } from "../store";
 import { humanError } from "../utils/humanError";
 
 /**
@@ -59,6 +60,8 @@ function RegisterShell({
 }
 
 export default function RegisterModal({ emailId, onRegistered }: Props) {
+  const can = useStore((s) => s.can);
+  const canManageCorrespondents = can("correspondents.manage");
   const [form] = Form.useForm();
   const [suggest, setSuggest] = useState<RegisterSuggest | null>(null);
   const [dups, setDups] = useState<DuplicateMatch[]>([]);
@@ -250,19 +253,23 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
             </Form.Item>
 
             <Form.Item label="Корреспондент" name="correspondentId">
-              <Space.Compact style={{ width: "100%" }}>
+              <Space.Compact style={{ display: "flex", width: "100%" }}>
                 <Select
                   allowClear
                   showSearch
                   optionFilterProp="label"
                   placeholder="выберите или создайте по отправителю"
-                  style={{ flex: 1 }}
+                  style={{ flex: "1 1 0", minWidth: 0, width: "auto" }}
                   options={correspondents.map((c) => ({
                     value: c.id,
                     label: c.name + (c.emails.length ? " · " + c.emails.join(", ") : "")
                   }))}
                 />
-                <Button onClick={openCreateCorrespondent}>Создать</Button>
+                {canManageCorrespondents ? (
+                  <Button style={{ flex: "0 0 auto" }} onClick={openCreateCorrespondent}>
+                    Создать
+                  </Button>
+                ) : null}
               </Space.Compact>
             </Form.Item>
 

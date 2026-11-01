@@ -25,6 +25,7 @@ import {
   AppError,
   DOCUMENT_STATUSES,
   archivePeriod,
+  correspondentNamesByEmails,
   documentStatusCounts,
   findDuplicates,
   EDMS_WORK_ACCOUNT_SETTING,
@@ -96,6 +97,7 @@ export function journalColumns(): Array<{ key: string; title: string; width?: nu
     { key: "docNumber", title: "Номер документа", width: 18 },
     { key: "docDate", title: "Дата документа", width: 16 },
     { key: "sender", title: "От кого получен", width: 32 },
+    { key: "correspondentName", title: "Корреспондент", width: 28 },
     { key: "summary", title: "Краткое содержание", width: 48 },
     { key: "sheetsCount", title: "Кол-во листов", width: 14 },
     { key: "caseNumber", title: "Номер дела", width: 14 },
@@ -181,6 +183,7 @@ export function docFilterFromQuery(q: Record<string, unknown>): DocumentFilter {
     dateFrom: str(q.dateFrom),
     dateTo: str(q.dateTo),
     caseNumber: str(q.caseNumber),
+    correspondentId: str(q.correspondentId),
     sort: (str(q.sort) ?? "regNumber") as DocumentSortField,
     order: q.order === "asc" ? "asc" : "desc",
     // Числа уходят в SQL: «?limit=abc» обязан стать 400, а не LIMIT NaN.
@@ -251,6 +254,8 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
   const register = [requireDocflowDb, requirePermission("journal.register")];
   const edit = [requireDocflowDb, requirePermission("journal.edit")];
   const manage = [requireDocflowDb, requirePermission("settings.manage")];
+  const correspondentsView = [requireDocflowDb, requirePermission("correspondents.view")];
+  const correspondentsManage = [requireDocflowDb, requirePermission("correspondents.manage")];
 
   /** Раскладывает вложения в mailDocs и запоминает путь в карточке. */
   async function filesOf(doc: DocumentRecord): Promise<{ docFilesPath: string; files: Array<{ name: string; size: number }> }> {
@@ -504,7 +509,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
 
   app.get(
     "/api/docflow/correspondents",
-    ...view,
+    ...correspondentsView,
     asyncHandler(async (req, res) => {
       res.json(await listCorrespondents(req.query.active === "1"));
     })
@@ -512,7 +517,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
 
   app.post(
     "/api/docflow/correspondents",
-    ...edit,
+    ...correspondentsManage,
     asyncHandler(async (req, res) => {
       const b = req.body ?? {};
       if (!String(b.name ?? "").trim()) throw new AppError("Укажите наименование", 400, "bad_name");
@@ -601,12 +606,17 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       // ⚠️ Вложения считаем ОДНИМ пакетным запросом. Раньше здесь стоял listAttachments
       // на каждое письмо: на 300 писем — 300 запросов в SQLite на один вызов маршрута.
       const attachmentCounts = countAttachmentsByEmail(page.map((m) => m.email.id));
+      const correspondentByEmail = await correspondentNamesByEmails(
+        page.map((m) => m.email.from?.address ?? null)
+      );
       const items = page.map(({ email: e, match }) => ({
         emailId: e.id,
         accountId: e.accountId,
         subject: e.subject,
         from: e.from,
         to: e.to ?? [],
+        correspondentId: correspondentByEmail.get((e.from?.address ?? "").trim().toLowerCase())?.id ?? null,
+        correspondentName: correspondentByEmail.get((e.from?.address ?? "").trim().toLowerCase())?.name ?? null,
         date: e.date,
         analysisStatus: e.analysisStatus,
         externalNumber: e.externalNumber,
@@ -689,6 +699,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
           docNumber: d.docNumber,
           docDate: d.docDate ?? "",
           sender: d.sender,
+          correspondentName: d.correspondentName ?? "",
           summary: d.summary,
           sheetsCount: d.sheetsCount ?? "",
           caseNumber: d.caseNumber ?? "",
