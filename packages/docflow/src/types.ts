@@ -214,6 +214,8 @@ export interface DocumentPatch extends DocumentInput {
   status?: DocumentStatus;
   /** Служебное поле: заполняет сервер при раскладке вложений, не пользователь. */
   docFilesPath?: string | null;
+  /** Служебное поле: адрес письма-источника для закрепления за корреспондентом. */
+  senderEmail?: string | null;
   /** Дата регистрации (правится только администратором журнала). */
   regDate?: string;
 }

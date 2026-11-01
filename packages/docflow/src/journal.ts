@@ -663,6 +663,14 @@ export async function updateDocument(id: string, patch: DocumentPatch, actor: Ac
   // а именно это и нужно, когда ищут, кто внёс ошибку.
   return getDocflowDb().transaction(async (tx) => {
     await tx.update(documents).set(set).where(eq(documents.id, id));
+    // Явное назначение корреспондента в карточке закрепляет и ящик источника.
+    if (patch.correspondentId && patch.senderEmail?.trim()) {
+      const email = normalizeCorrespondentEmail(patch.senderEmail);
+      await tx
+        .insert(correspondentEmails)
+        .values({ email, correspondentId: patch.correspondentId, createdAt: now(), createdBy: actor.id })
+        .onConflictDoUpdate({ target: correspondentEmails.email, set: { correspondentId: patch.correspondentId } });
+    }
     const rows = await tx.select().from(documents).where(eq(documents.id, id)).limit(1);
     const after = rows[0] ? mapDocument(rows[0]) : null;
     await tx.insert(auditLog).values({

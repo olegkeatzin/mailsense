@@ -841,6 +841,12 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       if (b.documentName !== undefined) patch.documentName = String(b.documentName);
       if (b.correspondentId !== undefined) {
         patch.correspondentId = b.correspondentId ? String(b.correspondentId) : null;
+        if (patch.correspondentId) {
+          // Письмо-источник нужно, чтобы закрепить его ящик за выбранным корреспондентом.
+          const current = await getDocument(req.params.id);
+          const source = current?.emailId ? getEmailView(current.emailId) : null;
+          patch.senderEmail = source?.from?.address ?? null;
+        }
       }
       if (b.status !== undefined) {
         // ⚠️ Статус — не свободный текст: произвольное значение ломало фильтры журнала
