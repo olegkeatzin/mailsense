@@ -264,6 +264,10 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
                     value: c.id,
                     label: c.name + (c.emails.length ? " · " + c.emails.join(", ") : "")
                   }))}
+                  onChange={(id) => {
+                    const found = correspondents.find((c) => c.id === id);
+                    if (found) form.setFieldsValue({ sender: found.name });
+                  }}
                 />
                 {canManageCorrespondents ? (
                   <Button style={{ flex: "0 0 auto" }} onClick={openCreateCorrespondent}>

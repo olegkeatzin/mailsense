@@ -281,7 +281,7 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
       });
       if (can("correspondents.view") && typeof api.correspondents === "function") {
         api
-          .correspondents(true)
+          .correspondents()
           .then(setCorrespondents)
           .catch(() => setCorrespondents([]));
       } else {
@@ -447,7 +447,10 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                       value: c.id,
                       label: c.name + (c.emails.length ? " · " + c.emails.join(", ") : "")
                     }))}
-                    onChange={(v) => setDraft({ ...draft, correspondentId: v || null })}
+                    onChange={(v) => {
+                      const found = correspondents.find((c) => c.id === v);
+                      setDraft({ ...draft, correspondentId: v || null, ...(found ? { sender: found.name } : {}) });
+                    }}
                   />
                   {canManageCorrespondents ? (
                     <Button
