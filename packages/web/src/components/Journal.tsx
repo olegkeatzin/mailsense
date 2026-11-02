@@ -243,12 +243,28 @@ export default function Journal() {
       key: "assignee",
       width: 190,
       render: (_v, r) => {
+        const reports = r.resolution?.assigneeReports ?? [];
         const names = r.resolution?.assignees ?? [];
         const due = r.resolution?.deadline;
         if (!names.length && !due) return <span style={{ color: "#767676" }}>—</span>;
         return (
           <span style={{ fontSize: 12 }}>
-            {names.join(", ")}
+            {reports.length ? (
+              <Space size={2} wrap>
+                {reports.map((a) => (
+                  <Tooltip
+                    key={a.userId}
+                    title={a.reportAt ? a.reportText || "Отчёт сдан" : "Отчёт ещё не сдан"}
+                  >
+                    <Tag color={a.reportAt ? "green" : "default"} style={{ marginInlineEnd: 0 }}>
+                      {a.fullName || "исполнитель"} {a.reportAt ? "✓" : "—"}
+                    </Tag>
+                  </Tooltip>
+                ))}
+              </Space>
+            ) : (
+              names.join(", ")
+            )}
             {due ? <span style={{ color: "#595959" }}> · до {dayjs(due).format("DD.MM.YYYY")}</span> : null}
           </span>
         );

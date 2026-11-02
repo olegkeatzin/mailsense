@@ -130,6 +130,14 @@ export interface DocumentResolutionBrief {
   status: string;
   deadline: string | null;
   assignees: string[];
+  /** Кто из исполнителей уже отчитался, а кто ещё в работе. */
+  assigneeReports?: Array<{
+    userId: string;
+    fullName: string;
+    kind: "responsible" | "coexecutor";
+    reportAt: string | null;
+    reportText: string | null;
+  }>;
   /** Когда поручение закрыто; null — ещё исполняется. */
   completedAt?: string | null;
 }

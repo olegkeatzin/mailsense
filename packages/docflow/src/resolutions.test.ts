@@ -703,14 +703,18 @@ describe("отчёт об исполнении (этап 4)", () => {
     return r.id;
   }
 
-  test("отчёт сохраняется и виден в задаче", async () => {
+  test("отчёт сохраняется и виден в задаче; пока отчитался не каждый — поручение в работе", async () => {
     const id = await sent();
     const after = await reportExecution(id, executorA.id, { text: "Ответ подготовлен и направлен" }, executorA);
-    expect(after.status).toBe("done");
+    expect(after.status).toBe("sent");
     const d = (await getResolutionDetail(id))!;
     const mine = d.assignees.find((a) => a.userId === executorA.id)!;
     expect(mine.reportText).toBe("Ответ подготовлен и направлен");
     expect(mine.reportAt).toBeTruthy();
+
+    // Соисполнитель ещё не отчитался — поручение закрывается только после его отчёта.
+    const done = await reportExecution(id, executorB.id, { text: "Проверил и согласовал" }, executorB);
+    expect(done.status).toBe("done");
   });
 
   test("пустой отчёт не принимается", async () => {
@@ -750,15 +754,25 @@ describe("отчёт об исполнении (этап 4)", () => {
     expect(second.status).toBe("done");
   });
 
+  test("ответственный отчитался первым — соисполнитель всё ещё может отчитаться", async () => {
+    const id = await sent();
+    const afterResponsible = await reportExecution(id, executorA.id, { text: "Основная часть готова" }, executorA);
+    expect(afterResponsible.status).toBe("sent");
+    const afterCo = await reportExecution(id, executorB.id, { text: "Своя часть готова" }, executorB);
+    expect(afterCo.status).toBe("done");
+  });
+
   test("повторный отчёт по закрытому поручению отклоняется", async () => {
     const id = await sent();
     await reportExecution(id, executorA.id, { text: "Первый вариант" }, executorA);
+    await reportExecution(id, executorB.id, { text: "Второй вариант" }, executorB);
     await expect(reportExecution(id, executorA.id, { text: "Уточнение" }, executorA)).rejects.toThrow(/уже исполнено/i);
   });
 
   test("отчёт попадает в аудит с автором", async () => {
     const id = await sent();
     await reportExecution(id, executorA.id, { text: "Сделано" }, executorA);
+    await reportExecution(id, executorB.id, { text: "Тоже сделано" }, executorB);
     const rows = await getDocflowPool().query<{ action: string; user_name: string }>(
       "SELECT action, user_name FROM audit_log WHERE entity_type = $1 AND entity_id = $2 ORDER BY created_at",
       ["resolution", id]
@@ -772,7 +786,7 @@ describe("отчёт об исполнении (этап 4)", () => {
   test("отчёт письмом: сохраняется ссылка на письмо", async () => {
     const id = await sent();
     const after = await reportExecution(id, executorA.id, { text: "Отчёт письмом", emailId: "rep-1" }, executorA);
-    expect(after.status).toBe("done");
+    expect(after.status).toBe("sent");
     const mine = (await getResolutionDetail(id))!.assignees.find((a) => a.userId === executorA.id)!;
     expect(mine.reportText).toBe("Отчёт письмом");
   });
@@ -814,6 +828,15 @@ describe("поручения для списка журнала", () => {
     expect(brief.text).toBe("Подготовить ответ");
     expect(brief.deadline).toBe("2026-10-25");
     expect(brief.assignees).toEqual([executorA.name]);
+    expect(brief.assigneeReports).toEqual([
+      {
+        userId: executorA.id,
+        fullName: executorA.name,
+        kind: "responsible",
+        reportAt: null,
+        reportText: null
+      }
+    ]);
   });
 
   it("после закрытия отдаёт дату исполнения для журнала", async () => {

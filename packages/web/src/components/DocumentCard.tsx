@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Alert, Button, DatePicker, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, message , Typography } from "antd";
+import { Alert, Button, DatePicker, Descriptions, Drawer, Empty, Input, InputNumber, List, Modal, Select, Space, Tag, Timeline, Tooltip, message , Typography } from "antd";
 import { SaveOutlined } from "@ant-design/icons";
 import dayjs from "dayjs";
 import { api, resolutionApi } from "../api";
@@ -13,7 +13,6 @@ import {
   type Resolution
 } from "../resolutionTypes";
 import { useStore } from "../store";
-import { formatAssignees } from "../utils";
 import { actionTitle, fieldTitle, formatValue } from "./docflow/labels";
 import {
   DOCUMENT_STATUS_TITLES,
@@ -561,7 +560,24 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                       </Space>
                       <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{r.text}</div>
                       <div style={{ fontSize: 12, color: "#666" }}>
-                        Исполнители: {formatAssignees(r.assignees)}
+                        Исполнители:{" "}
+                        <Space size={2} wrap>
+                          {r.assignees.length ? (
+                            r.assignees.map((a) => (
+                              <Tooltip
+                                key={a.userId}
+                                title={a.reportAt ? a.reportText || "Отчёт сдан" : "Отчёт ещё не сдан"}
+                              >
+                                <Tag color={a.reportAt ? "green" : "default"} style={{ marginInlineEnd: 0 }}>
+                                  {a.fullName || "исполнитель"}
+                                  {a.kind === "responsible" ? " (отв.)" : ""} {a.reportAt ? "✓" : "—"}
+                                </Tag>
+                              </Tooltip>
+                            ))
+                          ) : (
+                            "—"
+                          )}
+                        </Space>
                       </div>
                       <ResolutionEmails resolution={r} />
                       <div style={{ fontSize: 11, color: "#595959" }}>

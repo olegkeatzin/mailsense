@@ -1112,7 +1112,16 @@ export interface DocumentResolutionBrief {
   text: string;
   status: string;
   deadline: string | null;
+  /** Только ФИО — совместимость со старыми строками журнала. */
   assignees: string[];
+  /** Кто из исполнителей уже отчитался, а кто ещё в работе. */
+  assigneeReports: Array<{
+    userId: string;
+    fullName: string;
+    kind: AssigneeKind;
+    reportAt: string | null;
+    reportText: string | null;
+  }>;
   /** Дата закрытия поручения; null — ещё не исполнено. */
   completedAt: string | null;
 }
@@ -1152,6 +1161,13 @@ export async function resolutionsByDocument(
       status: r.status,
       deadline: r.deadline,
       assignees: (assignees.get(r.id) ?? []).map((a) => a.fullName),
+      assigneeReports: (assignees.get(r.id) ?? []).map((a) => ({
+        userId: a.userId,
+        fullName: a.fullName,
+        kind: a.kind,
+        reportAt: a.reportAt,
+        reportText: a.reportText
+      })),
       // Для журнала: когда поручение реально закрыто, а не когда его последний раз трогали.
       completedAt: r.status === "done" ? new Date(r.updatedAt).toISOString() : null
     });
@@ -1314,10 +1330,11 @@ export async function listBoard(): Promise<{ key: string; title: string; items: 
 /**
  * Отчёт исполнителя об исполнении (этап 4).
  *
- * Правило закрытия — по Р10, и оно разное в зависимости от того, назначен ли ответственный:
- *   - есть ответственный — задачу закрывает ЕГО отчёт, отчёты соисполнителей прикладываются
- *     к тому же делу (с него спрос, и он же отвечает за результат целиком);
- *   - ответственного нет (все равны) — задача закрывается, когда отчитались ВСЕ.
+ * Правило закрытия — по Р10 с учётом частичного исполнения:
+ *   - задача закрывается, когда отчитались ВСЕ назначенные исполнители;
+ *   - ответственный обязателен среди отчитавшихся, но его отчёт больше не закрывает
+ *     задачу в одиночку, если у него есть соисполнители: иначе они теряли возможность
+ *     отчитаться, а в журнале не было видно, кто именно ещё работает.
  *
  * Отчёт можно дополнить: исполнитель вправе уточнить формулировку. Первый отчёт не стирается —
  * в истории остаётся, кто и когда отчитался.
@@ -1396,7 +1413,7 @@ export async function reportExecution(
 }
 
 /**
- * Правило закрытия (Р10): есть ответственный — закрывает его отчёт, нет — когда отчитались все.
+ * Правило закрытия (Р10): когда отчитались все назначенные исполнители.
  *
  * Вынесено отдельно, потому что закрыть поручение можно двумя путями: отчётом в приложении
  * и подтверждением отчёта, пришедшего письмом.
@@ -1404,17 +1421,15 @@ export async function reportExecution(
 async function applyClosingRule(resolutionId: string, actor: Actor): Promise<ResolutionRecord> {
   const all = await listResolutionAssignees(resolutionId);
   const withReport = all.filter((a) => a.reportAt);
-  const responsible = all.find((a) => a.kind === "responsible");
-  const shouldClose = responsible ? !!responsible.reportAt : withReport.length === all.length;
+  // Пустой список не закрывает поручение: у отправленного поручения исполнители обязаны быть.
+  const shouldClose = all.length > 0 && withReport.length === all.length;
 
   if (shouldClose) {
     return applyTransition(resolutionId, actor, {
       from: ["sent"],
       to: "done",
       step: "dispatched",
-      comment: responsible
-        ? "Исполнено: отчитался ответственный " + (responsible.fullName || "")
-        : "Исполнено: отчитались все исполнители",
+      comment: "Исполнено: отчитались все исполнители",
       action: "resolution.done",
       // Автоматическое закрытие — тоже закрытие: иначе о нём узнали бы только те,
       // кто открыл карточку, а «Поручение исполнено» так и не пришло бы.

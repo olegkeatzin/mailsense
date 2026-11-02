@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Alert, Card, Empty, Space, Spin, Tag, Typography } from "antd";
+import { Alert, Card, Empty, Space, Spin, Tag, Tooltip, Typography } from "antd";
 import dayjs from "dayjs";
 import { resolutionApi } from "../api";
 import { useStore } from "../store";
@@ -15,7 +15,6 @@ import { humanError } from "../utils/humanError";
  * и «просрочена» — это разные вопросы, и смешивать их нельзя.
  */
 function CardBody({ r, onOpen }: { r: Resolution; onOpen?: (documentId: string) => void }) {
-  const responsible = r.assignees.find((a) => a.kind === "responsible") ?? r.assignees[0];
   // Канбан без перехода — витрина: видно, что работа есть, а сделать ничего нельзя.
   // Ведём в карточку документа, где и живут действия; кому журнал недоступен по правам,
   // тот видит обычную карточку без обещания клика.
@@ -54,8 +53,23 @@ function CardBody({ r, onOpen }: { r: Resolution; onOpen?: (documentId: string) 
         {r.text.length > 220 ? r.text.slice(0, 220) + "…" : r.text}
       </div>
       <div style={{ fontSize: 12, color: "#666" }}>
-        {responsible ? responsible.fullName + (responsible.kind === "responsible" ? " (отв.)" : "") : "исполнитель не указан"}
-        {r.assignees.length > 1 ? " и ещё " + (r.assignees.length - 1) : ""}
+        {r.assignees.length ? (
+          <Space direction="vertical" size={2} style={{ width: "100%" }}>
+            {r.assignees.map((a) => (
+              <span key={a.userId}>
+                {a.fullName || "исполнитель"}
+                {a.kind === "responsible" ? " (отв.)" : ""}{" "}
+                <Tooltip title={a.reportAt ? a.reportText || "Отчёт сдан" : "Отчёт ещё не сдан"}>
+                  <Tag color={a.reportAt ? "green" : "default"} style={{ marginInlineEnd: 0 }}>
+                    {a.reportAt ? "отчитался" : "ждёт отчёта"}
+                  </Tag>
+                </Tooltip>
+              </span>
+            ))}
+          </Space>
+        ) : (
+          "исполнитель не указан"
+        )}
       </div>
       <div style={{ fontSize: 11, color: "#595959", marginTop: 4 }}>
         подготовил: {r.preparedByName || "—"}
