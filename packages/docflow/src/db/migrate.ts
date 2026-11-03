@@ -928,7 +928,9 @@ SET permissions = (
   ) AS t(value)
 )
 WHERE id IN ('admin', 'secretary', 'manager')
-  AND permissions IS NOT NULL;
+  AND permissions IS NOT NULL
+  -- Старые/битые значения не должны валить старт сервера на ::jsonb.
+  AND left(btrim(permissions), 1) = '[';
 
 UPDATE roles
 SET permissions = (
@@ -937,7 +939,8 @@ SET permissions = (
   WHERE t.value <> 'journal.view'
 )
 WHERE id = 'executor'
-  AND permissions IS NOT NULL;
+  AND permissions IS NOT NULL
+  AND left(btrim(permissions), 1) = '[';
 `
   },
   {
@@ -953,7 +956,8 @@ SET permissions = (
   WHERE t.value <> 'resolution.create'
 )
 WHERE id = 'secretary'
-  AND permissions IS NOT NULL;
+  AND permissions IS NOT NULL
+  AND left(btrim(permissions), 1) = '[';
 `
   }
 ];

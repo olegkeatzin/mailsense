@@ -57,6 +57,18 @@ describe("старт в серверном режиме", () => {
     }
   });
 
+  test("сбой миграции документооборота не оставляет сервер без HTTP", async () => {
+    mockedDocflow.initDocflowDb.mockRejectedValueOnce(new Error("миграция не применилась"));
+
+    const server = await boot();
+    try {
+      // HTTP-сервер поднялся: пользователи увидят почту и диагностику, а не «нет связи».
+      expect(server.httpServer.listening).toBe(true);
+    } finally {
+      await new Promise((r) => server.httpServer.close(() => r(undefined)));
+    }
+  });
+
   test("MAILSENSE_DOCFLOW_ENABLED=false подавляет автовключение и НИЧЕГО не пишет", async () => {
     process.env[ENV_KEY] = "false";
 
