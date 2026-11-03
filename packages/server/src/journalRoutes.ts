@@ -127,7 +127,7 @@ function actorOf(req: express.Request): Actor {
  */
 export function isForwardedEmail(mail: { subject?: string | null; bodyText?: string | null }): boolean {
   const subject = String(mail.subject ?? "");
-  if (/^\s*(?:fwd?|fw|пересл(?:\.|ано)?)\s*:/i.test(subject)) return true;
+  if (/^\s*(?:(?:re|fwd?|fw|пересл(?:\.|ано)?)\s*:\s*)+/i.test(subject)) return true;
   const body = String(mail.bodyText ?? "");
   return /(?:пересылаемое|пересланное)\s+сообщение|forwarded\s+message/i.test(body);
 }

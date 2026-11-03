@@ -8,7 +8,7 @@ describe("пересланное письмо", () => {
     expect(isForwardedEmail({ subject: "Приглашение на ВКС", bodyText: "Добрый день" })).toBe(false);
   });
 
-  it.each(["Fwd: Проект", "FW: Проект", "Пересл.: Проект", "Переслано: Проект"])(
+  it.each(["Fwd: Проект", "FW: Проект", "Re: Fwd: Проект", "Пересл.: Проект", "Переслано: Проект"])(
     "тема %s — пересылка",
     (subject) => {
       expect(isForwardedEmail({ subject, bodyText: "" })).toBe(true);
