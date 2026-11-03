@@ -118,6 +118,20 @@ function actorOf(req: express.Request): Actor {
   return { id: req.user?.id ?? null, name: req.user?.fullName ?? "" };
 }
 
+/**
+ * Письмо переслано, а не получено напрямую от корреспондента.
+ *
+ * В таком письме From — это пересылающий работник/ящик предприятия, а не автор
+ * исходного документа. Автоматически закреплять этот адрес за корреспондентом нельзя:
+ * иначе внутренний адрес предприятия станет «почтой» внешней организации.
+ */
+export function isForwardedEmail(mail: { subject?: string | null; bodyText?: string | null }): boolean {
+  const subject = String(mail.subject ?? "");
+  if (/^\s*(?:fwd?|fw|пересл(?:\.|ано)?)\s*:/i.test(subject)) return true;
+  const body = String(mail.bodyText ?? "");
+  return /(?:пересылаемое|пересланное)\s+сообщение|forwarded\s+message/i.test(body);
+}
+
 function str(v: unknown): string | undefined {
   return typeof v === "string" && v.length ? v : undefined;
 }
@@ -671,6 +685,7 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
         emailId,
         sender: mail.from ? mail.from.name || mail.from.address : "",
         senderEmail: mail.from?.address ?? null,
+        forwarded: isForwardedEmail(mail),
         summary: mail.analysis?.summary || mail.subject || "",
         docNumber: mail.externalNumber ?? "",
         docDate: mail.sendDate ?? "",
@@ -737,9 +752,12 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
       const b = req.body ?? {};
       // Адрес отправителя письма: по нему ищем закреплённого корреспондента.
       const sourceEmail = b.emailId ? getEmailView(String(b.emailId)) : null;
+      const forwarded = sourceEmail ? isForwardedEmail(sourceEmail) : false;
       const doc = await registerDocument(
         {
-          senderEmail: sourceEmail?.from?.address ?? null,
+          // Пересланное письмо: From — пересылающий, а не корреспондент. Адрес не закрепляем.
+          senderEmail: forwarded ? null : sourceEmail?.from?.address ?? null,
+          forwarded,
           docNumber: b.docNumber !== undefined ? String(b.docNumber) : undefined,
           docDate: b.docDate ? String(b.docDate) : null,
           sender: b.sender !== undefined ? String(b.sender) : undefined,
@@ -845,7 +863,8 @@ export function mountJournalRoutes(app: express.Express, deps: JournalDeps): voi
           // Письмо-источник нужно, чтобы закрепить его ящик за выбранным корреспондентом.
           const current = await getDocument(req.params.id);
           const source = current?.emailId ? getEmailView(current.emailId) : null;
-          patch.senderEmail = source?.from?.address ?? null;
+          // Пересланное письмо не закрепляет ящик пересылающего за корреспондентом.
+          patch.senderEmail = source && !isForwardedEmail(source) ? source.from?.address ?? null : null;
         }
       }
       if (b.status !== undefined) {

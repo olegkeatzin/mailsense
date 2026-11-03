@@ -437,6 +437,18 @@ describe("прослеживаемость: кто и что сделал", () =
     expect(filtered.items.some((d) => d.id === third.id)).toBe(false);
   });
 
+  test("пересланное письмо не закрепляет адрес пересылающего за корреспондентом", async () => {
+    const doc = await registerDocument(
+      { summary: "Переслано", sender: "Внутренний ящик", senderEmail: "external@mail.test", forwarded: true },
+      secretary
+    );
+    expect(doc.correspondentId).toBeNull();
+    const rows = await getDocflowPool().query<{ n: number }>("SELECT count(*)::int n FROM correspondents");
+    expect(rows.rows[0].n).toBe(0);
+    const mapped = await getDocflowPool().query<{ n: number }>("SELECT count(*)::int n FROM correspondent_emails");
+    expect(mapped.rows[0].n).toBe(0);
+  });
+
   test("в журнале видно, кто зарегистрировал документ", async () => {
     // ФИО автора подставляется в список — чтобы не открывать аудит ради этого.
     const db = getDocflowPool();

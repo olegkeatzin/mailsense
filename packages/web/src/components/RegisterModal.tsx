@@ -107,9 +107,11 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
         setNextNumber(n?.regNumber ?? null);
         setCorrespondents(corr);
         const senderEmail = (s.senderEmail ?? "").toLowerCase();
-        const mapped = senderEmail
-          ? corr.find((x) => x.emails.some((e) => e.toLowerCase() === senderEmail))
-          : undefined;
+        // Пересланное письмо: From — пересылающий, его адрес не считаем адресом корреспондента.
+        const mapped =
+          !s.forwarded && senderEmail
+            ? corr.find((x) => x.emails.some((e) => e.toLowerCase() === senderEmail))
+            : undefined;
         form.setFieldsValue({
           docNumber: s.docNumber,
           docDate: s.docDate ? dayjs(s.docDate) : null,
@@ -197,6 +199,15 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
               message={"Письмо уже зарегистрировано как " + suggest.alreadyRegistered}
             />
           )}
+
+          {suggest?.forwarded ? (
+            <Alert
+              type="info"
+              showIcon
+              message="Письмо переслано"
+              description="Адрес отправителя не будет автоматически закреплён за корреспондентом. Выберите существующего корреспондента или создайте нового вручную."
+            />
+          ) : null}
 
           {dups.length > 0 && (
             <Alert

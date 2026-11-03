@@ -607,6 +607,8 @@ export interface RegisterSuggest {
   emailId: string;
   sender: string;
   senderEmail?: string | null;
+  /** Письмо переслано: адрес From не считается адресом корреспондента. */
+  forwarded?: boolean;
   summary: string;
   docNumber: string;
   docDate: string;

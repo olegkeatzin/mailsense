@@ -324,6 +324,8 @@ export interface RegisterInput extends DocumentInput {
   regDate?: string;
   /** Адрес отправителя письма: по нему ищем закреплённого корреспондента. */
   senderEmail?: string | null;
+  /** Письмо переслано: From — пересылающий, его адрес корреспонденту не закрепляем. */
+  forwarded?: boolean;
 }
 
 /**
@@ -395,7 +397,7 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
     // Корреспондент: явно выбранный, по закреплённому ящику или автоматически
     // по отправителю. Раньше correspondent_id оставался NULL без связи со справочником.
     let correspondentId = input.correspondentId ?? null;
-    const senderEmail = (input.senderEmail ?? "").trim().toLowerCase();
+    const senderEmail = input.forwarded ? "" : (input.senderEmail ?? "").trim().toLowerCase();
     if (!correspondentId && senderEmail) {
       const mapped = await client.query<{ id: string }>(
         "SELECT ce.correspondent_id AS id FROM correspondent_emails ce " +
@@ -405,7 +407,9 @@ export async function registerDocument(input: RegisterInput, actor: Actor): Prom
       );
       if (mapped.rows[0]) correspondentId = mapped.rows[0].id;
     }
-    if (!correspondentId && (input.sender ?? "").trim()) {
+    // У пересланного письма отправитель — пересылающий, а не корреспондент: не создаём
+    // его автоматически. Аппарат выберет/создаст корреспондента вручную.
+    if (!correspondentId && !input.forwarded && (input.sender ?? "").trim()) {
       const sender = String(input.sender).trim();
       const found = await client.query<{ id: string }>(
         "SELECT id FROM correspondents WHERE lower(name) = lower($1) LIMIT 1",
