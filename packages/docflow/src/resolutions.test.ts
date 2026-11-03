@@ -513,12 +513,12 @@ describe("история и канбан", () => {
     expect(d.documentNumber).toBe("вх1");
   });
 
-  test("канбан раскладывает резолюции по колонкам", async () => {
+  test("канбан не показывает утверждение и ожидание отправки", async () => {
     const r = await draft();
     await requestApproval(r.id, secretary);
     const board = await listBoard();
-    const pending = board.find((c) => c.key === "pending_approval")!;
-    expect(pending.items.some((i) => i.id === r.id)).toBe(true);
+    expect(board.map((c) => c.key)).toEqual(["sent", "overdue", "done"]);
+    expect(board.some((c) => c.items.some((i) => i.id === r.id))).toBe(false);
   });
 
   test("просроченная отправленная резолюция попадает в колонку «Просрочено»", async () => {

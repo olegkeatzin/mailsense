@@ -209,7 +209,8 @@ function isResolutionParticipant(detail: ResolutionDetail, userId: string): bool
 function assertResolutionVisible(req: express.Request, detail: ResolutionDetail): void {
   const user = req.user;
   if (!user) throw new AppError("Требуется вход", 401, "unauthorized");
-  if (user.permissions.includes("resolution.create")) return;
+  // Управляющие поручениями: руководитель создаёт, аппарат ведёт и отправляет.
+  if (user.permissions.includes("resolution.create") || user.permissions.includes("resolution.dispatch")) return;
   // Подписанту нужно открыть то, что ждёт его подписи: очередь «На утверждении» отдаёт
   // ему эти поручения списком, и карточка не должна оказаться закрытой.
   const awaitingSignature =
@@ -270,7 +271,10 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // Справочник людей — управленческий вид: тот, кто поручает (resolution.create), и тот,
   // кто подписывает (resolution.approve, он назначает исполнителя при утверждении, Р8).
   // Исполнителю он не нужен: там ФИО и адреса всех сотрудников предприятия.
-  const assignees = [requireDocflowDb, requireAnyPermission("resolution.create", "resolution.approve")];
+  const assignees = [
+    requireDocflowDb,
+    requireAnyPermission("resolution.create", "resolution.approve", "resolution.dispatch")
+  ];
   // Отчёт — отдельное право: задачу видеть мало, отчитываться должен тот, кому поручено.
   const report = [requireDocflowDb, requirePermission("task.report")];
 
@@ -290,7 +294,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     resolutionId: string,
     emailId: string | null,
     actor: Actor,
-    accountId?: string | null
+    accountId?: string | null,
+    override?: { subject?: string | null; bodyText?: string | null }
   ) {
     const detail = await getResolutionDetail(resolutionId);
     if (!detail) throw new AppError("Резолюция не найдена", 404, "not_found");
@@ -343,11 +348,13 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
     const doc = await getDocument(detail.documentId);
     const number = doc?.regNumber || detail.documentNumber || "без номера";
     const sourceSubject = (sourceMail?.subject ?? "").trim();
-    const subject = sourceSubject
-      ? /^re:/i.test(sourceSubject)
-        ? sourceSubject
-        : "Re: " + sourceSubject
-      : "Резолюция по документу " + number;
+    const subject =
+      (override?.subject ?? "").trim() ||
+      (sourceSubject
+        ? /^re:/i.test(sourceSubject)
+          ? sourceSubject
+          : "Re: " + sourceSubject
+        : "Резолюция по документу " + number);
     const executorNames = withEmail.map((a) => a.fullName).join(", ");
     // Исходное письмо (документ) пересылаем вместе с резолюцией: получатель должен
     // видеть, на что наложено поручение, а не только текст резолюции.
@@ -363,20 +370,22 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           originalMail.date ? "Дата: " + originalMail.date : ""
         ].filter(Boolean).join("\n")
       : "";
-    const bodyText = [
-      "Резолюция по документу " + number + ".",
-      "",
-      detail.text,
-      "",
-      detail.deadline ? "Срок: " + detail.deadline.split("-").reverse().join(".") : "Срок не указан.",
-      "Исполнители: " + executorNames,
-      "",
-      "Резолюцию утвердил(а): " + actor.name,
-      "",
-      "—",
-      actor.name,
-      ...(originalHead || originalText ? ["", originalHead, "", originalText] : [])
-    ].filter((line) => line !== "").join("\n");
+    const bodyText =
+      (override?.bodyText ?? "").trim() ||
+      [
+        "Резолюция по документу " + number + ".",
+        "",
+        detail.text,
+        "",
+        detail.deadline ? "Срок: " + detail.deadline.split("-").reverse().join(".") : "Срок не указан.",
+        "Исполнители: " + executorNames,
+        "",
+        "Резолюцию утвердил(а): " + actor.name,
+        "",
+        "—",
+        actor.name,
+        ...(originalHead || originalText ? ["", originalHead, "", originalText] : [])
+      ].filter((line) => line !== "").join("\n");
 
     // Вложения исходного письма: без них адресат получает резолюцию без документа.
     const attachmentSources = [...new Set([detail.documentEmailId, sourceMail?.id].filter(Boolean) as string[])];
@@ -464,6 +473,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
       const manager = await getUser(detail.approvedBy);
       if (manager?.email) add(manager.email, manager.fullName);
     }
+    // По умолчанию отчёт получает ответственный; если его нет — все исполнители.
+    const responsible = detail.assignees.filter((a) => a.kind === "responsible");
+    for (const a of responsible.length ? responsible : detail.assignees) {
+      if (a.email) add(a.email, a.fullName);
+    }
     if (!recipients.length) throw new AppError("Не указано, кому отправить отчёт", 400, "no_recipients");
 
     const number = detail.documentNumber || "без номера";
@@ -518,7 +532,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // -------- Черновик по письму: ИИ предлагает текст --------
   app.post(
     "/api/docflow/resolutions/draft",
-    ...prepare,
+    // Текст предлагается и тому, кто создаёт поручение, и подписанту в очереди утверждения.
+    requireDocflowDb,
+    requireAnyPermission("resolution.create", "resolution.approve"),
     asyncHandler(async (req, res) => {
       const documentId = String((req.body ?? {}).documentId ?? "");
       const doc = await getDocument(documentId);
@@ -1037,7 +1053,9 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // (у него «Мои задачи»). Право `journal.view` есть у всех ролей, поэтому его мало.
   app.get(
     "/api/docflow/resolutions/board",
-    ...prepare,
+    // Читать канбан может и аппарат: он ведёт журнал. Создавать резолюцию — только руководитель.
+    requireDocflowDb,
+    requireAnyPermission("resolution.create", "resolution.dispatch"),
     asyncHandler(async (_req, res) => {
       res.json(await listBoard());
     })
@@ -1048,7 +1066,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // поручений вместе с текстами и сроками, обходя решение заказчика.
   app.get(
     "/api/docflow/resolutions/by-document/:documentId",
-    ...prepare,
+    requireDocflowDb,
+    requireAnyPermission("resolution.create", "resolution.dispatch"),
     asyncHandler(async (req, res) => {
       res.json(await listDocumentResolutions(req.params.documentId));
     })
@@ -1059,7 +1078,8 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
   // (test_resolutions.mjs: «рядовой сотрудник не видит список резолюций»).
   app.get(
     "/api/docflow/resolutions",
-    ...prepare,
+    requireDocflowDb,
+    requireAnyPermission("resolution.create", "resolution.dispatch"),
     asyncHandler(async (req, res) => {
       res.json(
         await listResolutions({
@@ -1071,6 +1091,53 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           offset: intParam(req.query.offset, "offset", { fallback: 0, min: 0 })
         })
       );
+    })
+  );
+
+  /**
+   * Руководитель создаёт резолюцию и сразу отправляет её исполнителям и аппарату.
+   * Черновика и отдельного «на утверждении» здесь нет: решение уже принято руководителем.
+   */
+  app.post(
+    "/api/docflow/resolutions/direct",
+    requireDocflowDb,
+    requirePermission("resolution.create"),
+    requirePermission("resolution.approve"),
+    asyncHandler(async (req, res) => {
+      const b = req.body ?? {};
+      const actor = actorOf(req);
+      const text = String(b.text ?? "");
+      const assignees = assigneesFrom(b.assignees);
+      const deadline = b.deadline !== undefined ? (b.deadline ? String(b.deadline) : null) : null;
+      const priority = (b.priority as ResolutionPriority) ?? "normal";
+
+      const created = await createResolution(
+        {
+          documentId: String(b.documentId ?? ""),
+          text,
+          sourceText: b.sourceText ? String(b.sourceText) : text,
+          sourceKind: b.sourceKind === "ai" ? "ai" : "manual",
+          priority,
+          deadline,
+          assignees
+        },
+        actor
+      );
+      let approvedId: string;
+      try {
+        const approved = await approveResolution(created.id, actor, { text, deadline, priority });
+        approvedId = approved.id;
+      } catch (err) {
+        await cancelResolution(created.id, actor, "Не удалось утвердить резолюцию: " + (err as Error).message).catch(
+          () => undefined
+        );
+        throw err;
+      }
+      const sent = await sendApprovedResolution(approvedId, null, actor, undefined, {
+        subject: b.emailSubject ? String(b.emailSubject) : null,
+        bodyText: b.emailBody ? String(b.emailBody) : null
+      });
+      res.status(201).json({ ...sent.resolution, sentTo: sent.sentTo });
     })
   );
 
@@ -1228,7 +1295,11 @@ export function mountResolutionRoutes(app: express.Express, deps: ResolutionDeps
           approved.id,
           b.emailId ? String(b.emailId) : null,
           actorOf(req),
-          b.accountId ? String(b.accountId) : null
+          b.accountId ? String(b.accountId) : null,
+          {
+            subject: b.emailSubject ? String(b.emailSubject) : null,
+            bodyText: b.emailBody ? String(b.emailBody) : null
+          }
         );
         return res.json({ ...sent.resolution, sentTo: sent.sentTo });
       }

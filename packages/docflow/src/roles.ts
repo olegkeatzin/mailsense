@@ -86,8 +86,8 @@ export const BUILTIN_ROLES: RoleRecord[] = [
     name: "Секретарь / Аппарат",
     description: "Ведение журнала, регистрация и архивация документов",
     sortOrder: 20,
-    // Черновик резолюции аппарат готовит (макет ген.дира), но утверждённый текст не правит —
-    // это ограничение ТЗ п. 7, поэтому resolution.edit здесь нет.
+    // Аппарат ведёт журнал и отправляет готовые поручения, но резолюцию не создаёт:
+    // решение принимает руководитель. Утверждённый текст аппарат не правит.
     permissions: [
       "journal.view",
       "journal.register",
@@ -95,7 +95,6 @@ export const BUILTIN_ROLES: RoleRecord[] = [
       "journal.archive",
       "correspondents.view",
       "correspondents.manage",
-      "resolution.create",
       "resolution.dispatch",
       "task.view",
       "task.report",

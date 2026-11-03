@@ -4,17 +4,16 @@ import dayjs from "dayjs";
 import { resolutionApi } from "../api";
 import { PRIORITY_TITLES, type AssigneeKind, type Resolution, type ResolutionPriority } from "../resolutionTypes";
 import type { User } from "../types";
-import { SuggestedAssignees } from "./SuggestedAssignees";
 import { DeadlinePresets } from "./DeadlinePresets";
 import { SOON_STYLE } from "./notifications/colors";
 import { humanError } from "../utils/humanError";
 
 /**
- * Подготовка резолюции аппаратом (этап 3).
+ * Создание резолюции руководителем (этап 3).
  *
  * ИИ предлагает ТОЛЬКО текст: исполнителей и срок вписывает человек (Р7).
- * Кнопки намеренно разделены — «сохранить черновик» и «отправить на утверждение»:
- * черновик можно отложить, а отправка необратима, текст после неё менять нельзя.
+ * Резолюция сразу уходит исполнителям и служебному ящику аппарата; отдельного черновика нет.
+ * Перед отправкой можно посмотреть и поправить письмо.
  */
 export function ResolutionModal(props: {
   open: boolean;
@@ -38,10 +37,16 @@ export function ResolutionModal(props: {
   const [busy, setBusy] = useState(false);
   const [aiBusy, setAiBusy] = useState(false);
   const [error, setError] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setError("");
+    setPreviewOpen(false);
+    setEmailSubject("");
+    setEmailBody("");
     // Не `api.users()`: он только для администратора, а исполнителей выбирает аппарат.
     resolutionApi.executorCandidates().then((l) => setUsers(l as unknown as User[])).catch(() => setUsers([]));
     if (resolution) {
@@ -94,47 +99,69 @@ export function ResolutionModal(props: {
     }
   }
 
-  async function save(): Promise<string | null> {
+  function openPreview() {
+    const names = assigneeIds
+      .map((id) => users.find((u) => u.id === id)?.fullName || "исполнитель")
+      .join(", ");
+    setEmailSubject("Резолюция по документу " + (documentNumber || "без номера"));
+    setEmailBody(
+      [
+        "Резолюция по документу " + (documentNumber || "без номера") + ".",
+        "",
+        text.trim(),
+        "",
+        deadline ? "Срок: " + dayjs(deadline).format("DD.MM.YYYY") + "." : "Срок не указан.",
+        "Исполнители: " + (names || "не указаны") + ".",
+        "",
+        "—",
+        "Руководитель"
+      ].join("\n")
+    );
+    setPreviewOpen(true);
+  }
+
+  async function onDirectSend() {
     if (!text.trim()) {
       setError("Текст резолюции пуст");
-      return null;
+      return;
     }
     if (!assigneeIds.length) {
       setError("Укажите хотя бы одного исполнителя");
-      return null;
+      return;
     }
-    const payload = { text, priority, deadline, assignees: assignees() };
-    if (resolution) {
-      await resolutionApi.update(resolution.id, payload);
-      return resolution.id;
-    }
-    const created = await resolutionApi.create({ documentId, ...payload, sourceText, sourceKind });
-    return created.id;
-  }
-
-  async function onSaveDraft() {
     setBusy(true);
     setError("");
     try {
-      await save();
-      message.success("Черновик сохранён");
-      onSaved();
-      onClose();
-    } catch (e) {
-      setError(humanError(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function onSendToApproval() {
-    setBusy(true);
-    setError("");
-    try {
-      const id = await save();
-      if (!id) return;
-      await resolutionApi.requestApproval(id);
-      message.success("Отправлено на утверждение");
+      if (resolution) {
+        await resolutionApi.update(resolution.id, {
+          text,
+          priority,
+          deadline,
+          assignees: assignees()
+        });
+        await resolutionApi.approve(resolution.id, {
+          text,
+          priority,
+          deadline,
+          assignees: assignees(),
+          sendEmail: true,
+          emailSubject: emailSubject || undefined,
+          emailBody: emailBody || undefined
+        });
+      } else {
+        await resolutionApi.createAndSend({
+          documentId,
+          text,
+          sourceText: sourceText || text,
+          sourceKind,
+          priority,
+          deadline,
+          assignees: assignees(),
+          emailSubject: emailSubject || undefined,
+          emailBody: emailBody || undefined
+        });
+      }
+      message.success("Резолюция отправлена исполнителям и аппарату");
       onSaved();
       onClose();
     } catch (e) {
@@ -152,9 +179,9 @@ export function ResolutionModal(props: {
       onCancel={onClose}
       footer={[
         <Button key="cancel" onClick={onClose}>Отмена</Button>,
-        <Button key="draft" loading={busy} onClick={onSaveDraft}>Сохранить черновик</Button>,
-        <Button key="send" type="primary" loading={busy} danger onClick={onSendToApproval}>
-          Отправить на утверждение
+        <Button key="preview" loading={busy} onClick={openPreview}>Просмотреть письмо</Button>,
+        <Button key="send" type="primary" loading={busy} onClick={() => void onDirectSend()}>
+          Создать и отправить
         </Button>
       ]}
     >
@@ -177,13 +204,6 @@ export function ResolutionModal(props: {
         onChange={(e) => setText(e.target.value)}
         placeholder="1. Подготовить… 2. Направить…"
       />
-
-      <div style={{ marginTop: 16 }}>
-        <SuggestedAssignees
-          documentId={documentId}
-          onPick={(uid) => setAssigneeIds((ids) => (ids.includes(uid) ? ids : [...ids, uid]))}
-        />
-      </div>
 
       <div style={{ display: "flex", gap: 12, marginTop: 4, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 320px" }}>
@@ -257,6 +277,33 @@ export function ResolutionModal(props: {
           />
         </div>
       </div>
+
+      <Modal
+        open={previewOpen}
+        title="Письмо исполнителям и аппарату"
+        okText="Вернуться к резолюции"
+        cancelText="Закрыть"
+        width={720}
+        onCancel={() => setPreviewOpen(false)}
+        onOk={() => setPreviewOpen(false)}
+      >
+        <div style={{ marginBottom: 8 }}>
+          <b>Тема</b>
+          <Input value={emailSubject} onChange={(e) => setEmailSubject(e.target.value)} />
+        </div>
+        <div>
+          <b>Текст письма</b>
+          <Input.TextArea
+            rows={14}
+            value={emailBody}
+            onChange={(e) => setEmailBody(e.target.value)}
+            style={{ marginTop: 6 }}
+          />
+        </div>
+        <div style={{ color: "#595959", fontSize: 12, marginTop: 8 }}>
+          Получатели: исполнители и служебный ящик аппарата. Изменения попадут в отправляемое письмо.
+        </div>
+      </Modal>
     </Modal>
   );
 }

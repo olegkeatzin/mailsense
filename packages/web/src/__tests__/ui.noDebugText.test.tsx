@@ -148,7 +148,6 @@ import Journal from "../components/Journal";
 import DocumentCard from "../components/DocumentCard";
 import SettingsModal from "../components/SettingsModal";
 import { NotificationsBell } from "../components/NotificationsBell";
-import { SuggestedAssignees } from "../components/SuggestedAssignees";
 
 configure({ asyncUtilTimeout: 8000 });
 
@@ -302,18 +301,3 @@ describe("в интерфейсе нет служебного текста ра�
   }, 120000);
 });
 
-describe("задел под подсказку исполнителей подписан честно (Р14)", () => {
-  beforeAll(installDomEnvironment);
-  afterEach(cleanup);
-  beforeEach(asAdmin);
-
-  it("сказано «не работает», без обещаний и внутренних порогов", async () => {
-    const { container } = render(<SuggestedAssignees documentId="doc-1" onPick={() => {}} />);
-    await waitFor(() => expect(container.textContent).toContain("Накоплено резолюций"));
-
-    const text = container.textContent ?? "";
-    expect(text).toContain("не работает");
-    expect(text).not.toMatch(/начн[её]т|скоро|после 300|в разработке|beta/i);
-    expect(text).not.toContain("300");
-  });
-});

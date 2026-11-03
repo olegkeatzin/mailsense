@@ -5,7 +5,6 @@ import { api, resolutionApi } from "../api";
 import { useStore } from "../store";
 import { PRIORITY_TITLES, RESOLUTION_STATUS_TITLES, type AssigneeKind, type Resolution, type ResolutionPriority } from "../resolutionTypes";
 import type { Permission, User } from "../types";
-import { SuggestedAssignees } from "./SuggestedAssignees";
 import { DeadlinePresets } from "./DeadlinePresets";
 import { GOLD_STYLE } from "./notifications/colors";
 import { humanError } from "../utils/humanError";
@@ -33,7 +32,7 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
   const requiredPermission: Permission = isConfirm ? "resolution.dispatch" : "resolution.approve";
   const allowed = can(requiredPermission);
   /** Справочник людей — управленческий вид: тот, кто поручает, или тот, кто подписывает. */
-  const canLoadCandidates = can("resolution.create") || can("resolution.approve");
+  const canLoadCandidates = can("resolution.create") || can("resolution.approve") || can("resolution.dispatch");
   /** Подтверждение разбора — работа АППАРАТА, а не подписанта (D4). */
   const canConfirm = can("resolution.dispatch");
   const [items, setItems] = useState<Resolution[]>([]);
@@ -41,12 +40,57 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [emailBusy, setEmailBusy] = useState<string | null>(null);
+  const [aiBusy, setAiBusy] = useState<string | null>(null);
+  const [outgoing, setOutgoing] = useState<Resolution | null>(null);
+  const [outSubject, setOutSubject] = useState("");
+  const [outBody, setOutBody] = useState("");
   const [error, setError] = useState("");
   /** Черновик решения по каждой резолюции: пока не утвердили — правится свободно. */
   const [forms, setForms] = useState<Record<string, { text: string; ids: string[]; resp: string | null; priority: ResolutionPriority; deadline: string | null }>>({});
 
   function patchForm(id: string, patch: Partial<{ text: string; ids: string[]; resp: string | null; priority: ResolutionPriority; deadline: string | null }>) {
     setForms((f) => ({ ...f, [id]: { ...f[id], ...patch } }));
+  }
+
+  /** ИИ предлагает текст резолюции прямо в очереди утверждения. */
+  async function suggestText(r: Resolution) {
+    setAiBusy(r.id);
+    try {
+      const draft = await resolutionApi.draft(r.documentId);
+      if (!draft.text) {
+        message.warning(draft.reason === "no_email" ? "У документа нет письма-источника" : "Модель не вернула текст");
+        return;
+      }
+      patchForm(r.id, { text: draft.text });
+      message.success("Предложение готово — проверьте и поправьте");
+    } catch (e) {
+      message.error(humanError(e));
+    } finally {
+      setAiBusy(null);
+    }
+  }
+
+  /** Просмотр и правка письма, которое уйдёт исполнителям и аппарату. */
+  function openOutgoing(r: Resolution) {
+    const f = forms[r.id];
+    const names = (f?.ids ?? [])
+      .map((id) => users.find((u) => u.id === id)?.fullName || "исполнитель")
+      .join(", ");
+    setOutgoing(r);
+    setOutSubject("Резолюция по документу " + (r.documentNumber || "без номера"));
+    setOutBody(
+      [
+        "Резолюция по документу " + (r.documentNumber || "без номера") + ".",
+        "",
+        f?.text?.trim() || r.text,
+        "",
+        f?.deadline ? "Срок: " + dayjs(f.deadline).format("DD.MM.YYYY") + "." : "Срок не указан.",
+        "Исполнители: " + (names || "не указаны") + ".",
+        "",
+        "—",
+        "Руководитель"
+      ].join("\n")
+    );
   }
 
   /** Открыть письмо по документу в СВОЁМ ящике: у подписанта это запрос аппарата. */
@@ -213,25 +257,12 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
               })),
               priority: f.priority,
               deadline: f.deadline,
-              sendEmail: true
+              sendEmail: true,
+              emailSubject: outgoing?.id === r.id ? outSubject : undefined,
+              emailBody: outgoing?.id === r.id ? outBody : undefined
             }),
           "Утверждено и отправлено"
         )
-    });
-  }
-
-  function reject(id: string) {
-    let comment = "";
-    Modal.confirm({
-      title: "Вернуть на доработку",
-      content: <Input.TextArea rows={3} placeholder="Что не так" onChange={(e) => (comment = e.target.value)} />,
-      onOk: () => {
-        if (!comment.trim()) {
-          message.warning("Укажите причину возврата");
-          return Promise.reject(new Error("нет причины"));
-        }
-        return act(id, () => resolutionApi.reject(id, comment), "Возвращено на доработку");
-      }
     });
   }
 
@@ -284,6 +315,9 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                     >
                       Письмо
                     </Button>
+                    <Button size="small" type="link" onClick={() => openOutgoing(r)}>
+                      Письмо исполнителям
+                    </Button>
                   </Space>
                 }
               >
@@ -308,7 +342,18 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                   />
                 ) : null}
 
-                <div style={{ marginBottom: 4 }}><b>Текст резолюции</b></div>
+                <div style={{ marginBottom: 4, display: "flex", alignItems: "center", gap: 8 }}>
+                  <b>Текст резолюции</b>
+                  {!readOnly ? (
+                    <Button
+                      size="small"
+                      loading={aiBusy === r.id}
+                      onClick={() => void suggestText(r)}
+                    >
+                      Предложить текст (ИИ)
+                    </Button>
+                  ) : null}
+                </div>
                 <Input.TextArea
                   rows={4}
                   value={f.text}
@@ -316,15 +361,6 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                   placeholder="Кому и что сделать. Например: Романову Е.С. подготовить ответ в срок до 20.09.2026."
                   onChange={(e) => patchForm(r.id, { text: e.target.value })}
                 />
-
-                {!byEmail ? (
-                  <div style={{ marginTop: 12 }}>
-                    <SuggestedAssignees
-                      documentId={r.documentId}
-                      onPick={(uid) => patchForm(r.id, { ids: f.ids.includes(uid) ? f.ids : [...f.ids, uid] })}
-                    />
-                  </div>
-                ) : null}
 
                 <div style={{ display: "flex", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
                   <div style={{ flex: "1 1 300px" }}>
@@ -407,9 +443,8 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
                   ) : (
                     <Button type="primary" loading={busyId === r.id} onClick={() => approve(r)}>Утвердить</Button>
                   )}
-                  <Button loading={busyId === r.id} onClick={() => reject(r.id)}>Вернуть на доработку</Button>
-                  <Tooltip title="Отправляет исполнителям аппарат — после утверждения.">
-                    <span style={{ color: "#595959", fontSize: 12 }}>отправка — на стороне аппарата</span>
+                  <Tooltip title="После утверждения письмо сразу уйдёт исполнителям и служебному ящику аппарата.">
+                    <span style={{ color: "#595959", fontSize: 12 }}>письмо уйдёт при утверждении</span>
                   </Tooltip>
                 </Space>
               </Card>
@@ -417,6 +452,33 @@ export function ApprovalList({ mode = "approve" }: { mode?: "approve" | "confirm
           })}
         </Space>
       )}
+
+      <Modal
+        open={!!outgoing}
+        title="Письмо исполнителям и аппарату"
+        okText="Вернуться"
+        cancelText="Закрыть"
+        width={720}
+        onCancel={() => setOutgoing(null)}
+        onOk={() => setOutgoing(null)}
+      >
+        <div style={{ marginBottom: 8 }}>
+          <b>Тема</b>
+          <Input value={outSubject} onChange={(e) => setOutSubject(e.target.value)} />
+        </div>
+        <div>
+          <b>Текст письма</b>
+          <Input.TextArea
+            rows={14}
+            value={outBody}
+            onChange={(e) => setOutBody(e.target.value)}
+            style={{ marginTop: 6 }}
+          />
+        </div>
+        <div style={{ color: "#595959", fontSize: 12, marginTop: 8 }}>
+          Изменения попадут в письмо, которое уйдёт после утверждения.
+        </div>
+      </Modal>
     </div>
   );
 }

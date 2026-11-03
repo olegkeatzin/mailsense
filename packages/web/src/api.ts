@@ -597,6 +597,24 @@ export const resolutionApi = {
     return request<Resolution>("/api/docflow/resolutions", { method: "POST", body: JSON.stringify(input) });
   },
 
+  /** Руководитель создаёт резолюцию и сразу отправляет исполнителям и аппарату. */
+  createAndSend(input: {
+    documentId: string;
+    text: string;
+    sourceText?: string;
+    sourceKind?: "manual" | "ai";
+    priority?: ResolutionPriority;
+    deadline?: string | null;
+    assignees: Array<{ userId: string; kind: AssigneeKind }>;
+    emailSubject?: string;
+    emailBody?: string;
+  }) {
+    return request<Resolution & { sentTo?: string[] }>("/api/docflow/resolutions/direct", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  },
+
   /** Руководитель создаёт и сразу утверждает резолюцию по документу из письма. */
   createApprovedFromEmail(
     documentId: string,
@@ -653,6 +671,9 @@ export const resolutionApi = {
       sendEmail?: boolean;
       /** Ящик отправки, если выбран явно. */
       accountId?: string;
+      /** Отредактированные вручную тема и текст письма. */
+      emailSubject?: string;
+      emailBody?: string;
     } = {}
   ) {
     return request<Resolution>("/api/docflow/resolutions/" + id + "/approve", {

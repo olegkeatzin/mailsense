@@ -69,6 +69,8 @@ describe("ограничения ТЗ п. 7 «Безопасность»", () =>
     expect(has("secretary", "journal.edit")).toBe(true);
     expect(has("secretary", "correspondents.view")).toBe(true);
     expect(has("secretary", "correspondents.manage")).toBe(true);
+    // Резолюцию создаёт руководитель; аппарат только ведёт журнал и отправляет.
+    expect(has("secretary", "resolution.create")).toBe(false);
     expect(has("secretary", "resolution.edit")).toBe(false);
   });
 

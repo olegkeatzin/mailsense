@@ -531,10 +531,10 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                   Направить руководителю
                 </Button>
               ) : null}
-              {/* Запасной путь: аппарат сам готовит черновик. */}
+              {/* Решение принимает руководитель: он создаёт резолюцию и сразу отправляет. */}
               {can("resolution.create") ? (
                 <Button size="small" onClick={() => setResolutionOpen(true)}>
-                  Подготовить черновик
+                  Создать резолюцию
                 </Button>
               ) : null}
             </Space>

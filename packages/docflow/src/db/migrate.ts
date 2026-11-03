@@ -939,6 +939,22 @@ SET permissions = (
 WHERE id = 'executor'
   AND permissions IS NOT NULL;
 `
+  },
+  {
+    // Аппарат больше не готовит черновики резолюций: решение принимает руководитель.
+    // Право остаётся у администратора и руководителя; у аппарата — только диспетчеризация.
+    version: 19,
+    name: "secretary_no_resolution_create",
+    sql: `
+UPDATE roles
+SET permissions = (
+  SELECT COALESCE(jsonb_agg(t.value), '[]'::jsonb)::text
+  FROM jsonb_array_elements_text(permissions::jsonb) AS t(value)
+  WHERE t.value <> 'resolution.create'
+)
+WHERE id = 'secretary'
+  AND permissions IS NOT NULL;
+`
   }
 ];
 

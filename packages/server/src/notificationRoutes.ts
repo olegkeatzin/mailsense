@@ -113,7 +113,7 @@ export function mountNotificationRoutes(app: express.Express, deps: Notification
   // а без справочника чипы сроков у него пустые. Исполнителю он по-прежнему не нужен.
   const deadlinePresets = [
     requireDocflowDb,
-    requireAnyPermission("resolution.create", "resolution.approve")
+    requireAnyPermission("resolution.create", "resolution.approve", "resolution.dispatch")
   ];
 
   // -------- Служебные пути объявляются ДО /:id --------

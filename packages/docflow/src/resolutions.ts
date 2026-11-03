@@ -1307,21 +1307,18 @@ export async function markTaskReceived(resolutionId: string, userId: string): Pr
  */
 export async function listBoard(): Promise<{ key: string; title: string; items: ResolutionDetail[] }[]> {
   const page = await listResolutions({ limit: 200 });
+  // На канбане только исполнение: «На утверждении» и «Утверждено, ждёт отправки»
+  // больше не показываем — руководитель создаёт резолюцию сразу исполнителям.
   const columns = [
-    { key: "pending_approval", title: "На утверждении", items: [] as ResolutionDetail[] },
-    { key: "approved", title: "Утверждено, ждёт отправки", items: [] as ResolutionDetail[] },
     { key: "sent", title: "В работе", items: [] as ResolutionDetail[] },
     { key: "overdue", title: "Просрочено", items: [] as ResolutionDetail[] },
     { key: "done", title: "Выполнено", items: [] as ResolutionDetail[] }
   ];
   for (const item of page.items) {
-    if (item.status === "email_approval") {
-      columns[0].items.push(item);
-      continue;
-    }
+    if (item.status !== "sent" && item.status !== "done") continue;
     const col = columns.find((c) => c.key === item.status);
     if (col) col.items.push(item);
-    if (item.status === "sent" && isOverdue(item.deadline)) columns[3].items.push(item);
+    if (item.status === "sent" && isOverdue(item.deadline)) columns[1].items.push(item);
   }
   return columns;
 }

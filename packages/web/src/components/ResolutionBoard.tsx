@@ -96,8 +96,8 @@ export function ResolutionBoard() {
   };
 
   useEffect(() => {
-    // Канбан — управленческий вид (право resolution.create): без него не запрашиваем.
-    if (!can("resolution.create")) {
+    // Канбан — управленческий вид: руководитель создаёт, аппарат ведёт журнал.
+    if (!can("resolution.create") && !can("resolution.dispatch")) {
       setLoading(false);
       return;
     }

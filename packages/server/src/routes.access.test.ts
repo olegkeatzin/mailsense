@@ -143,13 +143,25 @@ const CASES: RouteCase[] = [
     allowed: ["admin", "secretary", "manager", "signer"]
   },
   {
-    what: "POST /api/docflow/resolutions — черновик готовит аппарат и руководитель (подписант не готовит)",
+    what: "POST /api/docflow/resolutions — резолюцию создаёт руководитель, не аппарат",
     method: "POST",
     path: "/api/docflow/resolutions",
     body: { documentId: "doc-1", text: "Подготовить ответ" },
-    // Право resolution.create есть у администратора, аппарата и руководителя (Р8):
-    // он вправе написать текст и назначить исполнителя. У подписанта его нет.
-    allowed: ["admin", "secretary", "manager"],
+    // Право resolution.create осталось у администратора и руководителя: аппарат
+    // ведёт журнал и отправляет, но решение принимает руководитель.
+    allowed: ["admin", "manager"],
+    ok: 201
+  },
+  {
+    what: "POST /api/docflow/resolutions/direct — руководитель сразу отправляет резолюцию",
+    method: "POST",
+    path: "/api/docflow/resolutions/direct",
+    body: {
+      documentId: "doc-1",
+      text: "Подготовить ответ",
+      assignees: [{ userId: "u-assignee", kind: "responsible" }]
+    },
+    allowed: ["admin", "manager"],
     ok: 201
   },
   {
@@ -278,11 +290,11 @@ const CASES: RouteCase[] = [
     ok: 201
   },
   {
-    what: "POST /api/docflow/resolutions/draft — черновик текста готовит тот, кто создаёт поручения",
+    what: "POST /api/docflow/resolutions/draft — текст предлагает создающий или утверждающий",
     method: "POST",
     path: "/api/docflow/resolutions/draft",
     body: { documentId: "doc-1" },
-    allowed: ["admin", "secretary", "manager"]
+    allowed: ["admin", "manager", "signer"]
   },
   {
     what: "GET /api/docflow/resolutions/suggest-assignees — подсказка исполнителей: поручающим и подписывающим",
@@ -291,7 +303,7 @@ const CASES: RouteCase[] = [
     allowed: ["admin", "secretary", "manager", "signer"]
   },
   {
-    what: "GET /api/docflow/resolutions/executor-candidates — справочник людей: поручающим и подписывающим",
+    what: "GET /api/docflow/resolutions/executor-candidates — справочник людей: поручающим, подписывающим и аппарату",
     method: "GET",
     path: "/api/docflow/resolutions/executor-candidates",
     allowed: ["admin", "secretary", "manager", "signer"]
@@ -325,14 +337,14 @@ const CASES: RouteCase[] = [
     method: "PATCH",
     path: "/api/docflow/resolutions/res-1",
     body: { text: "уточнение" },
-    allowed: ["admin", "secretary", "manager"]
+    allowed: ["admin", "manager"]
   },
   {
-    what: "POST /api/docflow/resolutions/:id/request-approval — на утверждение отправляет аппарат",
+    what: "POST /api/docflow/resolutions/:id/request-approval — черновик отправляет создающий",
     method: "POST",
     path: "/api/docflow/resolutions/res-1/request-approval",
     body: {},
-    allowed: ["admin", "secretary", "manager"]
+    allowed: ["admin", "manager"]
   },
   // Кейс POST /:id/email-approval убран вместе с маршрутом (D-2, task-14): он позволял
   // аппарату записать подписантом себя. Отсутствие маршрута проверяет signature.audit.test.ts.
@@ -898,6 +910,23 @@ describe("отчёт исполнителя из приложения", () => {
       expect.objectContaining({
         to: expect.arrayContaining([expect.objectContaining({ address: "stand@mail.test" })]),
         bodyText: expect.stringContaining("Ответ подготовлен и отправлен")
+      })
+    );
+  });
+
+  it("отчёт получает ответственный исполнитель вместе с аппаратом", async () => {
+    const res = await request(app.baseUrl, "POST", "/api/docflow/resolutions/res-1/report", {
+      token: token("executor"),
+      body: { text: "Отчёт ответственному" }
+    });
+
+    expect(res.status).toBe(200);
+    expect(mockedCore.sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: expect.arrayContaining([
+          expect.objectContaining({ address: "u-assignee@stand.test" }),
+          expect.objectContaining({ address: "stand@mail.test" })
+        ])
       })
     );
   });
