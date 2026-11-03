@@ -110,15 +110,18 @@ export function ResolutionBoard() {
 
   if (loading) return <Spin style={{ margin: 24 }} />;
 
+  // Защита от старого ответа сервера: столбцов утверждения на канбане быть не должно.
+  const visibleColumns = columns.filter((c) => c.key !== "pending_approval" && c.key !== "approved");
+
   return (
     <div style={{ padding: 16 }}>
       <Typography.Title level={4} style={{ marginTop: 0 }}>Резолюции</Typography.Title>
       {error ? <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} /> : null}
-      {!columns.length ? (
+      {!visibleColumns.length ? (
         <Empty description="Резолюций пока нет" />
       ) : (
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", overflowX: "auto" }}>
-          {columns.map((c) => (
+          {visibleColumns.map((c) => (
             <div key={c.key} style={{ flex: "1 1 240px", minWidth: 240 }}>
               <div style={{ marginBottom: 8 }}>
                 <b>{c.title}</b> <Tag>{c.items.length}</Tag>

@@ -588,12 +588,9 @@ export default function DocumentCard({ documentId, onClose, onChanged }: Props) 
                       </div>
                       <Space wrap size={4}>
                         {r.status === "draft" && can("resolution.create") ? (
-                          <>
-                            <Button size="small" onClick={() => { setEditing(r); setResolutionOpen(true); }}>Править</Button>
-                            <Button size="small" type="primary" onClick={() => actResolution(r.id, () => resolutionApi.requestApproval(r.id), "Отправлено на утверждение")}>
-                              На утверждение
-                            </Button>
-                          </>
+                          <Button size="small" onClick={() => { setEditing(r); setResolutionOpen(true); }}>
+                            Открыть
+                          </Button>
                         ) : null}
                         {/* Закрытие — аппарат: исполнитель мог отчитаться письмом или лично. */}
                         {r.status === "sent" && can("resolution.dispatch") ? (

@@ -16,7 +16,7 @@ const card = {
   documentId: "doc-1",
   documentNumber: "вх38",
   text: "Подготовить ответ внешнему партнёру.",
-  status: "pending_approval",
+  status: "sent",
   priority: "normal",
   deadline: null,
   assignees: [],
@@ -35,7 +35,7 @@ describe("канбан резолюций", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     (resolutionApi.board as jest.Mock).mockResolvedValue([
-      { key: "pending", title: "На утверждении", items: [card] }
+      { key: "sent", title: "В работе", items: [card] }
     ]);
     useStore.setState({
       ...initial,
