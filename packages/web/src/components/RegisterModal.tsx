@@ -132,7 +132,8 @@ export default function RegisterModal({ emailId, onRegistered }: Props) {
       name: form.getFieldValue("sender") || "",
       shortName: "",
       inn: "",
-      emails: suggest?.senderEmail ? [suggest.senderEmail] : []
+      // Пересланное письмо: адрес From — пересылающий, в карточку его не подставляем.
+      emails: !suggest?.forwarded && suggest?.senderEmail ? [suggest.senderEmail] : []
     });
     setCorrOpen(true);
   }
